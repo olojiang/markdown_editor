@@ -8,6 +8,7 @@ import {
   type HeadingNode,
 } from '@/renderer/lib/markdown';
 import {
+  addRecentFile,
   createDefaultSession,
   mergeSession,
   normalizeSession,
@@ -51,6 +52,11 @@ const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, t
 const title = computed(() => currentFile.value?.name ?? 'Markdown Editor');
 const isEditorVisible = computed(() => session.value.editorVisible || !currentFile.value);
 const hasUnsavedChanges = computed(() => currentFile.value !== null && source.value !== lastSavedContent.value);
+const shortcutModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'));
+const openShortcutHint = computed(() => `打开 Markdown 文件 (${shortcutModifier.value}+O)`);
+const saveShortcutHint = computed(() => `保存 Markdown 文件 (${shortcutModifier.value}+S)`);
+const previewShortcutHint = computed(() => `显示/隐藏预览 (${shortcutModifier.value}+P)`);
+const editorShortcutHint = computed(() => `切换阅读/编辑模式 (${shortcutModifier.value}+E)`);
 const gridStyle = computed(() => {
   if (isPreviewFullscreen.value) {
     return {
@@ -114,6 +120,19 @@ function collapseAllHeadings(): void {
 
 function persistableSession(): MarkdownSession {
   return { ...session.value };
+}
+
+function recentFileName(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() || filePath;
+}
+
+function persistOpenedFile(file: MarkdownFile, scrollTop: number): void {
+  session.value = mergeSession(session.value, {
+    filePath: file.path,
+    recentFiles: addRecentFile(session.value.recentFiles, file.path),
+    scrollTop,
+  });
+  void bridge?.saveSession(persistableSession());
 }
 
 function rememberScroll(scrollTop: number): void {
@@ -388,7 +407,7 @@ function setFile(file: MarkdownFile, scrollTop = 0): void {
   currentFile.value = file;
   source.value = file.content;
   lastSavedContent.value = file.content;
-  session.value = mergeSession(session.value, { filePath: file.path, scrollTop });
+  persistOpenedFile(file, scrollTop);
   status.value = file.path;
   void nextTick(() => {
     if (preview.value) {
@@ -402,8 +421,51 @@ async function openFile(): Promise<void> {
   const file = await bridge?.openMarkdownFile();
   if (file) {
     setFile(file, 0);
-    await bridge?.saveSession(persistableSession());
   }
+}
+
+async function openFilePath(filePath: string): Promise<void> {
+  if (!bridge) {
+    return;
+  }
+
+  try {
+    setFile(await bridge.readMarkdownFile(filePath), 0);
+  } catch {
+    status.value = `无法打开 ${filePath}`;
+    persistSession({
+      recentFiles: session.value.recentFiles.filter((recent) => recent !== filePath),
+    });
+  }
+}
+
+function isMarkdownPath(filePath: string): boolean {
+  return /\.(md|markdown|mdown)$/i.test(filePath);
+}
+
+async function openRecentFile(event: Event): Promise<void> {
+  const filePath = (event.target as HTMLSelectElement).value;
+  if (filePath) {
+    await openFilePath(filePath);
+  }
+}
+
+async function onDropFile(event: DragEvent): Promise<void> {
+  const files = Array.from(event.dataTransfer?.files ?? []);
+  const markdownFile = files.find((file) => {
+    const filePath = bridge?.getPathForFile(file) || (file as File & { path?: string }).path || file.name;
+    return isMarkdownPath(filePath);
+  });
+  const filePath = markdownFile
+    ? bridge?.getPathForFile(markdownFile) || (markdownFile as File & { path?: string }).path
+    : undefined;
+
+  if (!filePath) {
+    status.value = '请拖入 Markdown 文件';
+    return;
+  }
+
+  await openFilePath(filePath);
 }
 
 async function saveCurrentFile(): Promise<void> {
@@ -665,6 +727,8 @@ onBeforeUnmount(() => {
         'reader-mode': !isEditorVisible,
       },
     ]"
+    @dragover.prevent
+    @drop.prevent="onDropFile"
   >
     <header class="topbar">
       <div class="title-block">
@@ -704,16 +768,28 @@ onBeforeUnmount(() => {
         <button
           data-testid="open-file"
           type="button"
-          title="打开 Markdown 文件 (Cmd/Ctrl+O)"
+          :title="openShortcutHint"
           @click="openFile"
         >
           打开
         </button>
+        <select
+          data-testid="recent-files"
+          :disabled="session.recentFiles.length === 0"
+          :title="`最近打开文件（最多 20 个）`"
+          :value="currentFile?.path ?? ''"
+          @change="openRecentFile"
+        >
+          <option value="">最近文件</option>
+          <option v-for="filePath in session.recentFiles" :key="filePath" :value="filePath">
+            {{ recentFileName(filePath) }}
+          </option>
+        </select>
         <button
           data-testid="save-file"
           type="button"
           :disabled="!hasUnsavedChanges"
-          title="保存 Markdown 文件 (Cmd/Ctrl+S)"
+          :title="saveShortcutHint"
           @click="saveCurrentFile"
         >
           保存
@@ -721,7 +797,7 @@ onBeforeUnmount(() => {
         <button
           data-testid="toggle-preview"
           type="button"
-          title="显示/隐藏预览 (Cmd/Ctrl+P)"
+          :title="previewShortcutHint"
           @click="togglePreview"
         >
           {{ session.previewHidden ? '展开预览' : '隐藏预览' }}
@@ -729,7 +805,7 @@ onBeforeUnmount(() => {
         <button
           data-testid="toggle-editor"
           type="button"
-          title="切换阅读/编辑模式 (Cmd/Ctrl+E)"
+          :title="editorShortcutHint"
           @click="toggleEditor"
         >
           {{ isEditorVisible ? '阅读' : '编辑' }}

@@ -4,6 +4,7 @@ import path from 'node:path';
 
 interface MarkdownSession {
   filePath: string | null;
+  recentFiles: string[];
   scrollTop: number;
   tocWidth: number;
   editorWidth: number;
@@ -28,6 +29,7 @@ function normalizeTheme(theme: unknown): MarkdownSession['theme'] {
 function createDefaultSession(): MarkdownSession {
   return {
     filePath: null,
+    recentFiles: [],
     scrollTop: 0,
     tocWidth: 260,
     editorWidth: 560,
@@ -35,6 +37,15 @@ function createDefaultSession(): MarkdownSession {
     editorVisible: false,
     theme: 'light',
   };
+}
+
+function normalizeRecentFiles(recentFiles: unknown): string[] {
+  if (!Array.isArray(recentFiles)) {
+    return [];
+  }
+
+  return Array.from(new Set(recentFiles.filter((filePath): filePath is string => typeof filePath === 'string')))
+    .slice(0, 20);
 }
 
 function sessionFilePath(): string {
@@ -47,6 +58,7 @@ async function readSession(): Promise<MarkdownSession> {
     const parsed = JSON.parse(raw) as Partial<MarkdownSession>;
     return {
       filePath: typeof parsed.filePath === 'string' ? parsed.filePath : null,
+      recentFiles: normalizeRecentFiles(parsed.recentFiles),
       scrollTop: typeof parsed.scrollTop === 'number' ? parsed.scrollTop : 0,
       tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
       editorWidth: typeof parsed.editorWidth === 'number' ? parsed.editorWidth : 560,
@@ -64,7 +76,15 @@ async function saveSession(session: MarkdownSession): Promise<void> {
   await fs.writeFile(sessionFilePath(), JSON.stringify(session, null, 2), 'utf8');
 }
 
+function isMarkdownFilePath(filePath: string): boolean {
+  return ['.md', '.markdown', '.mdown'].includes(path.extname(filePath).toLowerCase());
+}
+
 async function readMarkdownFile(filePath: string): Promise<MarkdownFile> {
+  if (!isMarkdownFilePath(filePath)) {
+    throw new Error('Only Markdown files can be opened.');
+  }
+
   const content = await fs.readFile(filePath, 'utf8');
   return {
     path: filePath,
@@ -121,6 +141,10 @@ ipcMain.handle('markdown:read-last', async () => {
     await saveSession({ ...(await readSession()), filePath: null, scrollTop: 0 });
     return null;
   }
+});
+
+ipcMain.handle('markdown:read-path', async (_event, filePath: string) => {
+  return readMarkdownFile(filePath);
 });
 
 ipcMain.handle('markdown:save', async (_event, filePath: string, content: string) => {

@@ -13,6 +13,7 @@ interface MarkdownFile {
 
 interface MarkdownSession {
   filePath: string | null;
+  recentFiles: string[];
   scrollTop: number;
   tocWidth: number;
   editorWidth: number;
@@ -24,6 +25,8 @@ interface MarkdownSession {
 interface MarkdownBridge {
   openMarkdownFile(): Promise<MarkdownFile | null>;
   readLastMarkdownFile(): Promise<MarkdownFile | null>;
+  readMarkdownFile(path: string): Promise<MarkdownFile>;
+  getPathForFile(file: File): string;
   saveMarkdownFile(path: string, content: string): Promise<MarkdownFile>;
   getSession(): Promise<MarkdownSession>;
   saveSession(session: MarkdownSession): Promise<void>;

@@ -7,6 +7,16 @@ const openFile = {
   name: 'readme.md',
   content: '# Title\n\n## Alpha\n\nhello alpha\n\n## Beta\n\nhello beta\n\n```mermaid\ngraph TD\nA-->B\n```',
 };
+const recentFile = {
+  path: '/docs/recent.md',
+  name: 'recent.md',
+  content: '# Recent',
+};
+
+function expectedShortcut(key: string): string {
+  const modifier = navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl';
+  return `${modifier}+${key}`;
+}
 
 function setScrollMetrics(element: Element, scrollHeight: number, clientHeight: number): void {
   Object.defineProperty(element, 'scrollHeight', { configurable: true, value: scrollHeight });
@@ -18,6 +28,12 @@ describe('App', () => {
     window.markdownBridge = {
       openMarkdownFile: vi.fn().mockResolvedValue(openFile),
       readLastMarkdownFile: vi.fn().mockResolvedValue(openFile),
+      readMarkdownFile: vi.fn().mockImplementation(async (path: string) => ({
+        ...(path === recentFile.path ? recentFile : openFile),
+        path,
+        name: path.split('/').pop() ?? 'file.md',
+      })),
+      getPathForFile: vi.fn((file: File) => (file as File & { path?: string }).path ?? file.name),
       saveMarkdownFile: vi.fn().mockImplementation(async (path: string, content: string) => ({
         path,
         name: 'readme.md',
@@ -25,6 +41,7 @@ describe('App', () => {
       })),
       getSession: vi.fn().mockResolvedValue({
         filePath: openFile.path,
+        recentFiles: [recentFile.path],
         scrollTop: 12,
         tocWidth: 300,
         editorWidth: 640,
@@ -47,6 +64,7 @@ describe('App', () => {
     expect(wrapper.classes()).toContain('theme-light');
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', openFile.content);
     expect(wrapper.find('[data-testid="toc"]').text()).toContain('Title');
+    expect(wrapper.find('[data-testid="recent-files"]').text()).toContain('readme.md');
   });
 
   it('switches and persists theme modes', async () => {
@@ -153,6 +171,35 @@ describe('App', () => {
     expect(wrapper.find('[data-testid="toc"]').text()).not.toContain('Alpha');
   });
 
+  it('opens a recent file and moves it to the front of the LRU list', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(recentFile.path);
+    expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ recentFiles: [recentFile.path, openFile.path] }),
+    );
+  });
+
+  it('opens a dropped markdown file', async () => {
+    const droppedPath = '/docs/dropped.md';
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('main').trigger('drop', {
+      dataTransfer: {
+        files: [{ name: 'dropped.md', path: droppedPath }],
+      },
+    });
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(droppedPath);
+  });
+
   it('expands and collapses the whole table of contents', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -204,14 +251,27 @@ describe('App', () => {
     expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalled();
   });
 
+  it('supports Windows-style Ctrl shortcuts', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true }));
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalled();
+    expect(wrapper.classes()).toContain('preview-hidden');
+  });
+
   it('shows shortcut hints on toolbar buttons', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
-    expect(wrapper.get('[data-testid="open-file"]').attributes('title')).toBe('打开 Markdown 文件 (Cmd/Ctrl+O)');
-    expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe('保存 Markdown 文件 (Cmd/Ctrl+S)');
-    expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe('显示/隐藏预览 (Cmd/Ctrl+P)');
-    expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe('切换阅读/编辑模式 (Cmd/Ctrl+E)');
+    expect(wrapper.get('[data-testid="open-file"]').attributes('title')).toBe(`打开 Markdown 文件 (${expectedShortcut('O')})`);
+    expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe(`保存 Markdown 文件 (${expectedShortcut('S')})`);
+    expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe(`显示/隐藏预览 (${expectedShortcut('P')})`);
+    expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe(`切换阅读/编辑模式 (${expectedShortcut('E')})`);
   });
 
   it('uses keyboard shortcut for toggling preview', async () => {
