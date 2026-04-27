@@ -1,11 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 interface MarkdownSession {
   filePath: string | null;
   scrollTop: number;
+  tocWidth: number;
+  editorWidth: number;
+  previewHidden: boolean;
 }
 
 interface MarkdownFile {
@@ -14,8 +16,7 @@ interface MarkdownFile {
   content: string;
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const isDev = !app.isPackaged;
+const isDev = !app.isPackaged && process.env.MARKDOWN_EDITOR_FORCE_PROD !== '1';
 
 function sessionFilePath(): string {
   return path.join(app.getPath('userData'), 'markdown-session.json');
@@ -28,9 +29,12 @@ async function readSession(): Promise<MarkdownSession> {
     return {
       filePath: typeof parsed.filePath === 'string' ? parsed.filePath : null,
       scrollTop: typeof parsed.scrollTop === 'number' ? parsed.scrollTop : 0,
+      tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
+      editorWidth: typeof parsed.editorWidth === 'number' ? parsed.editorWidth : 560,
+      previewHidden: parsed.previewHidden === true,
     };
   } catch {
-    return { filePath: null, scrollTop: 0 };
+    return { filePath: null, scrollTop: 0, tocWidth: 260, editorWidth: 560, previewHidden: false };
   }
 }
 
@@ -80,7 +84,7 @@ ipcMain.handle('markdown:open', async () => {
   }
 
   const file = await readMarkdownFile(result.filePaths[0]);
-  await saveSession({ filePath: file.path, scrollTop: 0 });
+  await saveSession({ ...(await readSession()), filePath: file.path, scrollTop: 0 });
   return file;
 });
 
@@ -93,7 +97,7 @@ ipcMain.handle('markdown:read-last', async () => {
   try {
     return await readMarkdownFile(session.filePath);
   } catch {
-    await saveSession({ filePath: null, scrollTop: 0 });
+    await saveSession({ ...(await readSession()), filePath: null, scrollTop: 0 });
     return null;
   }
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHeadingTree, renderMarkdown } from '@/renderer/lib/markdown';
+import { buildHeadingTree, filterHeadingTree, renderMarkdown } from '@/renderer/lib/markdown';
 
 describe('buildHeadingTree', () => {
   it('returns collapsible heading nodes with stable slugs', () => {
@@ -54,5 +54,29 @@ describe('renderMarkdown', () => {
     expect(html).toContain('<h1 id="flow">Flow</h1>');
     expect(html).toContain('class="mermaid"');
     expect(html).toContain('graph TD');
+  });
+});
+
+describe('filterHeadingTree', () => {
+  it('keeps matching headings and their parents visible', () => {
+    const tree = buildHeadingTree('# Guide\n\n## Install\n\n## Usage');
+
+    expect(filterHeadingTree(tree, 'usage')).toEqual([
+      {
+        id: 'guide',
+        level: 1,
+        title: 'Guide',
+        collapsed: false,
+        children: [
+          {
+            id: 'usage',
+            level: 2,
+            title: 'Usage',
+            collapsed: false,
+            children: [],
+          },
+        ],
+      },
+    ]);
   });
 });

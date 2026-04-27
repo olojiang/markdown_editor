@@ -14,6 +14,9 @@ interface MarkdownFile {
 interface MarkdownSession {
   filePath: string | null;
   scrollTop: number;
+  tocWidth: number;
+  editorWidth: number;
+  previewHidden: boolean;
 }
 
 interface MarkdownBridge {

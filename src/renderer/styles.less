@@ -70,7 +70,6 @@ button:hover {
 
 .workspace {
   display: grid;
-  grid-template-columns: 260px minmax(280px, 1fr) minmax(320px, 1fr);
   min-height: 0;
 }
 
@@ -86,6 +85,59 @@ button:hover {
     letter-spacing: 0;
     margin: 0 0 12px;
     padding: 0 6px;
+  }
+}
+
+.panel-toolbar {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+
+  input {
+    border: 1px solid #c2cbd2;
+    border-radius: 6px;
+    font: inherit;
+    min-height: 32px;
+    padding: 0 9px;
+    width: 100%;
+  }
+}
+
+.resize-handle {
+  background: #eef1f4;
+  border-left: 1px solid #d5dce1;
+  border-right: 1px solid #d5dce1;
+  cursor: col-resize;
+  min-width: 6px;
+}
+
+.resize-handle:hover {
+  background: #d9e8f2;
+}
+
+.editor-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.editor-tools {
+  align-items: center;
+  background: #ffffff;
+  border-bottom: 1px solid #d5dce1;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto auto auto;
+  min-width: 0;
+  padding: 8px;
+
+  input {
+    border: 1px solid #c2cbd2;
+    border-radius: 6px;
+    font: inherit;
+    min-height: 32px;
+    min-width: 0;
+    padding: 0 9px;
   }
 }
 
@@ -134,7 +186,6 @@ button:hover {
 .source-editor {
   background: #ffffff;
   border: 0;
-  border-right: 1px solid #d5dce1;
   color: #172026;
   font: 14px/1.6 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   min-width: 0;
@@ -185,11 +236,21 @@ button:hover {
 
 .preview-fullscreen {
   .workspace {
-    grid-template-columns: 0 0 minmax(0, 1fr);
+    grid-template-columns: 0 0 0 0 minmax(0, 1fr) !important;
   }
 
   .toc-panel,
-  .source-editor {
+  .editor-panel,
+  .resize-handle {
+    border: 0;
+    overflow: hidden;
+    padding: 0;
+    visibility: hidden;
+  }
+}
+
+.preview-hidden {
+  .preview {
     border: 0;
     overflow: hidden;
     padding: 0;
@@ -199,7 +260,7 @@ button:hover {
 
 @media (max-width: 900px) {
   .workspace {
-    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-columns: 220px 6px minmax(0, 1fr) 0 0 !important;
   }
 
   .preview {
@@ -208,11 +269,15 @@ button:hover {
 
   .preview-fullscreen {
     .workspace {
-      grid-template-columns: minmax(0, 1fr);
+      grid-template-columns: 0 0 0 0 minmax(0, 1fr) !important;
     }
 
     .preview {
       display: block;
     }
+  }
+
+  .editor-tools {
+    grid-template-columns: 1fr 1fr;
   }
 }

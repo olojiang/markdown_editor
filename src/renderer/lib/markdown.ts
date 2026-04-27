@@ -76,6 +76,30 @@ export function buildHeadingTree(markdown: string): HeadingNode[] {
   return roots;
 }
 
+export function filterHeadingTree(nodes: HeadingNode[], query: string): HeadingNode[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return nodes;
+  }
+
+  return nodes.flatMap((node) => {
+    const children = filterHeadingTree(node.children, normalizedQuery);
+    const matches = node.title.toLowerCase().includes(normalizedQuery);
+
+    if (!matches && children.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        ...node,
+        collapsed: false,
+        children,
+      },
+    ];
+  });
+}
+
 export function renderMarkdown(markdown: string): string {
   const md = new MarkdownIt({ html: false, linkify: true, typographer: true });
   const defaultFence = md.renderer.rules.fence?.bind(md.renderer);
