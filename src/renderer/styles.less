@@ -1,8 +1,24 @@
 :root {
-  color: #172026;
-  background: #eef1f4;
+  color: var(--text);
+  background: var(--app-bg);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --app-bg: #eef1f4;
+  --surface: #ffffff;
+  --surface-muted: #f8fafb;
+  --surface-soft: #f4f7f9;
+  --surface-elevated: #ffffff;
+  --border: #d5dce1;
+  --border-strong: #c2cbd2;
+  --text: #172026;
+  --text-muted: #66717a;
+  --accent: #0b7a75;
+  --accent-soft: #d9e8f2;
+  --button-hover: #f4f7f9;
+  --input-bg: #ffffff;
+  --code-bg: #f4f7f9;
+  --shadow-focus: 0 0 0 2px rgba(11, 122, 117, 0.18);
 }
 
 * {
@@ -10,14 +26,15 @@
 }
 
 body {
+  background: var(--app-bg);
   margin: 0;
 }
 
 button {
-  border: 1px solid #c2cbd2;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: #ffffff;
-  color: #172026;
+  background: var(--surface-elevated);
+  color: var(--text);
   cursor: pointer;
   font: inherit;
   min-height: 32px;
@@ -25,7 +42,54 @@ button {
 }
 
 button:hover {
-  background: #f4f7f9;
+  background: var(--button-hover);
+}
+
+input,
+textarea {
+  caret-color: var(--accent);
+}
+
+input:focus,
+textarea:focus,
+button:focus-visible {
+  box-shadow: var(--shadow-focus);
+}
+
+.theme-dark {
+  --app-bg: #111827;
+  --surface: #182230;
+  --surface-muted: #131c29;
+  --surface-soft: #202c3c;
+  --surface-elevated: #1f2937;
+  --border: #334155;
+  --border-strong: #475569;
+  --text: #e5edf6;
+  --text-muted: #9fb0c3;
+  --accent: #5eead4;
+  --accent-soft: #123b3c;
+  --button-hover: #27364a;
+  --input-bg: #111827;
+  --code-bg: #111827;
+  --shadow-focus: 0 0 0 2px rgba(94, 234, 212, 0.22);
+}
+
+.theme-eye {
+  --app-bg: #eef3e6;
+  --surface: #fbfbef;
+  --surface-muted: #f1f5e8;
+  --surface-soft: #edf2df;
+  --surface-elevated: #fffff5;
+  --border: #cbd8b7;
+  --border-strong: #b3c39b;
+  --text: #243024;
+  --text-muted: #667159;
+  --accent: #557a35;
+  --accent-soft: #dfead0;
+  --button-hover: #f0f4e5;
+  --input-bg: #fffff7;
+  --code-bg: #eef3df;
+  --shadow-focus: 0 0 0 2px rgba(85, 122, 53, 0.2);
 }
 
 .app-shell {
@@ -36,8 +100,8 @@ button:hover {
 
 .topbar {
   align-items: center;
-  background: #ffffff;
-  border-bottom: 1px solid #d5dce1;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
   display: flex;
   gap: 16px;
   justify-content: space-between;
@@ -57,7 +121,7 @@ button:hover {
   }
 
   span {
-    color: #66717a;
+    color: var(--text-muted);
     font-size: 12px;
   }
 }
@@ -68,14 +132,36 @@ button:hover {
   gap: 8px;
 }
 
+.theme-switcher {
+  align-items: center;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: inline-flex;
+  padding: 2px;
+
+  button {
+    border: 0;
+    background: transparent;
+    min-height: 28px;
+    padding: 0 9px;
+  }
+
+  button.active {
+    background: var(--surface-elevated);
+    color: var(--accent);
+    font-weight: 700;
+  }
+}
+
 .workspace {
   display: grid;
   min-height: 0;
 }
 
 .toc-panel {
-  background: #f8fafb;
-  border-right: 1px solid #d5dce1;
+  background: var(--surface-muted);
+  border-right: 1px solid var(--border);
   min-width: 0;
   overflow: auto;
   padding: 14px 10px;
@@ -94,8 +180,10 @@ button:hover {
   margin-bottom: 10px;
 
   input {
-    border: 1px solid #c2cbd2;
+    background: var(--input-bg);
+    border: 1px solid var(--border-strong);
     border-radius: 6px;
+    color: var(--text);
     font: inherit;
     min-height: 32px;
     padding: 0 9px;
@@ -104,15 +192,15 @@ button:hover {
 }
 
 .resize-handle {
-  background: #eef1f4;
-  border-left: 1px solid #d5dce1;
-  border-right: 1px solid #d5dce1;
+  background: var(--app-bg);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   cursor: col-resize;
   min-width: 6px;
 }
 
 .resize-handle:hover {
-  background: #d9e8f2;
+  background: var(--accent-soft);
 }
 
 .editor-panel {
@@ -123,8 +211,8 @@ button:hover {
 
 .editor-tools {
   align-items: center;
-  background: #ffffff;
-  border-bottom: 1px solid #d5dce1;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
   display: grid;
   gap: 8px;
   grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto auto auto;
@@ -132,8 +220,10 @@ button:hover {
   padding: 8px;
 
   input {
-    border: 1px solid #c2cbd2;
+    background: var(--input-bg);
+    border: 1px solid var(--border-strong);
     border-radius: 6px;
+    color: var(--text);
     font: inherit;
     min-height: 32px;
     min-width: 0;
@@ -178,15 +268,15 @@ button:hover {
 }
 
 .empty {
-  color: #66717a;
+  color: var(--text-muted);
   font-size: 13px;
   margin: 8px 6px;
 }
 
 .source-editor {
-  background: #ffffff;
+  background: var(--surface);
   border: 0;
-  color: #172026;
+  color: var(--text);
   font: 14px/1.6 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   min-width: 0;
   outline: none;
@@ -195,7 +285,7 @@ button:hover {
 }
 
 .preview {
-  background: #ffffff;
+  background: var(--surface);
   min-width: 0;
   overflow: auto;
   padding: 18px 28px 56px;
@@ -208,8 +298,8 @@ button:hover {
   }
 
   pre {
-    background: #f4f7f9;
-    border: 1px solid #d5dce1;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
     border-radius: 6px;
     overflow: auto;
     padding: 12px;
@@ -221,7 +311,7 @@ button:hover {
 }
 
 .mermaid-panzoom {
-  border: 1px solid #d5dce1;
+  border: 1px solid var(--border);
   border-radius: 6px;
   cursor: grab;
   margin: 16px 0;

@@ -10,6 +10,7 @@ describe('session helpers', () => {
       editorWidth: 560,
       previewHidden: false,
       editorVisible: false,
+      theme: 'light',
     });
   });
 
@@ -23,6 +24,19 @@ describe('session helpers', () => {
       editorWidth: 560,
       previewHidden: false,
       editorVisible: false,
+      theme: 'light',
     });
+  });
+
+  it('normalizes persisted theme values', () => {
+    expect(mergeSession({ theme: 'dark' }, {})).toEqual(
+      expect.objectContaining({ theme: 'dark' }),
+    );
+    expect(mergeSession({ theme: 'eye' }, {})).toEqual(
+      expect.objectContaining({ theme: 'eye' }),
+    );
+    expect(mergeSession({ theme: 'unknown' } as never, {})).toEqual(
+      expect.objectContaining({ theme: 'light' }),
+    );
   });
 });

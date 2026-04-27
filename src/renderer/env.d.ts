@@ -18,6 +18,7 @@ interface MarkdownSession {
   editorWidth: number;
   previewHidden: boolean;
   editorVisible: boolean;
+  theme: 'light' | 'dark' | 'eye';
 }
 
 interface MarkdownBridge {

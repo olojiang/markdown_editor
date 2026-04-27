@@ -12,6 +12,7 @@ import {
   mergeSession,
   normalizeSession,
   type MarkdownSession,
+  type ThemeMode,
 } from '@/renderer/lib/session';
 
 interface MarkdownFile {
@@ -182,6 +183,10 @@ function replaceAll(): void {
   status.value = `已替换 ${count} 处`;
 }
 
+function setTheme(theme: ThemeMode): void {
+  persistSession({ theme });
+}
+
 function toggleEditor(): void {
   persistSession({
     editorVisible: !isEditorVisible.value,
@@ -344,6 +349,7 @@ onBeforeUnmount(() => {
   <main
     :class="[
       'app-shell',
+      `theme-${session.theme}`,
       {
         'preview-fullscreen': isPreviewFullscreen,
         'preview-hidden': session.previewHidden,
@@ -357,6 +363,35 @@ onBeforeUnmount(() => {
         <span>{{ status }}</span>
       </div>
       <div class="actions">
+        <div class="theme-switcher" aria-label="主题">
+          <button
+            data-testid="theme-light"
+            type="button"
+            :class="{ active: session.theme === 'light' }"
+            title="浅色主题"
+            @click="setTheme('light')"
+          >
+            浅色
+          </button>
+          <button
+            data-testid="theme-dark"
+            type="button"
+            :class="{ active: session.theme === 'dark' }"
+            title="深色主题"
+            @click="setTheme('dark')"
+          >
+            深色
+          </button>
+          <button
+            data-testid="theme-eye"
+            type="button"
+            :class="{ active: session.theme === 'eye' }"
+            title="护眼模式"
+            @click="setTheme('eye')"
+          >
+            护眼
+          </button>
+        </div>
         <button
           data-testid="open-file"
           type="button"

@@ -9,6 +9,7 @@ interface MarkdownSession {
   editorWidth: number;
   previewHidden: boolean;
   editorVisible: boolean;
+  theme: 'light' | 'dark' | 'eye';
 }
 
 interface MarkdownFile {
@@ -18,6 +19,23 @@ interface MarkdownFile {
 }
 
 const isDev = !app.isPackaged && process.env.MARKDOWN_EDITOR_FORCE_PROD !== '1';
+const devServerUrl = 'http://127.0.0.1:26543';
+
+function normalizeTheme(theme: unknown): MarkdownSession['theme'] {
+  return theme === 'dark' || theme === 'eye' ? theme : 'light';
+}
+
+function createDefaultSession(): MarkdownSession {
+  return {
+    filePath: null,
+    scrollTop: 0,
+    tocWidth: 260,
+    editorWidth: 560,
+    previewHidden: false,
+    editorVisible: false,
+    theme: 'light',
+  };
+}
 
 function sessionFilePath(): string {
   return path.join(app.getPath('userData'), 'markdown-session.json');
@@ -34,16 +52,10 @@ async function readSession(): Promise<MarkdownSession> {
       editorWidth: typeof parsed.editorWidth === 'number' ? parsed.editorWidth : 560,
       previewHidden: parsed.previewHidden === true,
       editorVisible: parsed.editorVisible === true,
+      theme: normalizeTheme(parsed.theme),
     };
   } catch {
-    return {
-      filePath: null,
-      scrollTop: 0,
-      tocWidth: 260,
-      editorWidth: 560,
-      previewHidden: false,
-      editorVisible: false,
-    };
+    return createDefaultSession();
   }
 }
 
@@ -76,7 +88,7 @@ async function createWindow(): Promise<void> {
   });
 
   if (isDev) {
-    await window.loadURL('http://127.0.0.1:5173');
+    await window.loadURL(devServerUrl);
   } else {
     await window.loadFile(path.join(__dirname, '../dist/index.html'));
   }

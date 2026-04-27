@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     editorWidth: number;
     previewHidden: boolean;
     editorVisible: boolean;
+    theme: 'light' | 'dark' | 'eye';
   }) =>
     ipcRenderer.invoke('session:save', session),
 });

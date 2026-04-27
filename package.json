@@ -6,8 +6,9 @@
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
-    "build": "vue-tsc --noEmit && vite build && tsc -p tsconfig.electron.json",
+    "dev": "pnpm build:electron && concurrently -k \"vite --host 127.0.0.1 --port 26543 --strictPort\" \"wait-on http://127.0.0.1:26543 && electron .\"",
+    "build": "vue-tsc --noEmit && vite build && pnpm build:electron",
+    "build:electron": "tsc -p tsconfig.electron.json",
     "build:mac": "pnpm build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64 --x64 --publish never",
     "build:win_x64": "pnpm build && electron-builder --win nsis --x64 --publish never",
     "test": "vitest run",

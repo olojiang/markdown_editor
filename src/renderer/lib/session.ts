@@ -1,3 +1,5 @@
+export type ThemeMode = 'light' | 'dark' | 'eye';
+
 export interface MarkdownSession {
   filePath: string | null;
   scrollTop: number;
@@ -5,6 +7,7 @@ export interface MarkdownSession {
   editorWidth: number;
   previewHidden: boolean;
   editorVisible: boolean;
+  theme: ThemeMode;
 }
 
 export function createDefaultSession(): MarkdownSession {
@@ -15,7 +18,12 @@ export function createDefaultSession(): MarkdownSession {
     editorWidth: 560,
     previewHidden: false,
     editorVisible: false,
+    theme: 'light',
   };
+}
+
+function normalizeTheme(theme: unknown): ThemeMode {
+  return theme === 'dark' || theme === 'eye' ? theme : 'light';
 }
 
 export function normalizeSession(session: Partial<MarkdownSession> | null | undefined): MarkdownSession {
@@ -28,6 +36,7 @@ export function normalizeSession(session: Partial<MarkdownSession> | null | unde
     editorWidth: Math.max(320, Math.min(1200, typeof session?.editorWidth === 'number' ? session.editorWidth : 560)),
     previewHidden: session?.previewHidden === true,
     editorVisible: session?.editorVisible === true,
+    theme: normalizeTheme(session?.theme),
   };
 }
 

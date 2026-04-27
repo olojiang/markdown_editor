@@ -25,6 +25,7 @@ describe('App', () => {
         editorWidth: 640,
         previewHidden: false,
         editorVisible: false,
+        theme: 'light',
       }),
       saveSession: vi.fn().mockResolvedValue(undefined),
     };
@@ -36,8 +37,26 @@ describe('App', () => {
 
     expect(window.markdownBridge?.readLastMarkdownFile).toHaveBeenCalled();
     expect(wrapper.classes()).toContain('reader-mode');
+    expect(wrapper.classes()).toContain('theme-light');
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', openFile.content);
     expect(wrapper.find('[data-testid="toc"]').text()).toContain('Title');
+  });
+
+  it('switches and persists theme modes', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="theme-dark"]').trigger('click');
+    expect(wrapper.classes()).toContain('theme-dark');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: 'dark' }),
+    );
+
+    await wrapper.find('[data-testid="theme-eye"]').trigger('click');
+    expect(wrapper.classes()).toContain('theme-eye');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: 'eye' }),
+    );
   });
 
   it('switches between reader and editor modes', async () => {
