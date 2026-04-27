@@ -45,6 +45,15 @@ button:hover {
   background: var(--button-hover);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button:disabled:hover {
+  background: var(--surface-elevated);
+}
+
 input,
 textarea {
   caret-color: var(--accent);
@@ -169,7 +178,7 @@ button:focus-visible {
   h2 {
     font-size: 13px;
     letter-spacing: 0;
-    margin: 0 0 12px;
+    margin: 0;
     padding: 0 6px;
   }
 }
@@ -188,6 +197,26 @@ button:focus-visible {
     min-height: 32px;
     padding: 0 9px;
     width: 100%;
+  }
+}
+
+.toc-toolbar-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.toc-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+
+  button {
+    font-size: 12px;
+    min-height: 26px;
+    padding: 0 7px;
   }
 }
 
@@ -286,6 +315,7 @@ button:focus-visible {
 
 .preview {
   background: var(--surface);
+  color: var(--text);
   min-width: 0;
   overflow: auto;
   padding: 18px 28px 56px;
@@ -294,7 +324,30 @@ button:focus-visible {
   h2,
   h3,
   h4 {
+    color: var(--text);
     line-height: 1.25;
+  }
+
+  p,
+  li,
+  blockquote,
+  table {
+    color: var(--text);
+  }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border-strong);
+  }
+
+  a {
+    color: var(--accent);
+  }
+
+  blockquote {
+    border-left: 3px solid var(--border-strong);
+    margin-left: 0;
+    padding-left: 14px;
   }
 
   pre {
@@ -306,6 +359,7 @@ button:focus-visible {
   }
 
   code {
+    color: var(--text);
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   }
 }

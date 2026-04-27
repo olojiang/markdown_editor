@@ -51,9 +51,18 @@ describe('renderMarkdown', () => {
   it('renders headings with ids and replaces mermaid fences with diagrams', () => {
     const html = renderMarkdown('# Flow\n\n```mermaid\ngraph TD\nA-->B\n```');
 
-    expect(html).toContain('<h1 id="flow">Flow</h1>');
+    expect(html).toContain('id="flow"');
+    expect(html).toContain('data-source-line="1"');
     expect(html).toContain('class="mermaid"');
     expect(html).toContain('graph TD');
+  });
+
+  it('adds source line anchors to rendered block elements', () => {
+    const html = renderMarkdown('# Title\n\nParagraph\n\n## Section');
+
+    expect(html).toContain('data-source-line="1"');
+    expect(html).toContain('data-source-line="3"');
+    expect(html).toContain('data-source-line="5"');
   });
 });
 

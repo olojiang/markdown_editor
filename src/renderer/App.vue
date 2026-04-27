@@ -21,25 +21,36 @@ interface MarkdownFile {
   content: string;
 }
 
+interface ScrollAnchor {
+  line: number;
+  top: number;
+}
+
 const bridge = window.markdownBridge;
 const currentFile = ref<MarkdownFile | null>(null);
 const source = ref('');
+const lastSavedContent = ref('');
 const session = ref<MarkdownSession>(createDefaultSession());
 const isPreviewFullscreen = ref(false);
 const preview = ref<HTMLElement | null>(null);
 const editor = ref<HTMLTextAreaElement | null>(null);
 const status = ref('请选择或打开一个 Markdown 文件');
 const tocSearch = ref('');
+const collapsedHeadingIds = ref(new Set<string>());
 const editorSearch = ref('');
 const editorReplace = ref('');
 const activeResize = ref<'toc' | 'editor' | null>(null);
 let saveTimer: number | undefined;
+let scrollSyncSource: 'editor' | 'preview' | null = null;
+let scrollSyncFrame: number | undefined;
+const previewScrollOffset = -50;
 
 const previewHtml = computed(() => renderMarkdown(source.value));
-const headingTree = computed(() => buildHeadingTree(source.value));
+const headingTree = computed(() => applyCollapsedState(buildHeadingTree(source.value)));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
 const title = computed(() => currentFile.value?.name ?? 'Markdown Editor');
 const isEditorVisible = computed(() => session.value.editorVisible || !currentFile.value);
+const hasUnsavedChanges = computed(() => currentFile.value !== null && source.value !== lastSavedContent.value);
 const gridStyle = computed(() => {
   if (isPreviewFullscreen.value) {
     return {
@@ -64,18 +75,302 @@ const gridStyle = computed(() => {
   };
 });
 
+function applyCollapsedState(nodes: HeadingNode[]): HeadingNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    collapsed: collapsedHeadingIds.value.has(node.id),
+    children: applyCollapsedState(node.children),
+  }));
+}
+
 function toggleNode(target: HeadingNode): void {
-  target.collapsed = !target.collapsed;
+  const collapsed = new Set(collapsedHeadingIds.value);
+  if (collapsed.has(target.id)) {
+    collapsed.delete(target.id);
+  } else {
+    collapsed.add(target.id);
+  }
+  collapsedHeadingIds.value = collapsed;
+}
+
+function collectCollapsibleHeadingIds(nodes: HeadingNode[], ids: Set<string>): void {
+  nodes.forEach((node) => {
+    if (node.children.length > 0) {
+      ids.add(node.id);
+    }
+    collectCollapsibleHeadingIds(node.children, ids);
+  });
+}
+
+function expandAllHeadings(): void {
+  collapsedHeadingIds.value = new Set();
+}
+
+function collapseAllHeadings(): void {
+  const ids = new Set<string>();
+  collectCollapsibleHeadingIds(headingTree.value, ids);
+  collapsedHeadingIds.value = ids;
+}
+
+function persistableSession(): MarkdownSession {
+  return { ...session.value };
 }
 
 function rememberScroll(scrollTop: number): void {
   session.value = mergeSession(session.value, { scrollTop });
-  void bridge?.saveSession(session.value);
+  void bridge?.saveSession(persistableSession());
+}
+
+function scrollRatio(element: HTMLElement): number {
+  const maxScroll = element.scrollHeight - element.clientHeight;
+  return maxScroll <= 0 ? 0 : element.scrollTop / maxScroll;
+}
+
+function scrollRatioWithOffset(element: HTMLElement, offset: number): number {
+  const maxScroll = element.scrollHeight - element.clientHeight;
+  return maxScroll <= 0 ? 0 : Math.max(0, element.scrollTop - offset) / maxScroll;
+}
+
+function applyScrollRatio(element: HTMLElement, ratio: number): void {
+  const maxScroll = element.scrollHeight - element.clientHeight;
+  element.scrollTop = maxScroll <= 0 ? 0 : maxScroll * ratio;
+}
+
+function maxScrollTop(element: HTMLElement): number {
+  return Math.max(0, element.scrollHeight - element.clientHeight);
+}
+
+function sourceLineCount(): number {
+  return Math.max(1, source.value.split('\n').length);
+}
+
+function editorLineHeight(): number {
+  const lineHeight = Number.parseFloat(window.getComputedStyle(editor.value as Element).lineHeight);
+  return Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 22.4;
+}
+
+function interpolateLineFromAnchors(scrollTop: number, anchors: ScrollAnchor[]): number {
+  const nextIndex = anchors.findIndex((anchor) => anchor.top > scrollTop);
+  const before = anchors[Math.max(0, nextIndex === -1 ? anchors.length - 2 : nextIndex - 1)];
+  const after = anchors[nextIndex === -1 ? anchors.length - 1 : nextIndex];
+  const topSpan = after.top - before.top;
+  const ratio = topSpan <= 0 ? 0 : (scrollTop - before.top) / topSpan;
+
+  return before.line + (after.line - before.line) * ratio;
+}
+
+function interpolateTopFromAnchors(line: number, anchors: ScrollAnchor[]): number {
+  const nextIndex = anchors.findIndex((anchor) => anchor.line > line);
+  const before = anchors[Math.max(0, nextIndex === -1 ? anchors.length - 2 : nextIndex - 1)];
+  const after = anchors[nextIndex === -1 ? anchors.length - 1 : nextIndex];
+  const lineSpan = after.line - before.line;
+  const ratio = lineSpan <= 0 ? 0 : (line - before.line) / lineSpan;
+
+  return before.top + (after.top - before.top) * ratio;
+}
+
+function editorAnchors(): ScrollAnchor[] {
+  const element = editor.value;
+  if (!element || !document.body) {
+    return [];
+  }
+
+  const style = window.getComputedStyle(element);
+  const mirror = document.createElement('div');
+  Object.assign(mirror.style, {
+    border: style.border,
+    boxSizing: style.boxSizing,
+    font: style.font,
+    letterSpacing: style.letterSpacing,
+    lineHeight: style.lineHeight,
+    overflowWrap: style.overflowWrap,
+    padding: style.padding,
+    pointerEvents: 'none',
+    position: 'absolute',
+    tabSize: style.tabSize,
+    top: '0',
+    visibility: 'hidden',
+    whiteSpace: 'pre-wrap',
+    width: `${element.clientWidth}px`,
+    wordBreak: style.wordBreak,
+  });
+
+  const lines = source.value.split('\n');
+  lines.forEach((line, index) => {
+    const marker = document.createElement('span');
+    marker.dataset.sourceLine = String(index + 1);
+    marker.style.display = 'inline-block';
+    marker.style.height = '0';
+    marker.style.overflow = 'hidden';
+    marker.style.verticalAlign = 'top';
+    marker.style.width = '0';
+    mirror.append(marker, document.createTextNode(line || '\u200b'));
+    if (index < lines.length - 1) {
+      mirror.append(document.createTextNode('\n'));
+    }
+  });
+
+  document.body.append(mirror);
+  const markers = Array.from(mirror.querySelectorAll<HTMLElement>('[data-source-line]'));
+  const firstTop = markers[0]?.offsetTop ?? 0;
+  const anchors = markers
+    .map((marker) => ({
+      line: Number(marker.dataset.sourceLine),
+      top: Math.max(0, marker.offsetTop - firstTop),
+    }))
+    .filter((anchor) => Number.isFinite(anchor.line));
+  mirror.remove();
+
+  const orderedAnchors: ScrollAnchor[] = [];
+  anchors.forEach((anchor) => {
+    const previous = orderedAnchors[orderedAnchors.length - 1];
+    if (!previous || anchor.top > previous.top && anchor.line > previous.line) {
+      orderedAnchors.push(anchor);
+    }
+  });
+
+  const maxEditorScroll = maxScrollTop(element);
+  const lastAnchor = orderedAnchors[orderedAnchors.length - 1];
+  if (lastAnchor && maxEditorScroll > lastAnchor.top && sourceLineCount() > lastAnchor.line) {
+    orderedAnchors.push({ line: sourceLineCount(), top: maxEditorScroll });
+  }
+
+  return orderedAnchors.length > 2 ? orderedAnchors : [];
+}
+
+function lineFromEditorScroll(): number {
+  const element = editor.value;
+  if (!element) {
+    return 1;
+  }
+
+  const anchors = editorAnchors();
+  if (anchors.length > 0) {
+    return interpolateLineFromAnchors(element.scrollTop, anchors);
+  }
+
+  return Math.min(sourceLineCount(), Math.max(1, element.scrollTop / editorLineHeight() + 1));
+}
+
+function syncEditorToLine(line: number): void {
+  const element = editor.value;
+  if (!element) {
+    return;
+  }
+
+  const anchors = editorAnchors();
+  const targetTop = anchors.length > 0 ? interpolateTopFromAnchors(line, anchors) : (line - 1) * editorLineHeight();
+  element.scrollTop = Math.min(maxScrollTop(element), Math.max(0, targetTop));
+}
+
+function previewAnchors(): ScrollAnchor[] {
+  const container = preview.value;
+  if (!container) {
+    return [];
+  }
+
+  const renderedAnchors = Array.from(container.querySelectorAll<HTMLElement>('[data-source-line]'))
+    .map((node) => ({
+      line: Number(node.dataset.sourceLine),
+      top: node.offsetTop,
+    }))
+    .filter((anchor) => Number.isFinite(anchor.line))
+    .sort((first, second) => first.top - second.top);
+
+  const anchors = [{ line: 1, top: 0 }];
+  renderedAnchors.forEach((anchor) => {
+    const previous = anchors[anchors.length - 1];
+    if (anchor.top > previous.top && anchor.line > previous.line) {
+      anchors.push(anchor);
+    }
+  });
+
+  const maxPreviewScroll = maxScrollTop(container);
+  const lastAnchor = anchors[anchors.length - 1];
+  if (maxPreviewScroll > lastAnchor.top && sourceLineCount() > lastAnchor.line) {
+    anchors.push({ line: sourceLineCount(), top: maxPreviewScroll });
+  }
+
+  return anchors.length > 2 ? anchors : [];
+}
+
+function interpolateLineFromPreviewScroll(): number | null {
+  const container = preview.value;
+  if (!container) {
+    return null;
+  }
+
+  const scrollTop = Math.max(0, container.scrollTop - previewScrollOffset);
+  const anchors = previewAnchors();
+  if (anchors.length === 0) {
+    return null;
+  }
+
+  return interpolateLineFromAnchors(scrollTop, anchors);
+}
+
+function interpolatePreviewScrollFromLine(line: number): number | null {
+  const anchors = previewAnchors();
+  if (anchors.length === 0) {
+    return null;
+  }
+
+  return interpolateTopFromAnchors(line, anchors);
+}
+
+function syncScroll(from: 'editor' | 'preview', lock = true): void {
+  if (lock && scrollSyncSource && scrollSyncSource !== from) {
+    return;
+  }
+
+  const sourceElement = from === 'editor' ? editor.value : preview.value;
+  const targetElement = from === 'editor' ? preview.value : editor.value;
+  if (!sourceElement || !targetElement || session.value.previewHidden || !isEditorVisible.value) {
+    return;
+  }
+
+  if (from === 'preview') {
+    const line = interpolateLineFromPreviewScroll();
+    if (line === null) {
+      applyScrollRatio(targetElement, scrollRatioWithOffset(sourceElement, previewScrollOffset));
+    } else {
+      syncEditorToLine(line);
+    }
+  } else {
+    const targetTop = interpolatePreviewScrollFromLine(lineFromEditorScroll());
+    if (targetTop === null) {
+      applyScrollRatio(targetElement, scrollRatio(sourceElement));
+      targetElement.scrollTop = Math.min(maxScrollTop(targetElement), targetElement.scrollTop + previewScrollOffset);
+    } else {
+      targetElement.scrollTop = Math.min(maxScrollTop(targetElement), Math.max(0, targetTop + previewScrollOffset));
+    }
+  }
+
+  if (lock) {
+    scrollSyncSource = from;
+    if (scrollSyncFrame !== undefined) {
+      window.cancelAnimationFrame(scrollSyncFrame);
+    }
+    scrollSyncFrame = window.requestAnimationFrame(() => {
+      scrollSyncSource = null;
+      scrollSyncFrame = undefined;
+    });
+  }
+}
+
+function onEditorScroll(event: Event): void {
+  syncScroll('editor');
+  rememberScroll(preview.value?.scrollTop ?? (event.target as HTMLElement).scrollTop);
+}
+
+function onPreviewScroll(event: Event): void {
+  rememberScroll((event.target as HTMLElement).scrollTop);
+  syncScroll('preview');
 }
 
 function persistSession(patch: Partial<MarkdownSession>): void {
   session.value = mergeSession(session.value, patch);
-  void bridge?.saveSession(session.value);
+  void bridge?.saveSession(persistableSession());
 }
 
 function jumpToHeading(id: string): void {
@@ -92,12 +387,14 @@ function jumpToHeading(id: string): void {
 function setFile(file: MarkdownFile, scrollTop = 0): void {
   currentFile.value = file;
   source.value = file.content;
+  lastSavedContent.value = file.content;
   session.value = mergeSession(session.value, { filePath: file.path, scrollTop });
   status.value = file.path;
   void nextTick(() => {
     if (preview.value) {
       preview.value.scrollTop = scrollTop;
     }
+    syncScroll('preview', false);
   });
 }
 
@@ -105,16 +402,17 @@ async function openFile(): Promise<void> {
   const file = await bridge?.openMarkdownFile();
   if (file) {
     setFile(file, 0);
-    await bridge?.saveSession(session.value);
+    await bridge?.saveSession(persistableSession());
   }
 }
 
 async function saveCurrentFile(): Promise<void> {
-  if (!currentFile.value || !bridge) {
+  if (!currentFile.value || !bridge || !hasUnsavedChanges.value) {
     return;
   }
 
   currentFile.value = await bridge.saveMarkdownFile(currentFile.value.path, source.value);
+  lastSavedContent.value = currentFile.value.content;
   status.value = `已保存 ${currentFile.value.path}`;
 }
 
@@ -188,17 +486,25 @@ function setTheme(theme: ThemeMode): void {
 }
 
 function toggleEditor(): void {
+  const willShowEditor = !isEditorVisible.value;
   persistSession({
-    editorVisible: !isEditorVisible.value,
+    editorVisible: willShowEditor,
     previewHidden: false,
   });
+  if (willShowEditor) {
+    void nextTick(() => syncScroll('preview', false));
+  }
 }
 
 function togglePreview(): void {
+  const willShowPreview = session.value.previewHidden;
   persistSession({
     previewHidden: !session.value.previewHidden,
     editorVisible: true,
   });
+  if (willShowPreview) {
+    void nextTick(() => syncScroll('editor', false));
+  }
 }
 
 function startResize(target: 'toc' | 'editor', event: PointerEvent): void {
@@ -339,6 +645,9 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  if (scrollSyncFrame !== undefined) {
+    window.cancelAnimationFrame(scrollSyncFrame);
+  }
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('pointermove', onResizeMove);
   window.removeEventListener('pointerup', stopResize);
@@ -403,6 +712,7 @@ onBeforeUnmount(() => {
         <button
           data-testid="save-file"
           type="button"
+          :disabled="!hasUnsavedChanges"
           title="保存 Markdown 文件 (Cmd/Ctrl+S)"
           @click="saveCurrentFile"
         >
@@ -433,7 +743,17 @@ onBeforeUnmount(() => {
     <section class="workspace" :style="gridStyle">
       <aside class="toc-panel" data-testid="toc">
         <div class="panel-toolbar">
-          <h2>目录</h2>
+          <div class="toc-toolbar-row">
+            <h2>目录</h2>
+            <div class="toc-actions">
+              <button data-testid="expand-toc" type="button" title="全部展开" @click="expandAllHeadings">
+                展开
+              </button>
+              <button data-testid="collapse-toc" type="button" title="全部收起" @click="collapseAllHeadings">
+                收起
+              </button>
+            </div>
+          </div>
           <input v-model="tocSearch" data-testid="toc-search" type="search" placeholder="搜索目录" />
         </div>
         <TocTree
@@ -467,6 +787,7 @@ onBeforeUnmount(() => {
           data-testid="editor"
           spellcheck="false"
           placeholder="# 开始写 Markdown"
+          @scroll="onEditorScroll"
         />
       </section>
 
@@ -481,7 +802,7 @@ onBeforeUnmount(() => {
         ref="preview"
         class="preview"
         data-testid="preview"
-        @scroll="rememberScroll(($event.target as HTMLElement).scrollTop)"
+        @scroll="onPreviewScroll"
         @wheel="onPreviewWheel"
         @pointerdown="onPreviewPointerDown"
         @pointermove="onPreviewPointerMove"

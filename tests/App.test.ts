@@ -8,6 +8,11 @@ const openFile = {
   content: '# Title\n\n## Alpha\n\nhello alpha\n\n## Beta\n\nhello beta\n\n```mermaid\ngraph TD\nA-->B\n```',
 };
 
+function setScrollMetrics(element: Element, scrollHeight: number, clientHeight: number): void {
+  Object.defineProperty(element, 'scrollHeight', { configurable: true, value: scrollHeight });
+  Object.defineProperty(element, 'clientHeight', { configurable: true, value: clientHeight });
+}
+
 describe('App', () => {
   beforeEach(() => {
     window.markdownBridge = {
@@ -27,7 +32,9 @@ describe('App', () => {
         editorVisible: false,
         theme: 'light',
       }),
-      saveSession: vi.fn().mockResolvedValue(undefined),
+      saveSession: vi.fn().mockImplementation(async (session) => {
+        structuredClone(session);
+      }),
     };
   });
 
@@ -80,6 +87,53 @@ describe('App', () => {
     expect(wrapper.find('[data-testid="preview"]').html()).toContain('Changed');
   });
 
+  it('disables save until the source changes', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const saveButton = wrapper.find<HTMLButtonElement>('[data-testid="save-file"]');
+    expect(saveButton.element.disabled).toBe(true);
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+    expect(saveButton.element.disabled).toBe(false);
+
+    await saveButton.trigger('click');
+    await vi.dynamicImportSettled();
+    expect(saveButton.element.disabled).toBe(true);
+  });
+
+  it('syncs preview position when the editor scrolls', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    setScrollMetrics(preview, 2200, 200);
+
+    editor.scrollTop = 500;
+    await wrapper.find('[data-testid="editor"]').trigger('scroll');
+
+    expect(preview.scrollTop).toBe(950);
+  });
+
+  it('syncs editor position when the preview scrolls', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    setScrollMetrics(preview, 2200, 200);
+
+    preview.scrollTop = 950;
+    await wrapper.find('[data-testid="preview"]').trigger('scroll');
+
+    expect(editor.scrollTop).toBe(500);
+  });
+
   it('toggles fullscreen preview mode', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -97,6 +151,20 @@ describe('App', () => {
 
     expect(wrapper.find('[data-testid="toc"]').text()).toContain('Beta');
     expect(wrapper.find('[data-testid="toc"]').text()).not.toContain('Alpha');
+  });
+
+  it('expands and collapses the whole table of contents', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="collapse-toc"]').trigger('click');
+    expect(wrapper.find('[data-testid="toc"]').text()).toContain('Title');
+    expect(wrapper.find('[data-testid="toc"]').text()).not.toContain('Alpha');
+    expect(wrapper.find('[data-testid="toc"]').text()).not.toContain('Beta');
+
+    await wrapper.find('[data-testid="expand-toc"]').trigger('click');
+    expect(wrapper.find('[data-testid="toc"]').text()).toContain('Alpha');
+    expect(wrapper.find('[data-testid="toc"]').text()).toContain('Beta');
   });
 
   it('replaces all source matches in the editor', async () => {
@@ -124,11 +192,12 @@ describe('App', () => {
   });
 
   it('uses keyboard shortcuts for opening and saving files', async () => {
-    mount(App);
+    const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', metaKey: true }));
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', metaKey: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', metaKey: true }));
     await vi.dynamicImportSettled();
 
     expect(window.markdownBridge?.openMarkdownFile).toHaveBeenCalled();

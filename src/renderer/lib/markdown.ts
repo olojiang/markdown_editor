@@ -104,20 +104,49 @@ export function renderMarkdown(markdown: string): string {
   const md = new MarkdownIt({ html: false, linkify: true, typographer: true });
   const defaultFence = md.renderer.rules.fence?.bind(md.renderer);
   const slug = createSlugger();
+  const sourceLineTokenTypes = new Set([
+    'blockquote_open',
+    'bullet_list_open',
+    'code_block',
+    'fence',
+    'heading_open',
+    'hr',
+    'ordered_list_open',
+    'paragraph_open',
+    'table_open',
+  ]);
+
+  function tagSourceLine(token: Token): void {
+    const line = token.map?.[0];
+    if (typeof line === 'number') {
+      token.attrSet('data-source-line', String(line + 1));
+    }
+  }
 
   md.renderer.rules.heading_open = (tokens, index, options, env, self) => {
     const id = slug(plainText(tokens, index));
     tokens[index].attrSet('id', id);
+    tagSourceLine(tokens[index]);
     return self.renderToken(tokens, index, options);
   };
+
+  md.core.ruler.after('block', 'source_line_attrs', (state) => {
+    state.tokens.forEach((token) => {
+      if (sourceLineTokenTypes.has(token.type)) {
+        tagSourceLine(token);
+      }
+    });
+  });
 
   md.renderer.rules.fence = (tokens, index, options, env, self) => {
     const token = tokens[index];
     const language = token.info.trim().split(/\s+/)[0]?.toLowerCase();
+    const sourceLine = token.attrGet('data-source-line');
+    const sourceLineAttr = sourceLine ? ` data-source-line="${sourceLine}"` : '';
 
     if (language === 'mermaid') {
       return [
-        '<div class="mermaid-panzoom" data-scale="1" data-x="0" data-y="0">',
+        `<div class="mermaid-panzoom"${sourceLineAttr} data-scale="1" data-x="0" data-y="0">`,
         `<pre class="mermaid">${escapeHtml(token.content)}</pre>`,
         '</div>',
       ].join('');
