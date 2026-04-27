@@ -24,6 +24,7 @@ describe('App', () => {
         tocWidth: 300,
         editorWidth: 640,
         previewHidden: false,
+        editorVisible: false,
       }),
       saveSession: vi.fn().mockResolvedValue(undefined),
     };
@@ -34,8 +35,21 @@ describe('App', () => {
     await vi.dynamicImportSettled();
 
     expect(window.markdownBridge?.readLastMarkdownFile).toHaveBeenCalled();
+    expect(wrapper.classes()).toContain('reader-mode');
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', openFile.content);
     expect(wrapper.find('[data-testid="toc"]').text()).toContain('Title');
+  });
+
+  it('switches between reader and editor modes', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    expect(wrapper.classes()).not.toContain('reader-mode');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ editorVisible: true, previewHidden: false }),
+    );
   });
 
   it('updates the preview when source changes', async () => {
@@ -109,6 +123,7 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="open-file"]').attributes('title')).toBe('打开 Markdown 文件 (Cmd/Ctrl+O)');
     expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe('保存 Markdown 文件 (Cmd/Ctrl+S)');
     expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe('显示/隐藏预览 (Cmd/Ctrl+P)');
+    expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe('切换阅读/编辑模式 (Cmd/Ctrl+E)');
   });
 
   it('uses keyboard shortcut for toggling preview', async () => {

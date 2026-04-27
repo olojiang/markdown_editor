@@ -6,6 +6,7 @@ Electron + Vue + TypeScript Markdown editor with a collapsible heading tree, sou
 
 - Open and edit local `.md`, `.markdown`, and `.mdown` files.
 - Auto-save the current file and restore the last opened file/session on launch.
+- Open restored documents in a reader-first layout; switch to source editing with `Cmd/Ctrl+E`.
 - Browse headings in a collapsible table of contents and filter headings by keyword.
 - Search and replace inside the source editor.
 - Resize the table-of-contents and editor columns, hide the preview, or use fullscreen preview.

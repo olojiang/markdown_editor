@@ -9,6 +9,7 @@ describe('session helpers', () => {
       tocWidth: 260,
       editorWidth: 560,
       previewHidden: false,
+      editorVisible: false,
     });
   });
 
@@ -21,6 +22,7 @@ describe('session helpers', () => {
       tocWidth: 260,
       editorWidth: 560,
       previewHidden: false,
+      editorVisible: false,
     });
   });
 });

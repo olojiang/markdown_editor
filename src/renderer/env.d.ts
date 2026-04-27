@@ -17,6 +17,7 @@ interface MarkdownSession {
   tocWidth: number;
   editorWidth: number;
   previewHidden: boolean;
+  editorVisible: boolean;
 }
 
 interface MarkdownBridge {

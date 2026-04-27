@@ -258,6 +258,20 @@ button:hover {
   }
 }
 
+.reader-mode {
+  .editor-panel,
+  .workspace > .resize-handle:nth-of-type(2) {
+    border: 0;
+    overflow: hidden;
+    padding: 0;
+    visibility: hidden;
+  }
+
+  .preview {
+    padding: 28px clamp(32px, 8vw, 96px) 72px;
+  }
+}
+
 @media (max-width: 900px) {
   .workspace {
     grid-template-columns: 220px 6px minmax(0, 1fr) 0 0 !important;

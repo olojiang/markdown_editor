@@ -5,6 +5,13 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   readLastMarkdownFile: () => ipcRenderer.invoke('markdown:read-last'),
   saveMarkdownFile: (path: string, content: string) => ipcRenderer.invoke('markdown:save', path, content),
   getSession: () => ipcRenderer.invoke('session:get'),
-  saveSession: (session: { filePath: string | null; scrollTop: number }) =>
+  saveSession: (session: {
+    filePath: string | null;
+    scrollTop: number;
+    tocWidth: number;
+    editorWidth: number;
+    previewHidden: boolean;
+    editorVisible: boolean;
+  }) =>
     ipcRenderer.invoke('session:save', session),
 });

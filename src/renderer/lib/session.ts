@@ -4,6 +4,7 @@ export interface MarkdownSession {
   tocWidth: number;
   editorWidth: number;
   previewHidden: boolean;
+  editorVisible: boolean;
 }
 
 export function createDefaultSession(): MarkdownSession {
@@ -13,6 +14,7 @@ export function createDefaultSession(): MarkdownSession {
     tocWidth: 260,
     editorWidth: 560,
     previewHidden: false,
+    editorVisible: false,
   };
 }
 
@@ -25,6 +27,7 @@ export function normalizeSession(session: Partial<MarkdownSession> | null | unde
     tocWidth: Math.max(180, Math.min(520, typeof session?.tocWidth === 'number' ? session.tocWidth : 260)),
     editorWidth: Math.max(320, Math.min(1200, typeof session?.editorWidth === 'number' ? session.editorWidth : 560)),
     previewHidden: session?.previewHidden === true,
+    editorVisible: session?.editorVisible === true,
   };
 }
 

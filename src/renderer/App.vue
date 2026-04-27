@@ -38,8 +38,21 @@ const previewHtml = computed(() => renderMarkdown(source.value));
 const headingTree = computed(() => buildHeadingTree(source.value));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
 const title = computed(() => currentFile.value?.name ?? 'Markdown Editor');
+const isEditorVisible = computed(() => session.value.editorVisible || !currentFile.value);
 const gridStyle = computed(() => {
-  if (session.value.previewHidden || isPreviewFullscreen.value) {
+  if (isPreviewFullscreen.value) {
+    return {
+      gridTemplateColumns: `${session.value.tocWidth}px 6px minmax(0, 1fr) 6px 0`,
+    };
+  }
+
+  if (!isEditorVisible.value) {
+    return {
+      gridTemplateColumns: `${session.value.tocWidth}px 6px 0 0 minmax(0, 1fr)`,
+    };
+  }
+
+  if (session.value.previewHidden) {
     return {
       gridTemplateColumns: `${session.value.tocWidth}px 6px minmax(0, 1fr) 6px 0`,
     };
@@ -169,8 +182,18 @@ function replaceAll(): void {
   status.value = `已替换 ${count} 处`;
 }
 
+function toggleEditor(): void {
+  persistSession({
+    editorVisible: !isEditorVisible.value,
+    previewHidden: false,
+  });
+}
+
 function togglePreview(): void {
-  persistSession({ previewHidden: !session.value.previewHidden });
+  persistSession({
+    previewHidden: !session.value.previewHidden,
+    editorVisible: true,
+  });
 }
 
 function startResize(target: 'toc' | 'editor', event: PointerEvent): void {
@@ -215,6 +238,10 @@ function onKeyDown(event: KeyboardEvent): void {
   if (key === 'p') {
     event.preventDefault();
     togglePreview();
+  }
+  if (key === 'e') {
+    event.preventDefault();
+    toggleEditor();
   }
 }
 
@@ -320,6 +347,7 @@ onBeforeUnmount(() => {
       {
         'preview-fullscreen': isPreviewFullscreen,
         'preview-hidden': session.previewHidden,
+        'reader-mode': !isEditorVisible,
       },
     ]"
   >
@@ -352,6 +380,14 @@ onBeforeUnmount(() => {
           @click="togglePreview"
         >
           {{ session.previewHidden ? '展开预览' : '隐藏预览' }}
+        </button>
+        <button
+          data-testid="toggle-editor"
+          type="button"
+          title="切换阅读/编辑模式 (Cmd/Ctrl+E)"
+          @click="toggleEditor"
+        >
+          {{ isEditorVisible ? '阅读' : '编辑' }}
         </button>
         <button data-testid="fullscreen-preview" type="button" @click="isPreviewFullscreen = !isPreviewFullscreen">
           {{ isPreviewFullscreen ? '退出预览' : '全屏预览' }}

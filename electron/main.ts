@@ -8,6 +8,7 @@ interface MarkdownSession {
   tocWidth: number;
   editorWidth: number;
   previewHidden: boolean;
+  editorVisible: boolean;
 }
 
 interface MarkdownFile {
@@ -32,9 +33,17 @@ async function readSession(): Promise<MarkdownSession> {
       tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
       editorWidth: typeof parsed.editorWidth === 'number' ? parsed.editorWidth : 560,
       previewHidden: parsed.previewHidden === true,
+      editorVisible: parsed.editorVisible === true,
     };
   } catch {
-    return { filePath: null, scrollTop: 0, tocWidth: 260, editorWidth: 560, previewHidden: false };
+    return {
+      filePath: null,
+      scrollTop: 0,
+      tocWidth: 260,
+      editorWidth: 560,
+      previewHidden: false,
+      editorVisible: false,
+    };
   }
 }
 
