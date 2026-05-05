@@ -1,7 +1,7 @@
 {
   "name": "markdown-editor",
-  "version": "0.1.0",
-  "description": "Electron Markdown editor with live preview, table of contents, Mermaid rendering, and session restore.",
+  "version": "0.1.1",
+  "description": "Electron Markdown reader and editor with live preview, table of contents, Mermaid rendering, and session restore.",
   "author": "olojiang",
   "private": true,
   "main": "dist-electron/main.js",
@@ -18,7 +18,7 @@
   },
   "build": {
     "appId": "com.olojiang.markdowneditor",
-    "productName": "Markdown Editor",
+    "productName": "Markdown 纪",
     "asar": true,
     "afterPack": "scripts/after-pack.cjs",
     "directories": {
@@ -31,6 +31,7 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
       "target": [
         {
           "target": "dmg",
@@ -42,7 +43,20 @@
       ],
       "identity": null,
       "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "fileAssociations": [
+        {
+          "ext": [
+            "md",
+            "markdown",
+            "mdown"
+          ],
+          "name": "Markdown Document",
+          "description": "Markdown document",
+          "role": "Viewer",
+          "rank": "Owner"
+        }
+      ]
     },
     "dmg": {
       "artifactName": "${productName}-${version}-${arch}.${ext}",

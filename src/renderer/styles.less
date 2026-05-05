@@ -98,6 +98,14 @@ button:disabled:hover {
   z-index: 30;
 }
 
+.actions > .icon-button:nth-last-child(-n + 2)::after,
+.mermaid-actions .icon-button::after,
+.mermaid-modal-actions .icon-button::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
 .icon-button:disabled:hover::after {
   display: none;
 }
@@ -231,6 +239,83 @@ select:disabled {
     color: var(--accent);
     font-weight: 700;
   }
+}
+
+.help-menu {
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.help-menu:hover .help-popover,
+.help-menu:focus-within .help-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.help-popover {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(7, 17, 22, 0.18);
+  color: var(--text);
+  opacity: 0;
+  padding: 14px;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  transform: translateY(-4px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  width: min(420px, calc(100vw - 32px));
+  z-index: 40;
+}
+
+.help-popover-header {
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 3px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+
+  strong {
+    font-size: 14px;
+  }
+
+  span {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+}
+
+.help-popover dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.help-popover dt {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.help-popover dd {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: -4px 0 0;
+}
+
+.help-popover kbd {
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font: 11px "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  padding: 3px 6px;
+  white-space: nowrap;
 }
 
 .workspace {
@@ -589,16 +674,26 @@ select:disabled {
   border: 1px solid var(--border);
   border-radius: 0 0 8px 8px;
   display: grid;
+  cursor: grab;
   justify-items: center;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 24px;
+}
+
+.mermaid-modal:active .mermaid-modal-body {
+  cursor: grabbing;
+}
+
+.mermaid-modal-canvas {
+  transform-origin: center center;
+  transition: transform 0.08s ease-out;
 
   svg {
     height: auto;
-    max-height: 100%;
-    max-width: 100%;
-    width: min(100%, 1120px);
+    max-height: calc(100vh - 170px);
+    max-width: calc(100vw - 84px);
+    width: min(100vw - 84px, 1120px);
   }
 }
 

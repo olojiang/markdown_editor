@@ -6,6 +6,17 @@ describe('Electron build configuration', () => {
     const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8')) as {
       type?: string;
       main?: string;
+      build?: {
+        productName?: string;
+        mac?: {
+          icon?: string;
+          fileAssociations?: Array<{
+            ext?: string[];
+            role?: string;
+            rank?: string;
+          }>;
+        };
+      };
     };
     const electronTsConfig = JSON.parse(fs.readFileSync('tsconfig.electron.json', 'utf8')) as {
       compilerOptions: { module?: string };
@@ -13,6 +24,15 @@ describe('Electron build configuration', () => {
 
     expect(packageJson.type).not.toBe('module');
     expect(packageJson.main).toBe('dist-electron/main.js');
+    expect(packageJson.build?.productName).toBe('Markdown 纪');
+    expect(packageJson.build?.mac?.icon).toBe('build/icon.icns');
+    expect(packageJson.build?.mac?.fileAssociations?.[0]).toEqual(
+      expect.objectContaining({
+        ext: ['md', 'markdown', 'mdown'],
+        role: 'Viewer',
+        rank: 'Owner',
+      }),
+    );
     expect(electronTsConfig.compilerOptions.module).toBe('CommonJS');
   });
 

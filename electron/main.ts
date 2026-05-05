@@ -19,6 +19,11 @@ interface MarkdownFile {
   content: string;
 }
 
+interface MarkdownOpenRequest {
+  file: MarkdownFile;
+  external: boolean;
+}
+
 interface ExportDocumentPayload {
   markdownPath: string;
   title: string;
@@ -35,6 +40,7 @@ interface ImageAsset {
 
 const isDev = !app.isPackaged && process.env.MARKDOWN_EDITOR_FORCE_PROD !== '1';
 const devServerUrl = 'http://127.0.0.1:26543';
+const appTitle = 'Markdown 纪';
 const imageAssetExtensions = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
 const imageMimeTypes = new Map([
   ['.avif', 'image/avif'],
@@ -45,6 +51,8 @@ const imageMimeTypes = new Map([
   ['.svg', 'image/svg+xml'],
   ['.webp', 'image/webp'],
 ]);
+let mainWindow: BrowserWindow | null = null;
+let pendingExternalMarkdownPath: string | null = null;
 
 function normalizeTheme(theme: unknown): MarkdownSession['theme'] {
   return theme === 'dark' || theme === 'eye' ? theme : 'light';
@@ -171,6 +179,44 @@ async function readMarkdownFile(filePath: string): Promise<MarkdownFile> {
     name: path.basename(filePath),
     content,
   };
+}
+
+function markdownPathFromArgv(argv: string[]): string | null {
+  const filePath = argv.find((arg) => !arg.startsWith('-') && isMarkdownFilePath(arg));
+  return filePath ? path.resolve(filePath) : null;
+}
+
+async function createOpenRequest(filePath: string, external: boolean): Promise<MarkdownOpenRequest> {
+  return {
+    file: await readMarkdownFile(filePath),
+    external,
+  };
+}
+
+async function dispatchExternalMarkdownPath(filePath: string): Promise<void> {
+  pendingExternalMarkdownPath = filePath;
+  if (!app.isReady()) {
+    return;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    await createWindow();
+    return;
+  }
+
+  if (mainWindow.webContents.isLoading()) {
+    return;
+  }
+
+  try {
+    mainWindow.webContents.send('markdown:external-open', await createOpenRequest(filePath, true));
+    pendingExternalMarkdownPath = null;
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.focus();
+  } catch {
+    dialog.showErrorBox(appTitle, `无法打开 Markdown 文件：${filePath}`);
+  }
 }
 
 function exportHtmlDocument(payload: ExportDocumentPayload): string {
@@ -317,14 +363,19 @@ async function createWindow(): Promise<void> {
     height: 860,
     minWidth: 900,
     minHeight: 600,
-    title: 'Markdown Editor',
+    title: appTitle,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.js'),
     },
   });
-
+  mainWindow = window;
+  window.on('closed', () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
+  });
   if (isDev) {
     await window.loadURL(devServerUrl);
   } else {
@@ -345,6 +396,16 @@ ipcMain.handle('markdown:open', async () => {
   const file = await readMarkdownFile(result.filePaths[0]);
   await saveSession({ ...(await readSession()), filePath: file.path, scrollTop: 0 });
   return file;
+});
+
+ipcMain.handle('markdown:take-launch-file', async () => {
+  if (!pendingExternalMarkdownPath) {
+    return null;
+  }
+
+  const filePath = pendingExternalMarkdownPath;
+  pendingExternalMarkdownPath = null;
+  return createOpenRequest(filePath, true);
 });
 
 ipcMain.handle('markdown:read-last', async () => {
@@ -409,8 +470,36 @@ ipcMain.handle('session:save', async (_event, session: MarkdownSession) => {
   await saveSession(session);
 });
 
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  if (!isMarkdownFilePath(filePath)) {
+    return;
+  }
+  void dispatchExternalMarkdownPath(filePath);
+});
+
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const filePath = markdownPathFromArgv(argv);
+    if (filePath) {
+      void dispatchExternalMarkdownPath(filePath);
+      return;
+    }
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    }
+  });
+}
+
 app.whenReady().then(async () => {
   registerMarkdownAssetProtocol();
+  pendingExternalMarkdownPath = pendingExternalMarkdownPath ?? markdownPathFromArgv(process.argv);
   await createWindow();
 });
 

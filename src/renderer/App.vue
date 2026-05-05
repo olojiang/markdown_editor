@@ -31,6 +31,12 @@ interface ActiveMermaidDiagram {
   container: HTMLElement;
   html: string;
   title: string;
+  scale: number;
+  x: number;
+  y: number;
+  dragPointerId: number | null;
+  dragStartX: number;
+  dragStartY: number;
 }
 
 type MermaidExportFormat = 'svg' | 'png' | 'webp';
@@ -48,9 +54,12 @@ const icons = {
   externalLink: 'M15 3h6v6 M10 14 21 3 M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
   fileText: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13h8 M8 17h8 M8 9h2',
   image: 'M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z M8.5 11.5 11 14l2-2.5L17 16 M8 9h.01',
+  info: 'M12 17v-5 M12 8h.01 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z',
   link: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71 M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
   moon: 'M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z',
+  minus: 'M5 12h14',
   open: 'M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M3 7V5a2 2 0 0 1 2-2h4l2 2h4',
+  plus: 'M12 5v14 M5 12h14',
   refresh: 'M21 12a9 9 0 0 1-15 6.7L3 16 M3 21v-5h5 M3 12a9 9 0 0 1 15-6.7L21 8 M21 3v5h-5',
   replace: 'M3 7h11 M10 3l4 4-4 4 M21 17H10 M14 13l-4 4 4 4',
   save: 'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z M17 21v-8H7v8 M7 3v5h8',
@@ -84,13 +93,23 @@ let saveTimer: number | undefined;
 let sessionSaveTimer: number | undefined;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
+let removeExternalOpenListener: (() => void) | undefined;
 const previewScrollOffset = -50;
 const sessionSaveDelay = 200;
 
 const previewHtml = computed(() => rewriteLocalImageSources(`${renderMarkdown(source.value)}<!-- theme:${session.value.theme} -->`));
 const headingTree = computed(() => applyCollapsedState(buildHeadingTree(source.value)));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
-const title = computed(() => currentFile.value?.name ?? 'Markdown Editor');
+const title = computed(() => currentFile.value?.name ?? 'Markdown 纪');
+const activeMermaidStyle = computed(() => {
+  const diagram = activeMermaidDiagram.value;
+  if (!diagram) {
+    return {};
+  }
+  return {
+    transform: `translate(${diagram.x}px, ${diagram.y}px) scale(${diagram.scale})`,
+  };
+});
 const isEditorVisible = computed(() => session.value.editorVisible || !currentFile.value);
 const hasUnsavedChanges = computed(() => currentFile.value !== null && source.value !== lastSavedContent.value);
 const shortcutModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'));
@@ -98,6 +117,18 @@ const openShortcutHint = computed(() => `打开 Markdown 文件 (${shortcutModif
 const saveShortcutHint = computed(() => `保存 Markdown 文件 (${shortcutModifier.value}+S)`);
 const previewShortcutHint = computed(() => `显示/隐藏预览 (${shortcutModifier.value}+P)`);
 const editorShortcutHint = computed(() => `切换阅读/编辑模式 (${shortcutModifier.value}+E)`);
+const helpItems = computed(() => [
+  { label: '打开 Markdown', shortcut: `${shortcutModifier.value}+O`, detail: '选择本地 .md、.markdown、.mdown 文件' },
+  { label: '保存当前文件', shortcut: `${shortcutModifier.value}+S`, detail: '有改动时写回原文件' },
+  { label: '阅读/编辑', shortcut: `${shortcutModifier.value}+E`, detail: '阅读模式只显示预览，需要时切回源码编辑' },
+  { label: '显示/隐藏预览', shortcut: `${shortcutModifier.value}+P`, detail: '编辑时切换右侧预览区域' },
+  { label: '最近文件', shortcut: '', detail: '快速打开最近访问过的 Markdown 文件' },
+  { label: '导出 HTML/PDF', shortcut: '', detail: '把当前渲染结果导出为独立文件' },
+  { label: '目录', shortcut: '', detail: '搜索、折叠标题，并跳转到对应位置' },
+  { label: '图片资源', shortcut: '', detail: '导入或粘贴图片到当前文档的 .assets 目录' },
+  { label: 'Mermaid 预览', shortcut: `${shortcutModifier.value}+滚轮`, detail: '在预览或放大视图中缩放，拖拽移动图表' },
+  { label: '关闭弹窗', shortcut: 'Esc', detail: '关闭 Mermaid 放大视图' },
+]);
 const gridStyle = computed(() => {
   if (isPreviewFullscreen.value) {
     return {
@@ -519,20 +550,32 @@ function jumpToHeading(id: string): void {
   rememberScroll(container.scrollTop);
 }
 
-function setFile(file: MarkdownFile, scrollTop = 0): void {
+function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolean } = {}): void {
+  const nextScrollTop = options.external ? 0 : scrollTop;
+  if (options.external) {
+    session.value = mergeSession(session.value, {
+      editorVisible: false,
+      previewHidden: false,
+      scrollTop: 0,
+    });
+  }
   currentFile.value = file;
   source.value = file.content;
   lastSavedContent.value = file.content;
-  persistOpenedFile(file, scrollTop);
+  persistOpenedFile(file, nextScrollTop);
   status.value = file.path;
   void refreshImageAssets(file.path);
   void nextTick(() => {
     if (preview.value) {
-      preview.value.scrollTop = scrollTop;
+      preview.value.scrollTop = nextScrollTop;
     }
     syncScroll('preview', false);
     updateActiveHeadingFromPreview();
   });
+}
+
+function openMarkdownRequest(request: MarkdownOpenRequest): void {
+  setFile(request.file, 0, { external: request.external });
 }
 
 async function openFile(): Promise<void> {
@@ -1018,11 +1061,91 @@ function openMermaidFullscreen(container: HTMLElement): void {
     return;
   }
 
+  const sourceScale = Number(container.dataset.scale ?? '1');
+  const sourceX = Number(container.dataset.x ?? '0');
+  const sourceY = Number(container.dataset.y ?? '0');
   activeMermaidDiagram.value = {
     container,
     html: prepared.text,
     title: `Mermaid 图 ${mermaidDiagramIndex(container) + 1}`,
+    scale: Number.isFinite(sourceScale) ? sourceScale : 1,
+    x: Number.isFinite(sourceX) ? sourceX : 0,
+    y: Number.isFinite(sourceY) ? sourceY : 0,
+    dragPointerId: null,
+    dragStartX: 0,
+    dragStartY: 0,
   };
+}
+
+function updateActiveMermaidDiagram(patch: Partial<ActiveMermaidDiagram>): void {
+  if (!activeMermaidDiagram.value) {
+    return;
+  }
+  activeMermaidDiagram.value = {
+    ...activeMermaidDiagram.value,
+    ...patch,
+  };
+}
+
+function zoomActiveMermaid(delta: number): void {
+  const diagram = activeMermaidDiagram.value;
+  if (!diagram) {
+    return;
+  }
+  updateActiveMermaidDiagram({
+    scale: Math.min(6, Math.max(0.2, Number((diagram.scale + delta).toFixed(2)))),
+  });
+}
+
+function resetActiveMermaidView(): void {
+  updateActiveMermaidDiagram({
+    scale: 1,
+    x: 0,
+    y: 0,
+    dragPointerId: null,
+  });
+}
+
+function onMermaidModalWheel(event: WheelEvent): void {
+  if (!event.metaKey && !event.ctrlKey) {
+    return;
+  }
+
+  event.preventDefault();
+  zoomActiveMermaid(event.deltaY > 0 ? -0.1 : 0.1);
+}
+
+function onMermaidModalPointerDown(event: PointerEvent): void {
+  if ((event.target as HTMLElement).closest('.mermaid-modal-bar')) {
+    return;
+  }
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  updateActiveMermaidDiagram({
+    dragPointerId: event.pointerId,
+    dragStartX: event.clientX,
+    dragStartY: event.clientY,
+  });
+}
+
+function onMermaidModalPointerMove(event: PointerEvent): void {
+  const diagram = activeMermaidDiagram.value;
+  if (!diagram || diagram.dragPointerId !== event.pointerId) {
+    return;
+  }
+
+  updateActiveMermaidDiagram({
+    x: diagram.x + event.clientX - diagram.dragStartX,
+    y: diagram.y + event.clientY - diagram.dragStartY,
+    dragStartX: event.clientX,
+    dragStartY: event.clientY,
+  });
+}
+
+function onMermaidModalPointerUp(event: PointerEvent): void {
+  if (activeMermaidDiagram.value?.dragPointerId !== event.pointerId) {
+    return;
+  }
+  updateActiveMermaidDiagram({ dragPointerId: null });
 }
 
 async function exportMermaid(container: HTMLElement, format: MermaidExportFormat): Promise<void> {
@@ -1169,9 +1292,15 @@ watch(headingTree, (nodes) => {
 
 onMounted(async () => {
   session.value = normalizeSession((await bridge?.getSession()) ?? createDefaultSession());
-  const file = await bridge?.readLastMarkdownFile();
-  if (file) {
-    setFile(file, session.value.scrollTop);
+  removeExternalOpenListener = bridge?.onExternalMarkdownFile(openMarkdownRequest);
+  const launchRequest = await bridge?.takeLaunchMarkdownFile();
+  if (launchRequest) {
+    openMarkdownRequest(launchRequest);
+  } else {
+    const file = await bridge?.readLastMarkdownFile();
+    if (file) {
+      setFile(file, session.value.scrollTop);
+    }
   }
   await renderMermaid();
   window.addEventListener('keydown', onKeyDown);
@@ -1186,6 +1315,7 @@ onBeforeUnmount(() => {
   if (sessionSaveTimer !== undefined) {
     saveSessionNow();
   }
+  removeExternalOpenListener?.();
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('pointermove', onResizeMove);
   window.removeEventListener('pointerup', stopResize);
@@ -1332,6 +1462,32 @@ onBeforeUnmount(() => {
         >
           <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.expand" /></svg>
         </button>
+        <div class="help-menu">
+          <button
+            data-testid="help-button"
+            class="icon-button"
+            type="button"
+            aria-label="帮助"
+            title="帮助"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.info" /></svg>
+          </button>
+          <div class="help-popover" data-testid="help-popover" role="tooltip">
+            <div class="help-popover-header">
+              <strong>Markdown 纪</strong>
+              <span>工具说明与快捷键</span>
+            </div>
+            <dl>
+              <template v-for="item in helpItems" :key="item.label">
+                <dt>
+                  <span>{{ item.label }}</span>
+                  <kbd v-if="item.shortcut">{{ item.shortcut }}</kbd>
+                </dt>
+                <dd>{{ item.detail }}</dd>
+              </template>
+            </dl>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -1460,10 +1616,24 @@ onBeforeUnmount(() => {
       aria-modal="true"
       :aria-label="activeMermaidDiagram.title"
       @click.self="activeMermaidDiagram = null"
+      @wheel="onMermaidModalWheel"
+      @pointerdown="onMermaidModalPointerDown"
+      @pointermove="onMermaidModalPointerMove"
+      @pointerup="onMermaidModalPointerUp"
+      @pointercancel="onMermaidModalPointerUp"
     >
       <div class="mermaid-modal-bar">
         <strong>{{ activeMermaidDiagram.title }}</strong>
         <div class="mermaid-modal-actions">
+          <button data-testid="mermaid-modal-zoom-out" class="icon-button" type="button" aria-label="缩小" title="缩小" @click="zoomActiveMermaid(-0.2)">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.minus" /></svg>
+          </button>
+          <button data-testid="mermaid-modal-reset" class="icon-button" type="button" aria-label="还原比例" title="还原比例" @click="resetActiveMermaidView">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
+          </button>
+          <button data-testid="mermaid-modal-zoom-in" class="icon-button" type="button" aria-label="放大" title="放大" @click="zoomActiveMermaid(0.2)">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.plus" /></svg>
+          </button>
           <button class="icon-button" type="button" aria-label="导出 SVG" title="导出 SVG" @click="exportMermaid(activeMermaidDiagram.container, 'svg')">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.download" /></svg>
           </button>
@@ -1478,7 +1648,14 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <div class="mermaid-modal-body" v-html="activeMermaidDiagram.html" />
+      <div class="mermaid-modal-body">
+        <div
+          class="mermaid-modal-canvas"
+          data-testid="mermaid-modal-canvas"
+          :style="activeMermaidStyle"
+          v-html="activeMermaidDiagram.html"
+        />
+      </div>
     </div>
   </main>
 </template>

@@ -10,13 +10,21 @@ This command runs the typecheck/build pipeline and then creates macOS DMG instal
 
 Output files are written to `release/`:
 
-- `Markdown Editor-0.1.0-arm64.dmg` for Apple Silicon Macs.
-- `Markdown Editor-0.1.0-x64.dmg` for Intel Macs.
+- `Markdown 纪-0.1.1-arm64.dmg` for Apple Silicon Macs.
+- `Markdown 纪-0.1.1-x64.dmg` for Intel Macs.
+
+For local development updates, run:
+
+```bash
+./update_app.sh
+```
+
+The script builds the macOS DMGs, copies the app matching the current CPU architecture to `/Applications/Markdown 纪.app`, removes the old `/Applications/Markdown Editor.app` if present, clears the local quarantine flag, and refreshes LaunchServices registration.
 
 ## Install Flow
 
 1. Open the DMG.
-2. Drag `Markdown Editor.app` to `Applications`.
+2. Drag `Markdown 纪.app` to `Applications`.
 3. Launch the app from `Applications`.
 
 The DMG is unsigned by default. On another Mac, Gatekeeper may block the first launch. Use Finder to `Control` + click the app and choose Open, or sign/notarize the app with an Apple Developer ID certificate before wider distribution.
@@ -33,7 +41,7 @@ It does not request:
 - Contacts, calendar, photos, or media library access.
 - Broad/full disk access.
 
-Markdown files are selected through Electron's native open-file dialog. After a user chooses a file, the app reads and saves that selected path. Because this is a user-selected document workflow, no extra macOS privacy usage strings are required for the current feature set.
+Markdown files are selected through Electron's native open-file dialog, drag-and-drop, recent files, or Finder's Open With/default-app flow. Finder-launched files open in reader mode first; source editing can be enabled inside the app. Because this is a user-selected document workflow, no extra macOS privacy usage strings are required for the current feature set.
 
 The packaging hook removes Electron's default camera, microphone, and Bluetooth usage-description keys from the macOS `Info.plist` so the installed app metadata matches the actual permission surface.
 

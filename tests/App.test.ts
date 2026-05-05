@@ -44,6 +44,8 @@ describe('App', () => {
     vi.useRealTimers();
     window.markdownBridge = {
       openMarkdownFile: vi.fn().mockResolvedValue(openFile),
+      takeLaunchMarkdownFile: vi.fn().mockResolvedValue(null),
+      onExternalMarkdownFile: vi.fn().mockReturnValue(() => {}),
       readLastMarkdownFile: vi.fn().mockResolvedValue(openFile),
       readMarkdownFile: vi.fn().mockImplementation(async (path: string) => ({
         ...(path === recentFile.path ? recentFile : openFile),
@@ -93,6 +95,40 @@ describe('App', () => {
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', openFile.content);
     expect(wrapper.find('[data-testid="toc"]').text()).toContain('Title');
     expect(wrapper.find('[data-testid="recent-files"]').text()).toContain('readme.md');
+  });
+
+  it('opens a Finder-launched markdown file in reader mode without editor layout state', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      recentFiles: [],
+      scrollTop: 120,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: true,
+      editorVisible: true,
+      theme: 'light',
+    });
+    vi.mocked(window.markdownBridge!.takeLaunchMarkdownFile).mockResolvedValue({
+      file: recentFile,
+      external: true,
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.readLastMarkdownFile).not.toHaveBeenCalled();
+    expect(wrapper.classes()).toContain('reader-mode');
+    expect(wrapper.classes()).not.toContain('preview-hidden');
+    expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: recentFile.path,
+        recentFiles: [recentFile.path],
+        scrollTop: 0,
+        editorVisible: false,
+        previewHidden: false,
+      }),
+    );
   });
 
   it('switches and persists theme modes', async () => {
@@ -306,6 +342,31 @@ describe('App', () => {
     expect(wrapper.find('[data-testid="mermaid-modal"]').html()).toContain('<svg');
   });
 
+  it('zooms, resets, and drags fullscreen Mermaid diagrams', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    attachRenderedMermaidSvg(wrapper);
+
+    await wrapper.find('[data-mermaid-action="fullscreen"]').trigger('click');
+    await wrapper.find('[data-testid="mermaid-modal-zoom-in"]').trigger('click');
+    expect(wrapper.find('[data-testid="mermaid-modal-canvas"]').attributes('style')).toContain('scale(1.2)');
+
+    await wrapper.find('[data-testid="mermaid-modal"]').trigger('pointerdown', {
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    await wrapper.find('[data-testid="mermaid-modal"]').trigger('pointermove', {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 45,
+    });
+    expect(wrapper.find('[data-testid="mermaid-modal-canvas"]').attributes('style')).toContain('translate(20px, 35px)');
+
+    await wrapper.find('[data-testid="mermaid-modal-reset"]').trigger('click');
+    expect(wrapper.find('[data-testid="mermaid-modal-canvas"]').attributes('style')).toContain('translate(0px, 0px) scale(1)');
+  });
+
   it('exports rendered Mermaid diagrams as SVG', async () => {
     const createObjectUrl = vi.fn(() => 'blob:diagram');
     const revokeObjectUrl = vi.fn();
@@ -445,6 +506,8 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe(`保存 Markdown 文件 (${expectedShortcut('S')})`);
     expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe(`显示/隐藏预览 (${expectedShortcut('P')})`);
     expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe(`切换阅读/编辑模式 (${expectedShortcut('E')})`);
+    expect(wrapper.get('[data-testid="help-popover"]').text()).toContain(`打开 Markdown${expectedShortcut('O')}`);
+    expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('Mermaid 预览');
   });
 
   it('uses keyboard shortcut for toggling preview', async () => {

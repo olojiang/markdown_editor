@@ -11,6 +11,11 @@ interface MarkdownFile {
   content: string;
 }
 
+interface MarkdownOpenRequest {
+  file: MarkdownFile;
+  external: boolean;
+}
+
 interface MarkdownSession {
   filePath: string | null;
   recentFiles: string[];
@@ -38,6 +43,8 @@ interface ImageAsset {
 
 interface MarkdownBridge {
   openMarkdownFile(): Promise<MarkdownFile | null>;
+  takeLaunchMarkdownFile(): Promise<MarkdownOpenRequest | null>;
+  onExternalMarkdownFile(callback: (request: MarkdownOpenRequest) => void): () => void;
   readLastMarkdownFile(): Promise<MarkdownFile | null>;
   readMarkdownFile(path: string): Promise<MarkdownFile>;
   getPathForFile(file: File): string;

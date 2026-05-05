@@ -47,6 +47,18 @@ function resolvePath(baseDir: string, relativePath: string): string {
 
 contextBridge.exposeInMainWorld('markdownBridge', {
   openMarkdownFile: () => ipcRenderer.invoke('markdown:open'),
+  takeLaunchMarkdownFile: () => ipcRenderer.invoke('markdown:take-launch-file'),
+  onExternalMarkdownFile: (callback: (request: {
+    file: { path: string; name: string; content: string };
+    external: boolean;
+  }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, request: {
+      file: { path: string; name: string; content: string };
+      external: boolean;
+    }) => callback(request);
+    ipcRenderer.on('markdown:external-open', listener);
+    return () => ipcRenderer.removeListener('markdown:external-open', listener);
+  },
   readLastMarkdownFile: () => ipcRenderer.invoke('markdown:read-last'),
   readMarkdownFile: (filePath: string) => ipcRenderer.invoke('markdown:read-path', filePath),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
