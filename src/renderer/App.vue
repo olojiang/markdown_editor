@@ -952,6 +952,7 @@ function mermaidThemeConfig(): Record<string, unknown> {
 
   return {
     startOnLoad: false,
+    suppressErrorRendering: true,
     securityLevel: 'strict',
     theme: 'base',
     flowchart: {
@@ -985,6 +986,14 @@ async function renderMermaid(): Promise<void> {
     await mermaid.default.run({ nodes: Array.from(diagrams) as HTMLElement[] });
     applyMermaidTransforms();
   } catch {
+    Array.from(diagrams).forEach((diagram) => {
+      const element = diagram as HTMLElement;
+      element.removeAttribute('data-processed');
+      element.textContent = 'Mermaid 图渲染失败，请检查语法';
+      element.classList.add('mermaid-error');
+      element.style.transform = '';
+      element.style.transformOrigin = '';
+    });
     status.value = 'Mermaid 图渲染失败，请检查语法';
   }
 }

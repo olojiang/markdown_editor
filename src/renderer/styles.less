@@ -590,6 +590,11 @@ select:disabled {
   cursor: grabbing;
 }
 
+.mermaid-error {
+  color: var(--text-muted);
+  white-space: normal;
+}
+
 .mermaid-actions {
   align-items: center;
   background: color-mix(in srgb, var(--surface) 92%, transparent);
@@ -691,9 +696,9 @@ select:disabled {
 
   svg {
     height: auto;
-    max-height: calc(100vh - 170px);
-    max-width: calc(100vw - 84px);
-    width: min(100vw - 84px, 1120px);
+    max-height: ~"calc(100vh - 170px)";
+    max-width: ~"calc(100vw - 84px)";
+    width: ~"min(calc(100vw - 84px), 1120px)";
   }
 }
 
