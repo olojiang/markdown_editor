@@ -15,4 +15,11 @@ describe('Electron build configuration', () => {
     expect(packageJson.main).toBe('dist-electron/main.js');
     expect(electronTsConfig.compilerOptions.module).toBe('CommonJS');
   });
+
+  it('keeps the sandboxed preload free of Node built-in imports', () => {
+    const preloadSource = fs.readFileSync('electron/preload.ts', 'utf8');
+
+    expect(preloadSource).not.toMatch(/from ['"]node:/);
+    expect(preloadSource).not.toMatch(/require\(['"]node:/);
+  });
 });

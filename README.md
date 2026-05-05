@@ -7,10 +7,12 @@ Electron + Vue + TypeScript Markdown editor with a collapsible heading tree, sou
 - Open and edit local `.md`, `.markdown`, and `.mdown` files.
 - Auto-save the current file and restore the last opened file/session on launch.
 - Open restored documents in a reader-first layout; switch to source editing with `Cmd/Ctrl+E`.
-- Browse headings in a collapsible table of contents and filter headings by keyword.
-- Search and replace inside the source editor.
+- Browse headings in a collapsible table of contents, filter headings by keyword, and track the active heading while scrolling.
+- Search and replace inside the source editor, with quick insert controls for tables, links, code blocks, and images.
+- Paste or import images into a per-document `.assets` directory, then refresh, insert, or delete those image resources from the editor toolbar.
+- Export the current document as HTML or PDF.
 - Resize the table-of-contents and editor columns, hide the preview, or use fullscreen preview.
-- Render Mermaid diagrams; zoom with `Cmd/Ctrl` + mouse wheel and drag diagrams inside the preview.
+- Render Mermaid diagrams with theme-aware colors; zoom with `Cmd/Ctrl` + mouse wheel, drag diagrams inside the preview, open diagrams fullscreen, and export them as SVG, PNG, or WebP.
 
 ## Development
 

@@ -147,6 +147,12 @@ export function renderMarkdown(markdown: string): string {
     if (language === 'mermaid') {
       return [
         `<div class="mermaid-panzoom"${sourceLineAttr} data-scale="1" data-x="0" data-y="0">`,
+        '<div class="mermaid-actions" aria-label="Mermaid 图表操作">',
+        '<button class="icon-button" type="button" data-mermaid-action="fullscreen" aria-label="全屏查看 Mermaid 图" title="全屏查看 Mermaid 图">⛶</button>',
+        '<button class="icon-button" type="button" data-mermaid-action="download-svg" aria-label="导出 SVG" title="导出 SVG">↓</button>',
+        '<button class="icon-button" type="button" data-mermaid-action="download-png" aria-label="导出 PNG" title="导出 PNG">▧</button>',
+        '<button class="icon-button" type="button" data-mermaid-action="download-webp" aria-label="导出 WebP" title="导出 WebP">▣</button>',
+        '</div>',
         `<pre class="mermaid">${escapeHtml(token.content)}</pre>`,
         '</div>',
       ].join('');

@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '@/renderer/App.vue';
 
 const openFile = {
@@ -12,6 +12,12 @@ const recentFile = {
   name: 'recent.md',
   content: '# Recent',
 };
+const imageAsset = {
+  name: 'diagram.png',
+  relativePath: 'readme.assets/diagram.png',
+  absolutePath: '/docs/readme.assets/diagram.png',
+  size: 128,
+};
 
 function expectedShortcut(key: string): string {
   const modifier = navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl';
@@ -23,8 +29,19 @@ function setScrollMetrics(element: Element, scrollHeight: number, clientHeight: 
   Object.defineProperty(element, 'clientHeight', { configurable: true, value: clientHeight });
 }
 
+function attachRenderedMermaidSvg(wrapper: ReturnType<typeof mount>): void {
+  const container = wrapper.find<HTMLElement>('.mermaid-panzoom').element;
+  if (container.querySelector('svg')) {
+    return;
+  }
+
+  container.querySelector('.mermaid')?.remove();
+  container.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 100 80" width="100" height="80"><text>Flow</text></svg>');
+}
+
 describe('App', () => {
   beforeEach(() => {
+    vi.useRealTimers();
     window.markdownBridge = {
       openMarkdownFile: vi.fn().mockResolvedValue(openFile),
       readLastMarkdownFile: vi.fn().mockResolvedValue(openFile),
@@ -39,6 +56,13 @@ describe('App', () => {
         name: 'readme.md',
         content,
       })),
+      exportHtml: vi.fn().mockResolvedValue('/docs/readme.html'),
+      exportPdf: vi.fn().mockResolvedValue('/docs/readme.pdf'),
+      saveImageAsset: vi.fn().mockResolvedValue(imageAsset),
+      importImageAsset: vi.fn().mockResolvedValue(imageAsset),
+      listImageAssets: vi.fn().mockResolvedValue([imageAsset]),
+      deleteImageAsset: vi.fn().mockResolvedValue([]),
+      assetUrl: vi.fn((_markdownPath: string, relativePath: string) => `markdown-asset://local/?path=${encodeURIComponent(`/docs/${relativePath}`)}`),
       getSession: vi.fn().mockResolvedValue({
         filePath: openFile.path,
         recentFiles: [recentFile.path],
@@ -53,6 +77,10 @@ describe('App', () => {
         structuredClone(session);
       }),
     };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('restores the last markdown file on launch', async () => {
@@ -120,6 +148,85 @@ describe('App', () => {
     expect(saveButton.element.disabled).toBe(true);
   });
 
+  it('exports the rendered document as HTML and PDF', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="export-html"]').trigger('click');
+    await wrapper.find('[data-testid="export-pdf"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.exportHtml).toHaveBeenCalledWith(
+      expect.objectContaining({
+        markdownPath: openFile.path,
+        title: openFile.name,
+        bodyHtml: expect.stringContaining('Title'),
+      }),
+    );
+    expect(window.markdownBridge?.exportPdf).toHaveBeenCalledWith(
+      expect.objectContaining({ markdownPath: openFile.path }),
+    );
+    expect(wrapper.text()).toContain('已导出 /docs/readme.pdf');
+  });
+
+  it('inserts Markdown snippets from the formatting toolbar', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="insert-table"]').trigger('click');
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('| 列 1 | 列 2 |');
+
+    await wrapper.find('[data-testid="insert-link"]').trigger('click');
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('[链接文本](https://example.com)');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    await wrapper.find('[data-testid="insert-code"]').trigger('click');
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('```\n代码\n```');
+  });
+
+  it('imports image assets and inserts relative image markdown', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="import-image"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.importImageAsset).toHaveBeenCalledWith(openFile.path);
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('![diagram](readme.assets/diagram.png)');
+    expect(wrapper.find('[data-testid="asset-list"]').text()).toContain('diagram.png');
+  });
+
+  it('saves pasted images into the document asset directory', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const file = {
+      name: 'paste.png',
+      type: 'image/png',
+      arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(4)),
+    };
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [file],
+      },
+    });
+
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(window.markdownBridge?.saveImageAsset).toHaveBeenCalledWith(
+      openFile.path,
+      'paste.png',
+      expect.any(ArrayBuffer),
+      'image/png',
+    );
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('![diagram](readme.assets/diagram.png)');
+  });
+
   it('syncs preview position when the editor scrolls', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -134,6 +241,33 @@ describe('App', () => {
     await wrapper.find('[data-testid="editor"]').trigger('scroll');
 
     expect(preview.scrollTop).toBe(950);
+  });
+
+  it('debounces persisted scroll positions and keeps the latest value', async () => {
+    vi.useFakeTimers();
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    vi.mocked(window.markdownBridge!.saveSession).mockClear();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    setScrollMetrics(preview, 2200, 200);
+
+    editor.scrollTop = 200;
+    await wrapper.find('[data-testid="editor"]').trigger('scroll');
+    editor.scrollTop = 400;
+    await wrapper.find('[data-testid="editor"]').trigger('scroll');
+
+    expect(window.markdownBridge?.saveSession).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledTimes(1);
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ scrollTop: preview.scrollTop }),
+    );
   });
 
   it('syncs editor position when the preview scrolls', async () => {
@@ -161,6 +295,35 @@ describe('App', () => {
     expect(wrapper.classes()).toContain('preview-fullscreen');
   });
 
+  it('opens rendered Mermaid diagrams in fullscreen', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    attachRenderedMermaidSvg(wrapper);
+
+    await wrapper.find('[data-mermaid-action="fullscreen"]').trigger('click');
+
+    expect(wrapper.find('[data-testid="mermaid-modal"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="mermaid-modal"]').html()).toContain('<svg');
+  });
+
+  it('exports rendered Mermaid diagrams as SVG', async () => {
+    const createObjectUrl = vi.fn(() => 'blob:diagram');
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectUrl });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    attachRenderedMermaidSvg(wrapper);
+
+    await wrapper.find('[data-mermaid-action="download-svg"]').trigger('click');
+
+    expect(createObjectUrl).toHaveBeenCalledWith(expect.any(Blob));
+    expect(click).toHaveBeenCalled();
+    expect(wrapper.text()).toContain('已导出 readme-mermaid-1.svg');
+  });
+
   it('filters the table of contents', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -169,6 +332,16 @@ describe('App', () => {
 
     expect(wrapper.find('[data-testid="toc"]').text()).toContain('Beta');
     expect(wrapper.find('[data-testid="toc"]').text()).not.toContain('Alpha');
+  });
+
+  it('highlights the active heading after a table-of-contents jump', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const betaLink = wrapper.findAll('.toc-link').find((link) => link.text() === 'Beta');
+    await betaLink?.trigger('click');
+
+    expect(betaLink?.classes()).toContain('active');
   });
 
   it('opens a recent file and moves it to the front of the LRU list', async () => {

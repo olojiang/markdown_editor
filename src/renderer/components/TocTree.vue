@@ -3,6 +3,7 @@ import type { HeadingNode } from '@/renderer/lib/markdown';
 
 defineProps<{
   nodes: HeadingNode[];
+  activeId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -25,13 +26,20 @@ const emit = defineEmits<{
           {{ node.collapsed ? '▸' : '▾' }}
         </button>
         <span v-else class="toc-spacer" />
-        <button class="toc-link" type="button" @click="emit('jump', node.id)">
+        <button
+          class="toc-link"
+          type="button"
+          :class="{ active: activeId === node.id }"
+          :data-toc-id="node.id"
+          @click="emit('jump', node.id)"
+        >
           {{ node.title }}
         </button>
       </div>
       <TocTree
         v-if="node.children.length && !node.collapsed"
         :nodes="node.children"
+        :active-id="activeId"
         @toggle="emit('toggle', $event)"
         @jump="emit('jump', $event)"
       />

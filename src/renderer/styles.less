@@ -54,6 +54,54 @@ button:disabled:hover {
   background: var(--surface-elevated);
 }
 
+.icon-button {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 36px;
+  justify-content: center;
+  min-height: 36px;
+  min-width: 36px;
+  padding: 0;
+  position: relative;
+  width: 36px;
+
+  svg {
+    fill: none;
+    height: 18px;
+    pointer-events: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2;
+    width: 18px;
+  }
+}
+
+.icon-button:hover::after,
+.icon-button:focus-visible::after {
+  background: var(--text);
+  border-radius: 6px;
+  color: var(--surface);
+  content: attr(aria-label);
+  font-size: 12px;
+  font-weight: 600;
+  left: 50%;
+  line-height: 1;
+  max-width: 180px;
+  padding: 7px 8px;
+  pointer-events: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 30;
+}
+
+.icon-button:disabled:hover::after {
+  display: none;
+}
+
 input,
 select,
 textarea {
@@ -120,6 +168,7 @@ select:disabled {
 }
 
 .app-shell {
+  color: var(--text);
   display: grid;
   grid-template-rows: 56px minmax(0, 1fr);
   height: 100vh;
@@ -157,6 +206,7 @@ select:disabled {
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
+  padding-bottom: 2px;
 }
 
 .theme-switcher {
@@ -170,8 +220,10 @@ select:disabled {
   button {
     border: 0;
     background: transparent;
-    min-height: 28px;
-    padding: 0 9px;
+    height: 32px;
+    min-height: 32px;
+    min-width: 32px;
+    width: 32px;
   }
 
   button.active {
@@ -233,8 +285,15 @@ select:disabled {
 
   button {
     font-size: 12px;
-    min-height: 26px;
-    padding: 0 7px;
+    height: 28px;
+    min-height: 28px;
+    min-width: 28px;
+    width: 28px;
+
+    svg {
+      height: 16px;
+      width: 16px;
+    }
   }
 }
 
@@ -252,8 +311,44 @@ select:disabled {
 
 .editor-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
+}
+
+.format-toolbar {
+  align-items: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 8px;
+}
+
+.format-actions,
+.asset-tools {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  min-width: 0;
+
+  button {
+    height: 34px;
+    min-height: 34px;
+    min-width: 34px;
+    width: 34px;
+  }
+}
+
+.asset-tools {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+
+  select {
+    max-width: 220px;
+    min-width: 130px;
+  }
 }
 
 .editor-tools {
@@ -262,7 +357,7 @@ select:disabled {
   border-bottom: 1px solid var(--border);
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto auto auto;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 36px 36px 36px;
   min-width: 0;
   padding: 8px;
 
@@ -312,6 +407,12 @@ select:disabled {
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.toc-link.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .empty {
@@ -383,17 +484,122 @@ select:disabled {
 }
 
 .mermaid-panzoom {
+  background: var(--surface-muted);
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: grab;
   margin: 16px 0;
   min-height: 220px;
   overflow: hidden;
-  padding: 12px;
+  padding: 44px 12px 12px;
+  position: relative;
+
+  svg {
+    display: block;
+    height: auto;
+    max-width: 100%;
+  }
 }
 
 .mermaid-panzoom:active {
   cursor: grabbing;
+}
+
+.mermaid-actions {
+  align-items: center;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  border-bottom-left-radius: 6px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 5px;
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 1;
+
+  button {
+    font-size: 12px;
+    height: 28px;
+    min-height: 28px;
+    min-width: 28px;
+    padding: 0;
+    width: 28px;
+  }
+}
+
+.theme-dark {
+  .mermaid-panzoom {
+    background: #111827;
+
+    svg {
+      color: var(--text);
+    }
+  }
+}
+
+.mermaid-modal {
+  align-items: stretch;
+  background: rgba(10, 16, 24, 0.86);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  inset: 0;
+  padding: 18px;
+  position: fixed;
+  z-index: 20;
+}
+
+.mermaid-modal-bar {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 10px 12px;
+  color: var(--text);
+
+  strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.mermaid-modal-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+
+  .icon-button {
+    height: 34px;
+    min-height: 34px;
+    min-width: 34px;
+    width: 34px;
+  }
+}
+
+.mermaid-modal-body {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
+  display: grid;
+  justify-items: center;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+
+  svg {
+    height: auto;
+    max-height: 100%;
+    max-width: 100%;
+    width: min(100%, 1120px);
+  }
 }
 
 .preview-fullscreen {
@@ -455,5 +661,16 @@ select:disabled {
 
   .editor-tools {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .format-toolbar {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .format-actions,
+  .asset-tools {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 }

@@ -54,6 +54,10 @@ describe('renderMarkdown', () => {
     expect(html).toContain('id="flow"');
     expect(html).toContain('data-source-line="1"');
     expect(html).toContain('class="mermaid"');
+    expect(html).toContain('data-mermaid-action="fullscreen"');
+    expect(html).toContain('data-mermaid-action="download-svg"');
+    expect(html).toContain('data-mermaid-action="download-png"');
+    expect(html).toContain('data-mermaid-action="download-webp"');
     expect(html).toContain('graph TD');
   });
 
