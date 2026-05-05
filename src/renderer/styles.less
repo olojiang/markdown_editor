@@ -279,10 +279,19 @@ select:disabled {
   padding-bottom: 10px;
 
   strong {
+    align-items: baseline;
+    display: inline-flex;
     font-size: 14px;
+    gap: 8px;
   }
 
-  span {
+  strong span {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  > span {
     color: var(--text-muted);
     font-size: 12px;
   }

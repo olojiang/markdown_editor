@@ -10,8 +10,8 @@ This command runs the typecheck/build pipeline and then creates macOS DMG instal
 
 Output files are written to `release/`:
 
-- `Markdown 纪-0.1.2-arm64.dmg` for Apple Silicon Macs.
-- `Markdown 纪-0.1.2-x64.dmg` for Intel Macs.
+- `Markdown 纪-0.1.3-arm64.dmg` for Apple Silicon Macs.
+- `Markdown 纪-0.1.3-x64.dmg` for Intel Macs.
 
 For local development updates, run:
 

@@ -362,6 +362,9 @@ describe('App', () => {
       clientY: 45,
     });
     expect(wrapper.find('[data-testid="mermaid-modal-canvas"]').attributes('style')).toContain('translate(20px, 35px)');
+    await wrapper.find('[data-testid="mermaid-modal"]').trigger('pointerup', { pointerId: 1 });
+    await wrapper.find('[data-testid="mermaid-modal"]').trigger('click');
+    expect(wrapper.find('[data-testid="mermaid-modal"]').exists()).toBe(true);
 
     await wrapper.find('[data-testid="mermaid-modal-reset"]').trigger('click');
     expect(wrapper.find('[data-testid="mermaid-modal-canvas"]').attributes('style')).toContain('translate(0px, 0px) scale(1)');
@@ -506,6 +509,7 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe(`保存 Markdown 文件 (${expectedShortcut('S')})`);
     expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe(`显示/隐藏预览 (${expectedShortcut('P')})`);
     expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe(`切换阅读/编辑模式 (${expectedShortcut('E')})`);
+    expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('v0.1.3');
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain(`打开 Markdown${expectedShortcut('O')}`);
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('Mermaid 预览');
   });

@@ -94,6 +94,7 @@ let sessionSaveTimer: number | undefined;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
 let removeExternalOpenListener: (() => void) | undefined;
+let mermaidModalDragged = false;
 const previewScrollOffset = -50;
 const sessionSaveDelay = 200;
 
@@ -101,6 +102,7 @@ const previewHtml = computed(() => rewriteLocalImageSources(`${renderMarkdown(so
 const headingTree = computed(() => applyCollapsedState(buildHeadingTree(source.value)));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
 const title = computed(() => currentFile.value?.name ?? 'Markdown 纪');
+const appVersion = __APP_VERSION__;
 const activeMermaidStyle = computed(() => {
   const diagram = activeMermaidDiagram.value;
   if (!diagram) {
@@ -1115,6 +1117,14 @@ function resetActiveMermaidView(): void {
   });
 }
 
+function closeMermaidModalFromBackdrop(): void {
+  if (mermaidModalDragged) {
+    mermaidModalDragged = false;
+    return;
+  }
+  activeMermaidDiagram.value = null;
+}
+
 function onMermaidModalWheel(event: WheelEvent): void {
   if (!event.metaKey && !event.ctrlKey) {
     return;
@@ -1128,6 +1138,7 @@ function onMermaidModalPointerDown(event: PointerEvent): void {
   if ((event.target as HTMLElement).closest('.mermaid-modal-bar')) {
     return;
   }
+  mermaidModalDragged = false;
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   updateActiveMermaidDiagram({
     dragPointerId: event.pointerId,
@@ -1142,9 +1153,15 @@ function onMermaidModalPointerMove(event: PointerEvent): void {
     return;
   }
 
+  const deltaX = event.clientX - diagram.dragStartX;
+  const deltaY = event.clientY - diagram.dragStartY;
+  if (Math.abs(deltaX) + Math.abs(deltaY) > 2) {
+    mermaidModalDragged = true;
+  }
+
   updateActiveMermaidDiagram({
-    x: diagram.x + event.clientX - diagram.dragStartX,
-    y: diagram.y + event.clientY - diagram.dragStartY,
+    x: diagram.x + deltaX,
+    y: diagram.y + deltaY,
     dragStartX: event.clientX,
     dragStartY: event.clientY,
   });
@@ -1483,7 +1500,7 @@ onBeforeUnmount(() => {
           </button>
           <div class="help-popover" data-testid="help-popover" role="tooltip">
             <div class="help-popover-header">
-              <strong>Markdown 纪</strong>
+              <strong>Markdown 纪 <span>v{{ appVersion }}</span></strong>
               <span>工具说明与快捷键</span>
             </div>
             <dl>
@@ -1624,7 +1641,7 @@ onBeforeUnmount(() => {
       role="dialog"
       aria-modal="true"
       :aria-label="activeMermaidDiagram.title"
-      @click.self="activeMermaidDiagram = null"
+      @click.self="closeMermaidModalFromBackdrop"
       @wheel="onMermaidModalWheel"
       @pointerdown="onMermaidModalPointerDown"
       @pointermove="onMermaidModalPointerMove"

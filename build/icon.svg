@@ -16,8 +16,8 @@
       <feDropShadow dx="0" dy="32" stdDeviation="30" flood-color="#071116" flood-opacity="0.28"/>
     </filter>
   </defs>
-  <path d="M268 122h392l164 164v560c0 48-39 87-87 87H268c-48 0-87-39-87-87V209c0-48 39-87 87-87z" fill="url(#edge)" filter="url(#shadow)"/>
-  <path d="M296 162h344l144 144v514c0 39-32 71-71 71H296c-39 0-71-32-71-71V233c0-39 32-71 71-71z" fill="url(#page)"/>
+  <path d="M276 122h384l164 164v548c0 55-44 99-99 99H280c-55 0-99-44-99-99V217c0-52 43-95 95-95z" fill="url(#edge)" filter="url(#shadow)"/>
+  <path d="M304 162h336l144 144v506c0 44-35 79-79 79H304c-44 0-79-35-79-79V241c0-44 35-79 79-79z" fill="url(#page)"/>
   <path d="M640 162v104c0 36 29 65 65 65h79L640 162z" fill="url(#fold)"/>
   <path d="M331 652V378h74l88 132 88-132h74v274h-72V486l-72 106h-36l-72-106v166h-72z" fill="#12313c"/>
   <path d="M331 728h368" stroke="#0b7a75" stroke-width="34" stroke-linecap="round"/>

@@ -42,4 +42,13 @@ describe('Electron build configuration', () => {
     expect(preloadSource).not.toMatch(/from ['"]node:/);
     expect(preloadSource).not.toMatch(/require\(['"]node:/);
   });
+
+  it('uses the product name in the packaged document title', () => {
+    const indexHtml = fs.readFileSync('index.html', 'utf8');
+    const mainSource = fs.readFileSync('electron/main.ts', 'utf8');
+
+    expect(indexHtml).toContain('<title>Markdown 纪</title>');
+    expect(mainSource).toContain("app.setName(appTitle)");
+    expect(mainSource).not.toContain("const appTitle = 'Markdown Editor'");
+  });
 });
