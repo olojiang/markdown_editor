@@ -524,6 +524,36 @@ describe('App', () => {
     expect(preview.scrollTop).toBe(110);
   });
 
+  it('syncs preview and table-of-contents highlight from the editor cursor line', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    setScrollMetrics(preview, 2200, 200);
+    preview.scrollTop = 0;
+    setPreviewSourceLineGeometry(preview, 500, {
+      1: 20,
+      3: 80,
+      5: 120,
+      7: 160,
+      9: 210,
+      11: 260,
+    });
+
+    const betaBodyOffset = openFile.content.indexOf('hello beta');
+    editor.focus();
+    editor.setSelectionRange(betaBodyOffset, betaBodyOffset);
+    await wrapper.find('[data-testid="editor"]').trigger('keyup');
+    await vi.dynamicImportSettled();
+
+    expect(preview.scrollTop).toBeGreaterThan(0);
+    const betaLink = wrapper.findAll('.toc-link').find((link) => link.text() === 'Beta');
+    expect(betaLink?.classes()).toContain('active');
+  });
+
   it('debounces persisted scroll positions and keeps the latest value', async () => {
     vi.useFakeTimers();
     const wrapper = mount(App);
@@ -1024,6 +1054,18 @@ describe('App', () => {
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ previewHidden: true }),
     );
+  });
+
+  it('keeps the split editor layout inside the viewport', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const workspaceStyle = wrapper.find('.workspace').attributes('style');
+    expect(workspaceStyle).toContain('minmax(0, 640px)');
+    expect(workspaceStyle).toContain('minmax(0, 1fr)');
+    expect(wrapper.find('[data-testid="editor"]').attributes('wrap')).toBe('soft');
   });
 
   it('uses keyboard shortcuts for opening and saving files', async () => {

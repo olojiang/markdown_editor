@@ -226,7 +226,7 @@ const gridStyle = computed(() => {
   }
 
   return {
-    gridTemplateColumns: `${session.value.tocWidth}px 6px ${session.value.editorWidth}px 6px minmax(320px, 1fr)`,
+    gridTemplateColumns: `${session.value.tocWidth}px 6px minmax(0, ${session.value.editorWidth}px) 6px minmax(0, 1fr)`,
   };
 });
 
@@ -592,6 +592,16 @@ function lineFromEditorScroll(): number {
   return Math.min(sourceLineCount(), Math.max(1, element.scrollTop / editorLineHeight() + 1));
 }
 
+function lineFromEditorSelection(): number {
+  const element = editor.value;
+  if (!element) {
+    return 1;
+  }
+
+  const selectionStart = Math.min(Math.max(0, element.selectionStart), source.value.length);
+  return source.value.slice(0, selectionStart).split('\n').length;
+}
+
 function syncEditorToLine(line: number): void {
   const element = editor.value;
   if (!element) {
@@ -627,7 +637,7 @@ function previewAnchors(): ScrollAnchor[] {
       top: previewNodeScrollTop(node, container),
     }))
     .filter((anchor) => Number.isFinite(anchor.line))
-    .sort((first, second) => first.top - second.top);
+    .sort((first, second) => first.line - second.line || first.top - second.top);
 
   const anchors = [{ line: 1, top: 0 }];
   renderedAnchors.forEach((anchor) => {
@@ -670,6 +680,37 @@ function interpolatePreviewScrollFromLine(line: number): number | null {
   return interpolateTopFromAnchors(line, anchors);
 }
 
+function syncPreviewToLine(line: number, lock = true): void {
+  if (lock && scrollSyncSource && scrollSyncSource !== 'editor') {
+    return;
+  }
+
+  const sourceElement = editor.value;
+  const targetElement = preview.value;
+  if (!sourceElement || !targetElement || session.value.previewHidden || !isEditorVisible.value) {
+    return;
+  }
+
+  const targetTop = interpolatePreviewScrollFromLine(line);
+  if (targetTop === null) {
+    applyScrollRatio(targetElement, scrollRatio(sourceElement));
+    targetElement.scrollTop = Math.min(maxScrollTop(targetElement), targetElement.scrollTop + previewScrollOffset);
+  } else {
+    targetElement.scrollTop = Math.min(maxScrollTop(targetElement), Math.max(0, targetTop + previewScrollOffset));
+  }
+
+  if (lock) {
+    scrollSyncSource = 'editor';
+    if (scrollSyncFrame !== undefined) {
+      window.cancelAnimationFrame(scrollSyncFrame);
+    }
+    scrollSyncFrame = window.requestAnimationFrame(() => {
+      scrollSyncSource = null;
+      scrollSyncFrame = undefined;
+    });
+  }
+}
+
 function syncScroll(from: 'editor' | 'preview', lock = true): void {
   if (lock && scrollSyncSource && scrollSyncSource !== from) {
     return;
@@ -689,13 +730,7 @@ function syncScroll(from: 'editor' | 'preview', lock = true): void {
       syncEditorToLine(line);
     }
   } else {
-    const targetTop = interpolatePreviewScrollFromLine(lineFromEditorScroll());
-    if (targetTop === null) {
-      applyScrollRatio(targetElement, scrollRatio(sourceElement));
-      targetElement.scrollTop = Math.min(maxScrollTop(targetElement), targetElement.scrollTop + previewScrollOffset);
-    } else {
-      targetElement.scrollTop = Math.min(maxScrollTop(targetElement), Math.max(0, targetTop + previewScrollOffset));
-    }
+    syncPreviewToLine(lineFromEditorScroll(), false);
   }
 
   if (lock) {
@@ -716,10 +751,37 @@ function onEditorScroll(event: Event): void {
   rememberScroll(preview.value?.scrollTop ?? (event.target as HTMLElement).scrollTop);
 }
 
+function onEditorFocusLineChange(): void {
+  void nextTick(() => {
+    const line = lineFromEditorSelection();
+    syncPreviewToLine(line);
+    updateActiveHeadingFromSourceLine(line);
+    rememberScroll(preview.value?.scrollTop ?? editor.value?.scrollTop ?? 0);
+  });
+}
+
 function onPreviewScroll(event: Event): void {
   updateActiveHeadingFromPreview();
   rememberScroll((event.target as HTMLElement).scrollTop);
   syncScroll('preview');
+}
+
+function updateActiveHeadingFromSourceLine(line: number): void {
+  const container = preview.value;
+  if (!container) {
+    activeHeadingId.value = '';
+    return;
+  }
+
+  const headings = Array.from(container.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]'))
+    .map((heading) => ({
+      heading,
+      line: Number(heading.dataset.sourceLine),
+    }))
+    .filter((item) => Number.isFinite(item.line))
+    .sort((first, second) => first.line - second.line);
+  const current = headings.filter((item) => item.line <= line).at(-1) ?? headings[0];
+  activeHeadingId.value = current?.heading.id ?? '';
 }
 
 function updateActiveHeadingFromPreview(): void {
@@ -2766,9 +2828,15 @@ onBeforeUnmount(() => {
             v-model="source"
             class="source-editor"
             data-testid="editor"
+            wrap="soft"
             spellcheck="false"
             placeholder="# 开始写 Markdown"
+            @click="onEditorFocusLineChange"
+            @focus="onEditorFocusLineChange"
+            @input="onEditorFocusLineChange"
+            @keyup="onEditorFocusLineChange"
             @scroll="onEditorScroll"
+            @select="onEditorFocusLineChange"
             @paste="onEditorPaste"
           />
         </div>

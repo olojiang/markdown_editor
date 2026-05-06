@@ -75,6 +75,9 @@ const isDev = !app.isPackaged && process.env.MARKDOWN_EDITOR_FORCE_PROD !== '1';
 const devServerUrl = 'http://127.0.0.1:26543';
 const appTitle = 'Markdown 纪';
 app.setName(appTitle);
+if (process.env.MARKDOWN_EDITOR_USER_DATA_DIR) {
+  app.setPath('userData', process.env.MARKDOWN_EDITOR_USER_DATA_DIR);
+}
 const imageAssetExtensions = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
 const imageMimeTypes = new Map([
   ['.avif', 'image/avif'],

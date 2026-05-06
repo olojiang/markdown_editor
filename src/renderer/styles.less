@@ -497,6 +497,8 @@ select:disabled {
 .workspace {
   display: grid;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .toc-panel {
@@ -584,6 +586,7 @@ select:disabled {
   gap: 10px;
   justify-content: space-between;
   min-width: 0;
+  overflow: hidden;
   padding: 8px;
 }
 
@@ -591,6 +594,7 @@ select:disabled {
 .asset-tools {
   align-items: center;
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
 
@@ -744,6 +748,7 @@ select:disabled {
   letter-spacing: 0;
   margin: 0;
   min-width: 0;
+  overflow-wrap: anywhere;
   padding: 18px 18px 18px 22px;
   tab-size: 2;
   white-space: pre-wrap;
