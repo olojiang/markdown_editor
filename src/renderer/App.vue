@@ -12,12 +12,13 @@ import {
   createDefaultSession,
   mergeSession,
   normalizeSession,
+  tabIdForPath,
   type MarkdownSession,
   type ThemeMode,
 } from '@/renderer/lib/session';
 
 interface MarkdownFile {
-  path: string;
+  path: string | null;
   name: string;
   content: string;
 }
@@ -25,6 +26,36 @@ interface MarkdownFile {
 interface ScrollAnchor {
   line: number;
   top: number;
+}
+
+interface OpenTab {
+  id: string;
+  file: MarkdownFile;
+  source: string;
+  lastSavedContent: string;
+  scrollTop: number;
+}
+
+interface TabContextMenu {
+  tabId: string;
+  x: number;
+  y: number;
+}
+
+interface CloudUploadDialog {
+  file: TempImageAsset;
+  appId: string;
+  subDir: string;
+  linkName: string;
+  error: string;
+  isUploading: boolean;
+  insertionRange: EditorInsertionRange;
+}
+
+interface EditorInsertionRange {
+  start: number;
+  end: number;
+  scrollTop: number;
 }
 
 interface ActiveMermaidDiagram {
@@ -39,7 +70,20 @@ interface ActiveMermaidDiagram {
   dragStartY: number;
 }
 
+interface ActiveImagePreview {
+  src: string;
+  title: string;
+  filename: string;
+  scale: number;
+  x: number;
+  y: number;
+  dragPointerId: number | null;
+  dragStartX: number;
+  dragStartY: number;
+}
+
 type MermaidExportFormat = 'svg' | 'png' | 'webp';
+type ImageUploadMode = 'local' | 'cloud';
 
 const icons = {
   archive: 'M21 8v13H3V8 M1 3h22v5H1z M10 12h4',
@@ -48,6 +92,7 @@ const icons = {
   chevronRight: 'm9 18 6-6-6-6',
   code: 'm16 18 6-6-6-6 M8 6l-6 6 6 6',
   columns: 'M3 5h18 M3 12h18 M3 19h18 M8 5v14 M16 5v14',
+  cloudUpload: 'M16 16l-4-4-4 4 M12 12v9 M20 17.6A5 5 0 0 0 18 8h-1.3A7 7 0 1 0 5.1 15.8',
   download: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3',
   edit: 'M12 20h9 M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z',
   expand: 'M8 3H5a2 2 0 0 0-2 2v3 M16 3h3a2 2 0 0 1 2 2v3 M8 21H5a2 2 0 0 1-2-2v-3 M16 21h3a2 2 0 0 0 2-2v-3',
@@ -67,17 +112,21 @@ const icons = {
   sun: 'M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42 M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z',
   trash: 'M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6 M10 11v6 M14 11v6',
   upload: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12',
+  x: 'M18 6 6 18 M6 6l12 12',
   eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   eyeOff: 'M3 3l18 18 M10.6 10.6A3 3 0 0 0 13.4 13.4 M9.9 4.2A10.7 10.7 0 0 1 12 4.9c6.5 0 10 7.1 10 7.1a18.4 18.4 0 0 1-3.2 4.2 M6.6 6.6C3.7 8.5 2 12 2 12s3.5 7.1 10 7.1a10.9 10.9 0 0 0 4.2-.8',
 } as const;
 
 const bridge = window.markdownBridge;
+const openTabs = ref<OpenTab[]>([]);
+const activeTabId = ref<string | null>(null);
 const currentFile = ref<MarkdownFile | null>(null);
 const source = ref('');
 const lastSavedContent = ref('');
 const session = ref<MarkdownSession>(createDefaultSession());
 const isPreviewFullscreen = ref(false);
 const activeMermaidDiagram = shallowRef<ActiveMermaidDiagram | null>(null);
+const activeImagePreview = shallowRef<ActiveImagePreview | null>(null);
 const preview = ref<HTMLElement | null>(null);
 const editor = ref<HTMLTextAreaElement | null>(null);
 const status = ref('请选择或打开一个 Markdown 文件');
@@ -88,20 +137,35 @@ const editorSearch = ref('');
 const editorReplace = ref('');
 const imageAssets = ref<ImageAsset[]>([]);
 const selectedAssetPath = ref('');
+const imageUploadMode = ref<ImageUploadMode>(loadImageUploadMode());
+const cloudUploadDialog = ref<CloudUploadDialog | null>(null);
+const tabContextMenu = ref<TabContextMenu | null>(null);
+const draggedTabId = ref<string | null>(null);
 const activeResize = ref<'toc' | 'editor' | null>(null);
 let saveTimer: number | undefined;
 let sessionSaveTimer: number | undefined;
+let untitledCounter = 1;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
 let removeExternalOpenListener: (() => void) | undefined;
+let removeToggleEditorShortcutListener: (() => void) | undefined;
 let mermaidModalDragged = false;
+let imageModalDragged = false;
+let isRestoringStartup = false;
+let isFlushingOpenQueue = false;
+const queuedOpenRequests: MarkdownOpenRequest[] = [];
 const previewScrollOffset = -50;
 const sessionSaveDelay = 200;
+const cloudUploadPrefsKey = 'markdown-editor-cloud-upload-prefs';
+const codeCopyResetTimers = new WeakMap<HTMLButtonElement, number>();
+const codeCopyIconSvg = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 8h10v12H8z M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>';
+const codeCopySuccessSvg = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>';
 
 const previewHtml = computed(() => rewriteLocalImageSources(`${renderMarkdown(source.value)}<!-- theme:${session.value.theme} -->`));
 const headingTree = computed(() => applyCollapsedState(buildHeadingTree(source.value)));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
 const title = computed(() => currentFile.value?.name ?? 'Markdown 纪');
+const activeTab = computed(() => openTabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
 const appVersion = __APP_VERSION__;
 const activeMermaidStyle = computed(() => {
   const diagram = activeMermaidDiagram.value;
@@ -112,6 +176,15 @@ const activeMermaidStyle = computed(() => {
     transform: `translate(${diagram.x}px, ${diagram.y}px) scale(${diagram.scale})`,
   };
 });
+const activeImageStyle = computed(() => {
+  const image = activeImagePreview.value;
+  if (!image) {
+    return {};
+  }
+  return {
+    transform: `translate(${image.x}px, ${image.y}px) scale(${image.scale})`,
+  };
+});
 const isEditorVisible = computed(() => session.value.editorVisible || !currentFile.value);
 const hasUnsavedChanges = computed(() => currentFile.value !== null && source.value !== lastSavedContent.value);
 const shortcutModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'));
@@ -120,6 +193,7 @@ const saveShortcutHint = computed(() => `保存 Markdown 文件 (${shortcutModif
 const previewShortcutHint = computed(() => `显示/隐藏预览 (${shortcutModifier.value}+P)`);
 const editorShortcutHint = computed(() => `切换阅读/编辑模式 (${shortcutModifier.value}+E)`);
 const helpItems = computed(() => [
+  { label: '新建 Markdown', shortcut: `${shortcutModifier.value}+T`, detail: '创建一个未保存的空白 Markdown 标签页' },
   { label: '打开 Markdown', shortcut: `${shortcutModifier.value}+O`, detail: '选择本地 .md、.markdown、.mdown 文件' },
   { label: '保存当前文件', shortcut: `${shortcutModifier.value}+S`, detail: '有改动时写回原文件' },
   { label: '阅读/编辑', shortcut: `${shortcutModifier.value}+E`, detail: '阅读模式只显示预览，需要时切回源码编辑' },
@@ -127,7 +201,8 @@ const helpItems = computed(() => [
   { label: '最近文件', shortcut: '', detail: '快速打开最近访问过的 Markdown 文件' },
   { label: '导出 HTML/PDF', shortcut: '', detail: '把当前渲染结果导出为独立文件' },
   { label: '目录', shortcut: '', detail: '搜索、折叠标题，并跳转到对应位置' },
-  { label: '图片资源', shortcut: '', detail: '导入或粘贴图片到当前文档的 .assets 目录' },
+  { label: '图片资源', shortcut: '', detail: '导入或粘贴图片到当前文档的 assets/images 目录' },
+  { label: '图片预览', shortcut: '', detail: '在预览中查看、放大、拖拽和下载 Markdown 图片' },
   { label: 'Mermaid 预览', shortcut: `${shortcutModifier.value}+滚轮`, detail: '在预览或放大视图中缩放，拖拽移动图表' },
   { label: '关闭弹窗', shortcut: 'Esc', detail: '关闭 Mermaid 放大视图' },
 ]);
@@ -193,7 +268,8 @@ function collapseAllHeadings(): void {
 }
 
 function rewriteLocalImageSources(html: string): string {
-  if (!currentFile.value || !bridge?.assetUrl || typeof document === 'undefined') {
+  const markdownPath = currentFilePath();
+  if (typeof document === 'undefined') {
     return html;
   }
 
@@ -201,13 +277,41 @@ function rewriteLocalImageSources(html: string): string {
   template.innerHTML = html;
   template.content.querySelectorAll<HTMLImageElement>('img[src]').forEach((image) => {
     const sourcePath = image.getAttribute('src') ?? '';
-    if (/^(?:[a-z]+:|#|\/)/i.test(sourcePath)) {
-      return;
+    const shouldRewriteLocal = markdownPath && bridge?.assetUrl && !/^(?:[a-z]+:|#|\/)/i.test(sourcePath);
+    if (shouldRewriteLocal) {
+      image.dataset.originalSrc = sourcePath;
+      image.src = bridge.assetUrl(markdownPath, sourcePath);
     }
-    image.dataset.originalSrc = sourcePath;
-    image.src = bridge.assetUrl(currentFile.value!.path, sourcePath);
+    enhanceMarkdownImage(image);
   });
   return template.innerHTML;
+}
+
+function enhanceMarkdownImage(image: HTMLImageElement): void {
+  if (image.closest('.mermaid-panzoom, .markdown-image-frame')) {
+    return;
+  }
+
+  image.loading = image.loading || 'lazy';
+  image.dataset.imageSrc = image.getAttribute('src') ?? '';
+  image.dataset.imageTitle = image.getAttribute('alt') || 'Markdown 图片';
+  image.classList.add('markdown-image');
+
+  const frame = document.createElement('span');
+  frame.className = 'markdown-image-frame';
+  frame.dataset.imageSrc = image.dataset.imageSrc;
+  frame.dataset.imageTitle = image.dataset.imageTitle;
+
+  const actions = document.createElement('span');
+  actions.className = 'markdown-image-actions';
+  actions.setAttribute('aria-label', '图片操作');
+  actions.innerHTML = [
+    '<button class="icon-button" type="button" data-image-action="fullscreen" aria-label="查看图片" title="查看图片">⛶</button>',
+    '<button class="icon-button" type="button" data-image-action="download" aria-label="下载图片" title="下载图片">↓</button>',
+  ].join('');
+
+  image.replaceWith(frame);
+  frame.append(actions, image);
 }
 
 function escapeCssIdentifier(value: string): string {
@@ -216,16 +320,85 @@ function escapeCssIdentifier(value: string): string {
     : value.replace(/["\\]/g, '\\$&');
 }
 
-function persistableSession(): MarkdownSession {
-  return { ...session.value };
+function nextDraftId(): string {
+  return `draft:${Date.now()}:${untitledCounter++}`;
 }
 
-function saveSessionNow(): void {
+function currentFilePath(): string | null {
+  return currentFile.value?.path ?? null;
+}
+
+function tabPath(tab: OpenTab): string | null {
+  return tab.file.path;
+}
+
+function activeScrollTop(): number {
+  return preview.value?.scrollTop ?? activeTab.value?.scrollTop ?? session.value.scrollTop;
+}
+
+function syncActiveTabState(): void {
+  const tab = activeTab.value;
+  if (!tab || !currentFile.value) {
+    return;
+  }
+
+  tab.file = currentFile.value;
+  tab.source = source.value;
+  tab.lastSavedContent = lastSavedContent.value;
+  tab.scrollTop = activeScrollTop();
+}
+
+function serializedOpenTabs(): MarkdownSession['tabs'] {
+  return openTabs.value.map((tab) => ({
+    id: tab.id,
+    filePath: tab.file.path,
+    name: tab.file.name,
+    scrollTop: tab.scrollTop,
+    content: tab.file.path ? undefined : tab.source,
+    lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
+  }));
+}
+
+function tabSessionPatch(patch: Partial<MarkdownSession> = {}): Partial<MarkdownSession> {
+  return {
+    filePath: currentFilePath(),
+    tabs: serializedOpenTabs(),
+    activeTabId: activeTabId.value,
+    scrollTop: activeScrollTop(),
+    ...patch,
+  };
+}
+
+function persistableSession(): MarkdownSession {
+  syncActiveTabState();
+  return {
+    ...session.value,
+    ...tabSessionPatch(),
+  };
+}
+
+function persistTabSession(
+  patch: Partial<MarkdownSession> = {},
+  options: { deferred?: boolean; syncActive?: boolean } = {},
+): void {
+  if (options.syncActive !== false) {
+    syncActiveTabState();
+  }
+  const nextSession = mergeSession(session.value, tabSessionPatch(patch));
+  session.value = nextSession;
+  if (options.deferred) {
+    scheduleSessionSave();
+  } else {
+    saveSessionNow(nextSession);
+  }
+}
+
+function saveSessionNow(snapshot?: MarkdownSession): void {
   if (sessionSaveTimer !== undefined) {
     window.clearTimeout(sessionSaveTimer);
     sessionSaveTimer = undefined;
   }
-  void bridge?.saveSession(persistableSession());
+  void bridge?.saveSession(snapshot ? normalizeSession(snapshot) : persistableSession());
 }
 
 function scheduleSessionSave(): void {
@@ -239,22 +412,44 @@ function scheduleSessionSave(): void {
   }, sessionSaveDelay);
 }
 
+function saveSessionBeforeUnload(): void {
+  if (sessionSaveTimer !== undefined) {
+    window.clearTimeout(sessionSaveTimer);
+    sessionSaveTimer = undefined;
+  }
+
+  try {
+    bridge?.saveSessionSync?.(persistableSession());
+  } catch {
+    saveSessionNow();
+  }
+}
+
 function recentFileName(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath;
 }
 
-function persistOpenedFile(file: MarkdownFile, scrollTop: number): void {
-  session.value = mergeSession(session.value, {
+function persistOpenedFile(file: MarkdownFile, scrollTop: number, tabId = file.path ? tabIdForPath(file.path) : ''): void {
+  if (!file.path) {
+    return;
+  }
+  persistTabSession({
     filePath: file.path,
+    tabs: serializedOpenTabs().map((tab) => ({
+      ...tab,
+      scrollTop: tab.id === tabId ? scrollTop : tab.scrollTop,
+    })),
+    activeTabId: tabId,
     recentFiles: addRecentFile(session.value.recentFiles, file.path),
     scrollTop,
-  });
-  saveSessionNow();
+  }, { syncActive: false });
 }
 
 function rememberScroll(scrollTop: number): void {
-  session.value = mergeSession(session.value, { scrollTop });
-  scheduleSessionSave();
+  if (activeTab.value) {
+    activeTab.value.scrollTop = scrollTop;
+  }
+  persistTabSession({ scrollTop }, { deferred: true });
 }
 
 function flattenHeadingIds(nodes: HeadingNode[]): Set<string> {
@@ -408,6 +603,18 @@ function syncEditorToLine(line: number): void {
   element.scrollTop = Math.min(maxScrollTop(element), Math.max(0, targetTop));
 }
 
+function previewNodeScrollTop(node: HTMLElement, container: HTMLElement): number {
+  const hasLayoutBox = node.getClientRects().length > 0 && container.getClientRects().length > 0;
+  const nodeTop = node.getBoundingClientRect().top;
+  const containerTop = container.getBoundingClientRect().top;
+
+  if (hasLayoutBox && Number.isFinite(nodeTop) && Number.isFinite(containerTop)) {
+    return Math.max(0, nodeTop - containerTop + container.scrollTop);
+  }
+
+  return Math.max(0, node.offsetTop);
+}
+
 function previewAnchors(): ScrollAnchor[] {
   const container = preview.value;
   if (!container) {
@@ -417,7 +624,7 @@ function previewAnchors(): ScrollAnchor[] {
   const renderedAnchors = Array.from(container.querySelectorAll<HTMLElement>('[data-source-line]'))
     .map((node) => ({
       line: Number(node.dataset.sourceLine),
-      top: node.offsetTop,
+      top: previewNodeScrollTop(node, container),
     }))
     .filter((anchor) => Number.isFinite(anchor.line))
     .sort((first, second) => first.top - second.top);
@@ -547,12 +754,45 @@ function jumpToHeading(id: string): void {
     return;
   }
 
-  container.scrollTop = heading.offsetTop - 16;
+  container.scrollTop = Math.max(0, previewNodeScrollTop(heading, container) - 16);
+  const sourceLine = Number(heading.dataset.sourceLine);
+  if (Number.isFinite(sourceLine)) {
+    syncEditorToLine(sourceLine);
+  }
   activeHeadingId.value = id;
   rememberScroll(container.scrollTop);
 }
 
-function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolean } = {}): void {
+function activateTab(tabId: string): void {
+  syncActiveTabState();
+  const tab = openTabs.value.find((item) => item.id === tabId);
+  if (!tab) {
+    return;
+  }
+
+  activeTabId.value = tab.id;
+  currentFile.value = tab.file;
+  source.value = tab.source;
+  lastSavedContent.value = tab.lastSavedContent;
+  status.value = tab.file.path ?? '未保存的新 Markdown 文件';
+  selectedAssetPath.value = '';
+  persistTabSession({
+    filePath: tab.file.path,
+    activeTabId: tab.id,
+    scrollTop: tab.scrollTop,
+  }, { syncActive: false });
+  void refreshImageAssets(tab.file.path ?? undefined);
+  void nextTick(() => {
+    if (preview.value) {
+      preview.value.scrollTop = tab.scrollTop;
+    }
+    syncScroll('preview', false);
+    updateActiveHeadingFromPreview();
+    void renderMermaid();
+  });
+}
+
+function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolean; persist?: boolean } = {}): void {
   const nextScrollTop = options.external ? 0 : scrollTop;
   if (options.external) {
     session.value = mergeSession(session.value, {
@@ -561,12 +801,32 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
       scrollTop: 0,
     });
   }
+  syncActiveTabState();
+  const tabId = file.path ? tabIdForPath(file.path) : nextDraftId();
+  const existing = openTabs.value.find((tab) => tab.id === tabId);
+  if (existing) {
+    existing.file = file;
+    existing.source = file.content;
+    existing.lastSavedContent = file.content;
+    existing.scrollTop = nextScrollTop;
+  } else {
+    openTabs.value.push({
+      id: tabId,
+      file,
+      source: file.content,
+      lastSavedContent: file.content,
+      scrollTop: nextScrollTop,
+    });
+  }
+  activeTabId.value = tabId;
   currentFile.value = file;
   source.value = file.content;
   lastSavedContent.value = file.content;
-  persistOpenedFile(file, nextScrollTop);
-  status.value = file.path;
-  void refreshImageAssets(file.path);
+  if (options.persist !== false) {
+    persistOpenedFile(file, nextScrollTop, tabId);
+  }
+  status.value = file.path ?? '未保存的新 Markdown 文件';
+  void refreshImageAssets(file.path ?? undefined);
   void nextTick(() => {
     if (preview.value) {
       preview.value.scrollTop = nextScrollTop;
@@ -576,8 +836,212 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
   });
 }
 
+async function closeTab(tabId: string, event?: MouseEvent): Promise<void> {
+  event?.stopPropagation();
+  syncActiveTabState();
+  const index = openTabs.value.findIndex((tab) => tab.id === tabId);
+  if (index === -1) {
+    return;
+  }
+
+  openTabs.value.splice(index, 1);
+  if (openTabs.value.length === 0) {
+    activeTabId.value = null;
+    currentFile.value = null;
+    source.value = '';
+    lastSavedContent.value = '';
+    status.value = '请选择或打开一个 Markdown 文件';
+    persistTabSession({ filePath: null, activeTabId: null, scrollTop: 0 });
+    await bridge?.quitApp?.();
+    return;
+  }
+
+  const nextTab = openTabs.value[Math.min(index, openTabs.value.length - 1)];
+  activateTab(nextTab.id);
+}
+
+function startTabDrag(tabId: string, event: DragEvent): void {
+  draggedTabId.value = tabId;
+  event.dataTransfer?.setData('text/plain', tabId);
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+  }
+}
+
+function dropTabOn(tabId: string, event: DragEvent): void {
+  const sourceTabId = draggedTabId.value ?? event.dataTransfer?.getData('text/plain');
+  draggedTabId.value = null;
+  if (!sourceTabId || sourceTabId === tabId) {
+    return;
+  }
+
+  syncActiveTabState();
+  const sourceIndex = openTabs.value.findIndex((tab) => tab.id === sourceTabId);
+  const targetIndex = openTabs.value.findIndex((tab) => tab.id === tabId);
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return;
+  }
+
+  const [movedTab] = openTabs.value.splice(sourceIndex, 1);
+  openTabs.value.splice(targetIndex, 0, movedTab);
+  persistTabSession();
+}
+
+function finishTabDrag(): void {
+  draggedTabId.value = null;
+}
+
+function openTabContextMenu(tabId: string, event: MouseEvent): void {
+  event.preventDefault();
+  activateTab(tabId);
+  tabContextMenu.value = {
+    tabId,
+    x: event.clientX,
+    y: event.clientY,
+  };
+}
+
+function closeTabContextMenu(): void {
+  tabContextMenu.value = null;
+}
+
+function duplicateTab(tabId: string): void {
+  const tab = openTabs.value.find((item) => item.id === tabId);
+  if (!tab) {
+    return;
+  }
+
+  createNewMarkdownTab(tab.source, `${tab.file.name.replace(/\.md$/i, '')} 副本.md`);
+  status.value = `已复制标签页 ${tab.file.name}`;
+  closeTabContextMenu();
+}
+
+async function copyTextToClipboard(text: string, successMessage: string): Promise<void> {
+  await navigator.clipboard?.writeText(text);
+  status.value = successMessage;
+}
+
+async function copyTabPath(tabId: string): Promise<void> {
+  const tab = openTabs.value.find((item) => item.id === tabId);
+  const path = tab ? tabPath(tab) : null;
+  if (!path) {
+    status.value = '当前标签页还没有文件路径';
+    closeTabContextMenu();
+    return;
+  }
+
+  await copyTextToClipboard(path, '已复制文件路径');
+  closeTabContextMenu();
+}
+
+async function copyTabContent(tabId: string): Promise<void> {
+  const tab = openTabs.value.find((item) => item.id === tabId);
+  if (!tab) {
+    return;
+  }
+
+  syncActiveTabState();
+  await copyTextToClipboard(tab.source, '已复制 Markdown 内容');
+  closeTabContextMenu();
+}
+
+function markCodeCopyButtonCopied(button: HTMLButtonElement): void {
+  const previousTimer = codeCopyResetTimers.get(button);
+  if (previousTimer !== undefined) {
+    window.clearTimeout(previousTimer);
+  }
+
+  button.classList.add('is-copied');
+  button.setAttribute('aria-label', '已复制');
+  button.setAttribute('title', '已复制');
+  button.innerHTML = codeCopySuccessSvg;
+
+  const resetTimer = window.setTimeout(() => {
+    button.classList.remove('is-copied');
+    button.setAttribute('aria-label', '复制代码');
+    button.setAttribute('title', '复制代码');
+    button.innerHTML = codeCopyIconSvg;
+    codeCopyResetTimers.delete(button);
+  }, 1200);
+  codeCopyResetTimers.set(button, resetTimer);
+}
+
+async function copyCodeBlock(container: HTMLElement, button: HTMLButtonElement): Promise<void> {
+  const code = container.querySelector('code')?.textContent;
+  if (!code) {
+    status.value = '没有可复制的代码';
+    return;
+  }
+
+  try {
+    await copyTextToClipboard(code, '已复制代码');
+    markCodeCopyButtonCopied(button);
+  } catch {
+    status.value = '复制代码失败';
+  }
+}
+
+async function saveContextTabAs(tabId: string): Promise<void> {
+  await saveTabAs(tabId);
+  closeTabContextMenu();
+}
+
 function openMarkdownRequest(request: MarkdownOpenRequest): void {
   setFile(request.file, 0, { external: request.external });
+}
+
+function queueMarkdownOpenRequest(request: MarkdownOpenRequest): void {
+  queuedOpenRequests.push(request);
+  void flushQueuedOpenRequests();
+}
+
+async function flushQueuedOpenRequests(): Promise<void> {
+  if (isRestoringStartup || isFlushingOpenQueue) {
+    return;
+  }
+
+  isFlushingOpenQueue = true;
+  try {
+    while (queuedOpenRequests.length > 0) {
+      const request = queuedOpenRequests.shift();
+      if (request) {
+        openMarkdownRequest(request);
+        await nextTick();
+      }
+    }
+  } finally {
+    isFlushingOpenQueue = false;
+  }
+}
+
+function createNewMarkdownTab(content = '', name?: string): void {
+  syncActiveTabState();
+  const tabName = name ?? `未命名-${untitledCounter}.md`;
+  const tab: OpenTab = {
+    id: nextDraftId(),
+    file: {
+      path: null,
+      name: tabName,
+      content,
+    },
+    source: content,
+    lastSavedContent: '',
+    scrollTop: 0,
+  };
+  openTabs.value.push(tab);
+  activeTabId.value = tab.id;
+  currentFile.value = tab.file;
+  source.value = tab.source;
+  lastSavedContent.value = tab.lastSavedContent;
+  selectedAssetPath.value = '';
+  imageAssets.value = [];
+  status.value = '未保存的新 Markdown 文件';
+  persistTabSession(undefined, { syncActive: false });
+  void nextTick(() => {
+    editor.value?.focus();
+    updateActiveHeadingFromPreview();
+    void renderMermaid();
+  });
 }
 
 async function openFile(): Promise<void> {
@@ -632,18 +1096,68 @@ async function onDropFile(event: DragEvent): Promise<void> {
 }
 
 async function saveCurrentFile(): Promise<void> {
-  if (!currentFile.value || !bridge || !hasUnsavedChanges.value) {
+  if (!currentFile.value || !bridge) {
+    return;
+  }
+  if (!currentFile.value.path) {
+    await saveTabAs(activeTabId.value);
+    return;
+  }
+  if (!hasUnsavedChanges.value) {
     return;
   }
 
   currentFile.value = await bridge.saveMarkdownFile(currentFile.value.path, source.value);
   lastSavedContent.value = currentFile.value.content;
+  if (activeTab.value) {
+    activeTab.value.file = currentFile.value;
+    activeTab.value.source = source.value;
+    activeTab.value.lastSavedContent = lastSavedContent.value;
+  }
   status.value = `已保存 ${currentFile.value.path}`;
+  scheduleSessionSave();
+}
+
+async function saveTabAs(tabId: string | null): Promise<void> {
+  const tab = openTabs.value.find((item) => item.id === tabId);
+  if (!tab || !bridge?.saveMarkdownFileAs) {
+    return;
+  }
+
+  syncActiveTabState();
+  const saved = await bridge.saveMarkdownFileAs(tab.source, tab.file.name);
+  if (!saved?.path) {
+    status.value = '已取消另存为';
+    return;
+  }
+
+  const nextId = tabIdForPath(saved.path);
+  const duplicateIndex = openTabs.value.findIndex((item) => item.id === nextId && item !== tab);
+  if (duplicateIndex >= 0) {
+    openTabs.value.splice(duplicateIndex, 1);
+  }
+  tab.id = nextId;
+  tab.file = saved;
+  tab.source = saved.content;
+  tab.lastSavedContent = saved.content;
+  activeTabId.value = nextId;
+  currentFile.value = saved;
+  source.value = saved.content;
+  lastSavedContent.value = saved.content;
+  status.value = `已另存为 ${saved.path}`;
+  session.value = mergeSession(session.value, {
+    filePath: saved.path,
+    activeTabId: nextId,
+    recentFiles: addRecentFile(session.value.recentFiles, saved.path),
+  });
+  await refreshImageAssets(saved.path);
+  saveSessionNow();
 }
 
 function currentExportPayload(options: { relativeImages: boolean }): ExportDocumentPayload | null {
-  if (!currentFile.value || !preview.value) {
-    status.value = '请先打开 Markdown 文件';
+  const markdownPath = currentFilePath();
+  if (!currentFile.value || !markdownPath || !preview.value) {
+    status.value = '请先保存 Markdown 文件';
     return null;
   }
 
@@ -656,7 +1170,7 @@ function currentExportPayload(options: { relativeImages: boolean }): ExportDocum
   }
 
   return {
-    markdownPath: currentFile.value.path,
+    markdownPath,
     title: currentFile.value.name,
     bodyHtml: clone.innerHTML,
     theme: session.value.theme,
@@ -680,20 +1194,43 @@ async function exportDocument(format: 'html' | 'pdf'): Promise<void> {
   status.value = exportedPath ? `已导出 ${exportedPath}` : '已取消导出';
 }
 
-function replaceSelection(replacement: string, selectionStartOffset = replacement.length, selectionEndOffset = selectionStartOffset): void {
+function editorInsertionRange(): EditorInsertionRange | null {
   const element = editor.value;
   if (!element) {
+    return null;
+  }
+
+  return {
+    start: element.selectionStart,
+    end: element.selectionEnd,
+    scrollTop: element.scrollTop,
+  };
+}
+
+function replaceEditorRange(
+  replacement: string,
+  range: EditorInsertionRange | null,
+  selectionStartOffset = replacement.length,
+  selectionEndOffset = selectionStartOffset,
+): void {
+  const element = editor.value;
+  if (!element || !range) {
     source.value += replacement;
     return;
   }
 
-  const start = element.selectionStart;
-  const end = element.selectionEnd;
+  const start = Math.min(Math.max(0, range.start), source.value.length);
+  const end = Math.min(Math.max(start, range.end), source.value.length);
   source.value = `${source.value.slice(0, start)}${replacement}${source.value.slice(end)}`;
   void nextTick(() => {
     element.focus();
     element.setSelectionRange(start + selectionStartOffset, start + selectionEndOffset);
+    element.scrollTop = range.scrollTop;
   });
+}
+
+function replaceSelection(replacement: string, selectionStartOffset = replacement.length, selectionEndOffset = selectionStartOffset): void {
+  replaceEditorRange(replacement, editorInsertionRange(), selectionStartOffset, selectionEndOffset);
 }
 
 function selectedEditorText(): string {
@@ -722,6 +1259,130 @@ function insertImageMarkdown(asset: ImageAsset, altText = asset.name.replace(/\.
   status.value = `已插入图片 ${asset.name}`;
 }
 
+function escapeMarkdownImageAlt(value: string): string {
+  return value.replace(/]/g, '\\]');
+}
+
+function insertRemoteImageMarkdown(url: string, name: string, range: EditorInsertionRange | null = editorInsertionRange()): void {
+  const altText = escapeMarkdownImageAlt(name.replace(/\.[^.]+$/, '') || 'image');
+  replaceEditorRange(`![${altText}](${url})`, range);
+}
+
+function timestampedWebpName(): string {
+  return `${Date.now()}.webp`;
+}
+
+function todaySubDir(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `/${year}-${month}-${day}`;
+}
+
+function loadCloudUploadPrefs(): { appId: string; subDir: string; mode: ImageUploadMode } {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(cloudUploadPrefsKey) ?? '{}') as Partial<{
+      appId: string;
+      mode: ImageUploadMode;
+      subDir: string;
+    }>;
+    return {
+      appId: typeof parsed.appId === 'string' && parsed.appId.trim() ? parsed.appId : 'pinefield.assets',
+      mode: parsed.mode === 'cloud' ? 'cloud' : 'local',
+      subDir: typeof parsed.subDir === 'string' && parsed.subDir.trim() ? parsed.subDir : todaySubDir(),
+    };
+  } catch {
+    return {
+      appId: 'pinefield.assets',
+      mode: 'local',
+      subDir: todaySubDir(),
+    };
+  }
+}
+
+function loadImageUploadMode(): ImageUploadMode {
+  return loadCloudUploadPrefs().mode;
+}
+
+function saveCloudUploadPrefs(appId: string, subDir: string): void {
+  window.localStorage.setItem(cloudUploadPrefsKey, JSON.stringify({
+    ...loadCloudUploadPrefs(),
+    appId,
+    subDir,
+  }));
+}
+
+function setImageUploadMode(mode: ImageUploadMode): void {
+  imageUploadMode.value = mode;
+  const prefs = loadCloudUploadPrefs();
+  window.localStorage.setItem(cloudUploadPrefsKey, JSON.stringify({
+    ...prefs,
+    mode,
+  }));
+}
+
+function openCloudUploadDialog(file: TempImageAsset, insertionRange: EditorInsertionRange): void {
+  const prefs = loadCloudUploadPrefs();
+  cloudUploadDialog.value = {
+    file,
+    appId: prefs.appId,
+    subDir: prefs.subDir,
+    linkName: '',
+    error: '',
+    isUploading: false,
+    insertionRange,
+  };
+  status.value = `已暂存图片 ${file.absolutePath}`;
+}
+
+async function convertImageFileToWebp(imageFile: File): Promise<{ data: ArrayBuffer; fileName: string; mimeType: string }> {
+  const createBitmap = window.createImageBitmap ?? globalThis.createImageBitmap;
+  if (!createBitmap || typeof HTMLCanvasElement.prototype.toBlob !== 'function') {
+    return {
+      data: await imageFile.arrayBuffer(),
+      fileName: imageFile.name || 'pasted-image.png',
+      mimeType: imageFile.type || 'image/png',
+    };
+  }
+
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await createBitmap(imageFile);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Canvas 2D context is unavailable.');
+    }
+    context.drawImage(bitmap, 0, 0);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((result) => {
+        if (result) {
+          resolve(result);
+          return;
+        }
+        reject(new Error('WebP encoding failed.'));
+      }, 'image/webp', 0.88);
+    });
+
+    return {
+      data: await blob.arrayBuffer(),
+      fileName: timestampedWebpName(),
+      mimeType: 'image/webp',
+    };
+  } catch {
+    return {
+      data: await imageFile.arrayBuffer(),
+      fileName: imageFile.name || 'pasted-image.png',
+      mimeType: imageFile.type || 'image/png',
+    };
+  } finally {
+    bitmap?.close();
+  }
+}
+
 async function refreshImageAssets(markdownPath = currentFile.value?.path): Promise<void> {
   if (!markdownPath || !bridge?.listImageAssets) {
     imageAssets.value = [];
@@ -736,18 +1397,67 @@ async function refreshImageAssets(markdownPath = currentFile.value?.path): Promi
 }
 
 async function importImageAsset(): Promise<void> {
-  if (!currentFile.value || !bridge?.importImageAsset) {
-    status.value = '请先打开 Markdown 文件';
+  const markdownPath = currentFilePath();
+  if (!markdownPath || !bridge?.importImageAsset) {
+    status.value = '请先保存 Markdown 文件';
     return;
   }
 
-  const asset = await bridge.importImageAsset(currentFile.value.path);
+  const asset = await bridge.importImageAsset(markdownPath);
   if (!asset) {
     return;
   }
   await refreshImageAssets();
   selectedAssetPath.value = asset.relativePath;
   insertImageMarkdown(asset);
+}
+
+function showCloudUploadPlaceholder(): void {
+  setImageUploadMode('cloud');
+  status.value = '云端上传已启用，粘贴图片后会先保存到 /tmp 并打开上传参数窗口';
+}
+
+function closeCloudUploadDialog(): void {
+  if (cloudUploadDialog.value?.isUploading) {
+    return;
+  }
+  cloudUploadDialog.value = null;
+  void nextTick(() => editor.value?.focus());
+}
+
+async function confirmCloudImageUpload(): Promise<void> {
+  const dialog = cloudUploadDialog.value;
+  if (!dialog || dialog.isUploading) {
+    return;
+  }
+  if (!dialog.appId.trim()) {
+    dialog.error = '请输入 appId';
+    return;
+  }
+
+  dialog.isUploading = true;
+  dialog.error = '';
+  status.value = '正在上传云端图片...';
+  try {
+    saveCloudUploadPrefs(dialog.appId.trim(), dialog.subDir.trim());
+    const result = await bridge?.uploadCloudImage({
+      filePath: dialog.file.absolutePath,
+      appId: dialog.appId.trim(),
+      subDir: dialog.subDir.trim(),
+      linkName: dialog.linkName.trim() || undefined,
+    });
+    if (!result) {
+      throw new Error('当前环境不支持云端图片上传');
+    }
+    insertRemoteImageMarkdown(result.url, dialog.linkName.trim() || result.uploadedName, dialog.insertionRange);
+    status.value = `已上传图片 ${result.uploadedName}`;
+    cloudUploadDialog.value = null;
+  } catch (error) {
+    dialog.error = error instanceof Error ? error.message : '云端图片上传失败';
+    status.value = dialog.error;
+  } finally {
+    dialog.isUploading = false;
+  }
 }
 
 function insertSelectedAsset(): void {
@@ -758,31 +1468,51 @@ function insertSelectedAsset(): void {
 }
 
 async function deleteSelectedAsset(): Promise<void> {
-  if (!currentFile.value || !selectedAssetPath.value || !bridge?.deleteImageAsset) {
+  const markdownPath = currentFilePath();
+  if (!markdownPath || !selectedAssetPath.value || !bridge?.deleteImageAsset) {
     return;
   }
 
-  imageAssets.value = await bridge.deleteImageAsset(currentFile.value.path, selectedAssetPath.value);
+  imageAssets.value = await bridge.deleteImageAsset(markdownPath, selectedAssetPath.value);
   selectedAssetPath.value = imageAssets.value[0]?.relativePath ?? '';
   status.value = '已删除资源文件';
 }
 
 async function onEditorPaste(event: ClipboardEvent): Promise<void> {
-  if (!currentFile.value || !bridge?.saveImageAsset) {
-    return;
-  }
-
   const imageFile = Array.from(event.clipboardData?.files ?? []).find((file) => file.type.startsWith('image/'));
   if (!imageFile) {
     return;
   }
 
   event.preventDefault();
+  if (imageUploadMode.value === 'cloud') {
+    if (!bridge?.saveTempImageAsset || !bridge.uploadCloudImage) {
+      status.value = '当前环境不支持云端图片上传';
+      return;
+    }
+    const insertionRange = editorInsertionRange() ?? {
+      start: source.value.length,
+      end: source.value.length,
+      scrollTop: 0,
+    };
+    const converted = await convertImageFileToWebp(imageFile);
+    const tempAsset = await bridge.saveTempImageAsset(converted.fileName, converted.data, converted.mimeType);
+    openCloudUploadDialog(tempAsset, insertionRange);
+    return;
+  }
+
+  const markdownPath = currentFilePath();
+  if (!markdownPath || !bridge?.saveImageAsset) {
+    status.value = '请先保存 Markdown 文件，才能保存粘贴的图片';
+    return;
+  }
+
+  const converted = await convertImageFileToWebp(imageFile);
   const asset = await bridge.saveImageAsset(
-    currentFile.value.path,
-    imageFile.name || 'pasted-image.png',
-    await imageFile.arrayBuffer(),
-    imageFile.type || 'image/png',
+    markdownPath,
+    converted.fileName,
+    converted.data,
+    converted.mimeType,
   );
   await refreshImageAssets();
   selectedAssetPath.value = asset.relativePath;
@@ -790,6 +1520,11 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
 }
 
 function scheduleSave(): void {
+  if (!currentFilePath()) {
+    scheduleSessionSave();
+    return;
+  }
+
   if (saveTimer) {
     window.clearTimeout(saveTimer);
   }
@@ -910,6 +1645,11 @@ function onKeyDown(event: KeyboardEvent): void {
     event.preventDefault();
     return;
   }
+  if (event.key === 'Escape' && activeImagePreview.value) {
+    activeImagePreview.value = null;
+    event.preventDefault();
+    return;
+  }
 
   const command = event.metaKey || event.ctrlKey;
   if (!command) {
@@ -920,6 +1660,10 @@ function onKeyDown(event: KeyboardEvent): void {
   if (key === 'o') {
     event.preventDefault();
     void openFile();
+  }
+  if (key === 't') {
+    event.preventDefault();
+    createNewMarkdownTab();
   }
   if (key === 's') {
     event.preventDefault();
@@ -1065,6 +1809,155 @@ function downloadBlob(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+function safeDownloadName(value: string, fallback: string): string {
+  return value
+    .replace(/[?#].*$/, '')
+    .split(/[\\/]/)
+    .pop()
+    ?.replace(/[^\p{L}\p{N}._-]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    || fallback;
+}
+
+function imageFilenameFromSource(src: string, title: string): string {
+  try {
+    const url = new URL(src, window.location.href);
+    const name = safeDownloadName(decodeURIComponent(url.pathname), '');
+    if (name && /\.[a-z0-9]{2,5}$/i.test(name)) {
+      return name;
+    }
+  } catch {
+    const name = safeDownloadName(src, '');
+    if (name && /\.[a-z0-9]{2,5}$/i.test(name)) {
+      return name;
+    }
+  }
+
+  const baseName = safeDownloadName(title, 'markdown-image');
+  return `${baseName}.png`;
+}
+
+function imageNameFromSource(src: string): string {
+  try {
+    const url = new URL(src, window.location.href);
+    const assetPath = url.searchParams.get('path');
+    return safeDownloadName(decodeURIComponent(assetPath || url.pathname), '');
+  } catch {
+    return safeDownloadName(src, '');
+  }
+}
+
+function imageContainerIndex(container: HTMLElement): number {
+  const containers = Array.from(preview.value?.querySelectorAll<HTMLElement>('.markdown-image-frame') ?? []);
+  return Math.max(0, containers.indexOf(container));
+}
+
+function imagePreviewTitle(altText: string, src: string, index: number): string {
+  const fallbackTitle = `图片 ${index + 1}`;
+  const title = altText.trim() || fallbackTitle;
+  const sourceName = imageNameFromSource(src);
+
+  if (!sourceName || sourceName === title) {
+    return title;
+  }
+
+  return `${fallbackTitle}：${title} · ${sourceName}`;
+}
+
+function openImagePreview(container: HTMLElement): void {
+  const image = container.querySelector<HTMLImageElement>('img');
+  const src = image?.currentSrc || image?.src || container.dataset.imageSrc;
+  if (!image || !src) {
+    status.value = '图片尚未加载完成';
+    return;
+  }
+
+  const index = imageContainerIndex(container);
+  const altText = image.getAttribute('alt') || container.dataset.imageTitle || '';
+  const title = imagePreviewTitle(altText, src, index);
+  activeImagePreview.value = {
+    src,
+    title,
+    filename: imageFilenameFromSource(src, title),
+    scale: 1,
+    x: 0,
+    y: 0,
+    dragPointerId: null,
+    dragStartX: 0,
+    dragStartY: 0,
+  };
+}
+
+function updateActiveImagePreview(patch: Partial<ActiveImagePreview>): void {
+  if (!activeImagePreview.value) {
+    return;
+  }
+  activeImagePreview.value = {
+    ...activeImagePreview.value,
+    ...patch,
+  };
+}
+
+function zoomActiveImage(delta: number): void {
+  const image = activeImagePreview.value;
+  if (!image) {
+    return;
+  }
+  updateActiveImagePreview({
+    scale: Math.min(8, Math.max(0.1, Number((image.scale + delta).toFixed(2)))),
+  });
+}
+
+function resetActiveImageView(): void {
+  updateActiveImagePreview({
+    scale: 1,
+    x: 0,
+    y: 0,
+    dragPointerId: null,
+  });
+}
+
+async function downloadImage(src: string, filename: string): Promise<void> {
+  try {
+    const response = await fetch(src);
+    if (!response.ok) {
+      throw new Error(`Image request failed: ${response.status}`);
+    }
+    downloadBlob(await response.blob(), filename);
+    status.value = `已下载 ${filename}`;
+  } catch {
+    const link = document.createElement('a');
+    link.href = src;
+    link.download = filename;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    status.value = `已打开图片下载 ${filename}`;
+  }
+}
+
+async function downloadImageFromContainer(container: HTMLElement): Promise<void> {
+  const image = container.querySelector<HTMLImageElement>('img');
+  const src = image?.currentSrc || image?.src || container.dataset.imageSrc;
+  if (!src) {
+    status.value = '图片尚未加载完成';
+    return;
+  }
+
+  const title = image?.getAttribute('alt') || container.dataset.imageTitle || `图片 ${imageContainerIndex(container) + 1}`;
+  await downloadImage(src, imageFilenameFromSource(src, title));
+}
+
+async function downloadActiveImage(): Promise<void> {
+  const image = activeImagePreview.value;
+  if (!image) {
+    return;
+  }
+  await downloadImage(image.src, image.filename);
+}
+
 function openMermaidFullscreen(container: HTMLElement): void {
   const prepared = preparedMermaidSvg(container);
   if (!prepared) {
@@ -1125,11 +2018,15 @@ function closeMermaidModalFromBackdrop(): void {
   activeMermaidDiagram.value = null;
 }
 
-function onMermaidModalWheel(event: WheelEvent): void {
-  if (!event.metaKey && !event.ctrlKey) {
+function closeImageModalFromBackdrop(): void {
+  if (imageModalDragged) {
+    imageModalDragged = false;
     return;
   }
+  activeImagePreview.value = null;
+}
 
+function onMermaidModalWheel(event: WheelEvent): void {
   event.preventDefault();
   zoomActiveMermaid(event.deltaY > 0 ? -0.1 : 0.1);
 }
@@ -1172,6 +2069,51 @@ function onMermaidModalPointerUp(event: PointerEvent): void {
     return;
   }
   updateActiveMermaidDiagram({ dragPointerId: null });
+}
+
+function onImageModalWheel(event: WheelEvent): void {
+  event.preventDefault();
+  zoomActiveImage(event.deltaY > 0 ? -0.1 : 0.1);
+}
+
+function onImageModalPointerDown(event: PointerEvent): void {
+  if ((event.target as HTMLElement).closest('.image-modal-bar')) {
+    return;
+  }
+  imageModalDragged = false;
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  updateActiveImagePreview({
+    dragPointerId: event.pointerId,
+    dragStartX: event.clientX,
+    dragStartY: event.clientY,
+  });
+}
+
+function onImageModalPointerMove(event: PointerEvent): void {
+  const image = activeImagePreview.value;
+  if (!image || image.dragPointerId !== event.pointerId) {
+    return;
+  }
+
+  const deltaX = event.clientX - image.dragStartX;
+  const deltaY = event.clientY - image.dragStartY;
+  if (Math.abs(deltaX) + Math.abs(deltaY) > 2) {
+    imageModalDragged = true;
+  }
+
+  updateActiveImagePreview({
+    x: image.x + deltaX,
+    y: image.y + deltaY,
+    dragStartX: event.clientX,
+    dragStartY: event.clientY,
+  });
+}
+
+function onImageModalPointerUp(event: PointerEvent): void {
+  if (activeImagePreview.value?.dragPointerId !== event.pointerId) {
+    return;
+  }
+  updateActiveImagePreview({ dragPointerId: null });
 }
 
 async function exportMermaid(container: HTMLElement, format: MermaidExportFormat): Promise<void> {
@@ -1223,6 +2165,39 @@ async function exportMermaid(container: HTMLElement, format: MermaidExportFormat
 }
 
 function onPreviewClick(event: MouseEvent): void {
+  const codeCopyButton = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-code-action="copy"]');
+  if (codeCopyButton) {
+    const container = codeCopyButton.closest<HTMLElement>('.markdown-code-frame');
+    if (!container) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    void copyCodeBlock(container, codeCopyButton);
+    return;
+  }
+
+  const imageActionButton = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-image-action]');
+  if (imageActionButton) {
+    const container = imageActionButton.closest<HTMLElement>('.markdown-image-frame');
+    if (!container) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (imageActionButton.dataset.imageAction === 'fullscreen') {
+      openImagePreview(container);
+      return;
+    }
+    if (imageActionButton.dataset.imageAction === 'download') {
+      void downloadImageFromContainer(container);
+      return;
+    }
+  }
+
   const actionButton = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-mermaid-action]');
   if (!actionButton) {
     return;
@@ -1293,6 +2268,9 @@ function onPreviewPointerMove(event: PointerEvent): void {
 }
 
 watch(source, () => {
+  if (activeTab.value) {
+    activeTab.value.source = source.value;
+  }
   scheduleSave();
   void renderMermaid();
 });
@@ -1316,20 +2294,103 @@ watch(headingTree, (nodes) => {
   }
 });
 
+async function restoreSessionTabs(): Promise<boolean> {
+  if (!bridge || session.value.tabs.length === 0) {
+    return false;
+  }
+
+  const restoredTabs = (await Promise.all(session.value.tabs.map(async (tab) => {
+    if (!tab.filePath) {
+      const content = tab.content ?? '';
+      return {
+        id: tab.id,
+        file: {
+          path: null,
+          name: tab.name,
+          content,
+        },
+        source: content,
+        lastSavedContent: tab.lastSavedContent ?? '',
+        scrollTop: tab.scrollTop,
+      } satisfies OpenTab;
+    }
+    try {
+      const file = await bridge.readMarkdownFile(tab.filePath);
+      return {
+        id: file.path ? tabIdForPath(file.path) : tab.id,
+        file,
+        source: file.content,
+        lastSavedContent: file.content,
+        scrollTop: tab.scrollTop,
+      } satisfies OpenTab;
+    } catch {
+      return null;
+    }
+  }))).filter((tab): tab is OpenTab => tab !== null);
+
+  if (restoredTabs.length === 0) {
+    return false;
+  }
+
+  openTabs.value = restoredTabs;
+  const desired = session.value.tabs.find((tab) => tab.id === session.value.activeTabId);
+  const active = restoredTabs.find((tab) => tab.id === desired?.id)
+    ?? restoredTabs.find((tab) => tab.file.path === desired?.filePath)
+    ?? restoredTabs[0];
+  activeTabId.value = active.id;
+  currentFile.value = active.file;
+  source.value = active.source;
+  lastSavedContent.value = active.lastSavedContent;
+  status.value = active.file.path ?? '未保存的新 Markdown 文件';
+  session.value = mergeSession(session.value, {
+    filePath: active.file.path,
+    tabs: restoredTabs.map((tab) => ({
+      id: tab.id,
+      filePath: tab.file.path,
+      name: tab.file.name,
+      scrollTop: tab.scrollTop,
+      content: tab.file.path ? undefined : tab.source,
+      lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
+    })),
+    activeTabId: active.id,
+    scrollTop: active.scrollTop,
+  });
+  void refreshImageAssets(active.file.path ?? undefined);
+  void nextTick(() => {
+    if (preview.value) {
+      preview.value.scrollTop = active.scrollTop;
+    }
+    syncScroll('preview', false);
+    updateActiveHeadingFromPreview();
+  });
+  saveSessionNow(session.value);
+  return true;
+}
+
 onMounted(async () => {
+  isRestoringStartup = true;
   session.value = normalizeSession((await bridge?.getSession()) ?? createDefaultSession());
-  removeExternalOpenListener = bridge?.onExternalMarkdownFile(openMarkdownRequest);
+  removeExternalOpenListener = bridge?.onExternalMarkdownFile(queueMarkdownOpenRequest);
+  removeToggleEditorShortcutListener = bridge?.onToggleEditorShortcut(toggleEditor);
   const launchRequest = await bridge?.takeLaunchMarkdownFile();
   if (launchRequest) {
-    openMarkdownRequest(launchRequest);
-  } else {
+    queuedOpenRequests.push(launchRequest);
+  }
+
+  const restored = await restoreSessionTabs();
+  if (!restored && queuedOpenRequests.length === 0) {
     const file = await bridge?.readLastMarkdownFile();
     if (file) {
       setFile(file, session.value.scrollTop);
     }
   }
+  isRestoringStartup = false;
+  await flushQueuedOpenRequests();
+  await bridge?.notifyReadyForExternalOpen?.();
   await renderMermaid();
   window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('click', closeTabContextMenu);
+  window.addEventListener('beforeunload', saveSessionBeforeUnload);
   window.addEventListener('pointermove', onResizeMove);
   window.addEventListener('pointerup', stopResize);
 });
@@ -1342,7 +2403,10 @@ onBeforeUnmount(() => {
     saveSessionNow();
   }
   removeExternalOpenListener?.();
+  removeToggleEditorShortcutListener?.();
   window.removeEventListener('keydown', onKeyDown);
+  window.removeEventListener('click', closeTabContextMenu);
+  window.removeEventListener('beforeunload', saveSessionBeforeUnload);
   window.removeEventListener('pointermove', onResizeMove);
   window.removeEventListener('pointerup', stopResize);
 });
@@ -1404,6 +2468,16 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <button
+          data-testid="new-file"
+          class="icon-button"
+          type="button"
+          aria-label="新建"
+          :title="`新建 Markdown 文件 (${shortcutModifier}+T)`"
+          @click="createNewMarkdownTab()"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.plus" /></svg>
+        </button>
+        <button
           data-testid="open-file"
           class="icon-button"
           type="button"
@@ -1440,7 +2514,7 @@ onBeforeUnmount(() => {
           data-testid="export-html"
           class="icon-button"
           type="button"
-          :disabled="!currentFile"
+          :disabled="!currentFilePath()"
           aria-label="导出 HTML"
           title="导出整篇文档为 HTML"
           @click="exportDocument('html')"
@@ -1451,7 +2525,7 @@ onBeforeUnmount(() => {
           data-testid="export-pdf"
           class="icon-button"
           type="button"
-          :disabled="!currentFile"
+          :disabled="!currentFilePath()"
           aria-label="导出 PDF"
           title="导出整篇文档为 PDF"
           @click="exportDocument('pdf')"
@@ -1517,6 +2591,63 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
+    <nav class="tabbar" aria-label="打开的文件">
+      <div
+        v-for="tab in openTabs"
+        :key="tab.id"
+        class="tab-button"
+        role="button"
+        tabindex="0"
+        :class="{ active: tab.id === activeTabId, dirty: tab.source !== tab.lastSavedContent }"
+        :title="tab.file.path ?? '未保存的新 Markdown 文件'"
+        :data-testid="`tab-${tab.file.name}`"
+        draggable="true"
+        @click="activateTab(tab.id)"
+        @contextmenu="openTabContextMenu(tab.id, $event)"
+        @dragstart="startTabDrag(tab.id, $event)"
+        @dragover.prevent
+        @drop.stop.prevent="dropTabOn(tab.id, $event)"
+        @dragend="finishTabDrag"
+        @keydown.enter.prevent="activateTab(tab.id)"
+        @keydown.space.prevent="activateTab(tab.id)"
+      >
+        <span>{{ tab.file.name }}</span>
+        <span v-if="tab.source !== tab.lastSavedContent" class="dirty-dot" aria-label="有未保存更改" />
+        <button
+          class="tab-close"
+          type="button"
+          :aria-label="`关闭 ${tab.file.name}`"
+          :title="`关闭 ${tab.file.name}`"
+          :data-testid="`close-tab-${tab.file.name}`"
+          @click="closeTab(tab.id, $event)"
+        >
+          ×
+        </button>
+      </div>
+    </nav>
+
+    <div
+      v-if="tabContextMenu"
+      class="tab-context-menu"
+      data-testid="tab-context-menu"
+      role="menu"
+      :style="{ left: `${tabContextMenu.x}px`, top: `${tabContextMenu.y}px` }"
+      @click.stop
+    >
+      <button type="button" role="menuitem" data-testid="tab-duplicate" @click="duplicateTab(tabContextMenu.tabId)">
+        Duplicate
+      </button>
+      <button type="button" role="menuitem" data-testid="tab-copy-path" @click="copyTabPath(tabContextMenu.tabId)">
+        复制路径
+      </button>
+      <button type="button" role="menuitem" data-testid="tab-save-as" @click="saveContextTabAs(tabContextMenu.tabId)">
+        另存为
+      </button>
+      <button type="button" role="menuitem" data-testid="tab-copy-content" @click="copyTabContent(tabContextMenu.tabId)">
+        复制内容
+      </button>
+    </div>
+
     <section class="workspace" :style="gridStyle">
       <aside class="toc-panel" data-testid="toc">
         <div class="panel-toolbar">
@@ -1562,8 +2693,35 @@ onBeforeUnmount(() => {
             <button data-testid="insert-code" class="icon-button" type="button" aria-label="插入代码块" title="插入代码块" @click="insertCodeBlock">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.code" /></svg>
             </button>
-            <button data-testid="import-image" class="icon-button" type="button" :disabled="!currentFile" aria-label="导入图片" title="选择图片并复制到资源目录" @click="importImageAsset">
+            <button data-testid="import-image" class="icon-button" type="button" :disabled="!currentFilePath()" aria-label="导入图片" title="选择图片并复制到资源目录" @click="importImageAsset">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.image" /></svg>
+            </button>
+            <div class="image-upload-mode" role="group" aria-label="图片上传方式">
+              <button
+                data-testid="image-upload-local"
+                class="mode-button"
+                type="button"
+                :class="{ active: imageUploadMode === 'local' }"
+                aria-label="使用本地图片"
+                title="粘贴图片保存到 assets/images"
+                @click="setImageUploadMode('local')"
+              >
+                本地
+              </button>
+              <button
+                data-testid="image-upload-cloud"
+                class="mode-button"
+                type="button"
+                :class="{ active: imageUploadMode === 'cloud' }"
+                aria-label="使用云端图片"
+                title="云端上传入口，下一步实现服务配置"
+                @click="showCloudUploadPlaceholder"
+              >
+                云端
+              </button>
+            </div>
+            <button data-testid="cloud-image-upload" class="icon-button" type="button" aria-label="云端上传图片" title="云端上传入口，下一步实现服务配置" @click="showCloudUploadPlaceholder">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.cloudUpload" /></svg>
             </button>
           </div>
           <div class="asset-tools">
@@ -1578,7 +2736,7 @@ onBeforeUnmount(() => {
                 {{ asset.name }}
               </option>
             </select>
-            <button data-testid="refresh-assets" class="icon-button" type="button" :disabled="!currentFile" aria-label="刷新图片资源" title="刷新图片资源" @click="refreshImageAssets()">
+            <button data-testid="refresh-assets" class="icon-button" type="button" :disabled="!currentFilePath()" aria-label="刷新图片资源" title="刷新图片资源" @click="refreshImageAssets()">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
             </button>
             <button data-testid="insert-asset" class="icon-button" type="button" :disabled="!selectedAssetPath" aria-label="插入选中图片" title="插入选中图片" @click="insertSelectedAsset">
@@ -1602,16 +2760,18 @@ onBeforeUnmount(() => {
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
           </button>
         </div>
-        <textarea
-          ref="editor"
-          v-model="source"
-          class="source-editor"
-          data-testid="editor"
-          spellcheck="false"
-          placeholder="# 开始写 Markdown"
-          @scroll="onEditorScroll"
-          @paste="onEditorPaste"
-        />
+        <div class="source-editor-shell">
+          <textarea
+            ref="editor"
+            v-model="source"
+            class="source-editor"
+            data-testid="editor"
+            spellcheck="false"
+            placeholder="# 开始写 Markdown"
+            @scroll="onEditorScroll"
+            @paste="onEditorPaste"
+          />
+        </div>
       </section>
 
       <div
@@ -1633,6 +2793,47 @@ onBeforeUnmount(() => {
         v-html="previewHtml"
       />
     </section>
+
+    <div
+      v-if="cloudUploadDialog"
+      class="cloud-upload-modal"
+      data-testid="cloud-upload-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="云端上传图片"
+      @click.self="closeCloudUploadDialog"
+    >
+      <form class="cloud-upload-dialog" @submit.prevent="confirmCloudImageUpload">
+        <div class="cloud-upload-dialog-bar">
+          <strong>云端上传图片</strong>
+          <button class="icon-button" type="button" aria-label="关闭" title="关闭" :disabled="cloudUploadDialog.isUploading" @click="closeCloudUploadDialog">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.x" /></svg>
+          </button>
+        </div>
+        <div class="cloud-upload-fields">
+          <label>
+            <span>appId</span>
+            <input v-model="cloudUploadDialog.appId" data-testid="cloud-upload-app-id" type="text" required autocomplete="off" />
+          </label>
+          <label>
+            <span>subDir</span>
+            <input v-model="cloudUploadDialog.subDir" data-testid="cloud-upload-sub-dir" type="text" autocomplete="off" />
+          </label>
+          <label>
+            <span>链接名称</span>
+            <input v-model="cloudUploadDialog.linkName" data-testid="cloud-upload-link-name" type="text" autocomplete="off" :placeholder="cloudUploadDialog.file.name" />
+          </label>
+          <p class="cloud-upload-file" :title="cloudUploadDialog.file.absolutePath">{{ cloudUploadDialog.file.absolutePath }}</p>
+          <p v-if="cloudUploadDialog.error" class="cloud-upload-error" data-testid="cloud-upload-error">{{ cloudUploadDialog.error }}</p>
+        </div>
+        <div class="cloud-upload-actions">
+          <button type="button" class="secondary-button" :disabled="cloudUploadDialog.isUploading" @click="closeCloudUploadDialog">取消</button>
+          <button type="submit" class="primary-button" data-testid="cloud-upload-confirm" :disabled="cloudUploadDialog.isUploading">
+            {{ cloudUploadDialog.isUploading ? '上传中...' : '确认上传' }}
+          </button>
+        </div>
+      </form>
+    </div>
 
     <div
       v-if="activeMermaidDiagram"
@@ -1670,7 +2871,7 @@ onBeforeUnmount(() => {
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.image" /></svg>
           </button>
           <button class="icon-button" type="button" aria-label="关闭" title="关闭" @click="activeMermaidDiagram = null">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.eyeOff" /></svg>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.x" /></svg>
           </button>
         </div>
       </div>
@@ -1680,6 +2881,54 @@ onBeforeUnmount(() => {
           data-testid="mermaid-modal-canvas"
           :style="activeMermaidStyle"
           v-html="activeMermaidDiagram.html"
+        />
+      </div>
+    </div>
+
+    <div
+      v-if="activeImagePreview"
+      class="image-modal"
+      :class="{ 'image-modal--dragging': activeImagePreview.dragPointerId !== null }"
+      data-testid="image-modal"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="activeImagePreview.title"
+      @click.self="closeImageModalFromBackdrop"
+      @wheel="onImageModalWheel"
+      @pointerdown="onImageModalPointerDown"
+      @pointermove="onImageModalPointerMove"
+      @pointerup="onImageModalPointerUp"
+      @pointercancel="onImageModalPointerUp"
+    >
+      <div class="image-modal-bar">
+        <strong>{{ activeImagePreview.title }}</strong>
+        <div class="image-modal-actions">
+          <button data-testid="image-modal-zoom-out" class="icon-button" type="button" aria-label="缩小" title="缩小" @click="zoomActiveImage(-0.2)">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.minus" /></svg>
+          </button>
+          <button data-testid="image-modal-reset" class="icon-button" type="button" aria-label="还原比例" title="还原比例" @click="resetActiveImageView">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
+          </button>
+          <button data-testid="image-modal-zoom-in" class="icon-button" type="button" aria-label="放大" title="放大" @click="zoomActiveImage(0.2)">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.plus" /></svg>
+          </button>
+          <button data-testid="image-modal-download" class="icon-button" type="button" aria-label="下载图片" title="下载图片" @click="downloadActiveImage">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.download" /></svg>
+          </button>
+          <button class="icon-button" type="button" aria-label="关闭" title="关闭" @click="activeImagePreview = null">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.x" /></svg>
+          </button>
+        </div>
+      </div>
+      <div class="image-modal-body">
+        <img
+          class="image-modal-canvas"
+          data-testid="image-modal-canvas"
+          :alt="activeImagePreview.title"
+          :src="activeImagePreview.src"
+          :style="activeImageStyle"
+          draggable="false"
+          @dragstart.prevent
         />
       </div>
     </div>

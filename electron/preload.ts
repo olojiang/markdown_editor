@@ -48,6 +48,7 @@ function resolvePath(baseDir: string, relativePath: string): string {
 contextBridge.exposeInMainWorld('markdownBridge', {
   openMarkdownFile: () => ipcRenderer.invoke('markdown:open'),
   takeLaunchMarkdownFile: () => ipcRenderer.invoke('markdown:take-launch-file'),
+  notifyReadyForExternalOpen: () => ipcRenderer.invoke('markdown:ready-for-external-open'),
   onExternalMarkdownFile: (callback: (request: {
     file: { path: string; name: string; content: string };
     external: boolean;
@@ -59,10 +60,16 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     ipcRenderer.on('markdown:external-open', listener);
     return () => ipcRenderer.removeListener('markdown:external-open', listener);
   },
+  onToggleEditorShortcut: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('markdown:toggle-editor-shortcut', listener);
+    return () => ipcRenderer.removeListener('markdown:toggle-editor-shortcut', listener);
+  },
   readLastMarkdownFile: () => ipcRenderer.invoke('markdown:read-last'),
   readMarkdownFile: (filePath: string) => ipcRenderer.invoke('markdown:read-path', filePath),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   saveMarkdownFile: (filePath: string, content: string) => ipcRenderer.invoke('markdown:save', filePath, content),
+  saveMarkdownFileAs: (content: string, defaultName: string) => ipcRenderer.invoke('markdown:save-as', content, defaultName),
   exportHtml: (payload: {
     markdownPath: string;
     title: string;
@@ -77,6 +84,14 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   }) => ipcRenderer.invoke('markdown:export-pdf', payload),
   saveImageAsset: (markdownPath: string, fileName: string, data: ArrayBuffer, mimeType: string) =>
     ipcRenderer.invoke('asset:save-image', markdownPath, fileName, data, mimeType),
+  saveTempImageAsset: (fileName: string, data: ArrayBuffer, mimeType: string) =>
+    ipcRenderer.invoke('asset:save-temp-image', fileName, data, mimeType),
+  uploadCloudImage: (payload: {
+    filePath: string;
+    appId: string;
+    subDir: string;
+    linkName?: string;
+  }) => ipcRenderer.invoke('asset:upload-cloud-image', payload),
   importImageAsset: (markdownPath: string) => ipcRenderer.invoke('asset:import-image', markdownPath),
   listImageAssets: (markdownPath: string) => ipcRenderer.invoke('asset:list', markdownPath),
   deleteImageAsset: (markdownPath: string, relativePath: string) =>
@@ -88,6 +103,15 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   getSession: () => ipcRenderer.invoke('session:get'),
   saveSession: (session: {
     filePath: string | null;
+    tabs: {
+      id: string;
+      filePath: string | null;
+      name: string;
+      scrollTop: number;
+      content?: string;
+      lastSavedContent?: string;
+    }[];
+    activeTabId: string | null;
     recentFiles: string[];
     scrollTop: number;
     tocWidth: number;
@@ -97,4 +121,24 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     theme: 'light' | 'dark' | 'eye';
   }) =>
     ipcRenderer.invoke('session:save', session),
+  saveSessionSync: (session: {
+    filePath: string | null;
+    tabs: {
+      id: string;
+      filePath: string | null;
+      name: string;
+      scrollTop: number;
+      content?: string;
+      lastSavedContent?: string;
+    }[];
+    activeTabId: string | null;
+    recentFiles: string[];
+    scrollTop: number;
+    tocWidth: number;
+    editorWidth: number;
+    previewHidden: boolean;
+    editorVisible: boolean;
+    theme: 'light' | 'dark' | 'eye';
+  }) => ipcRenderer.sendSync('session:save-sync', session),
+  quitApp: () => ipcRenderer.invoke('app:quit'),
 });

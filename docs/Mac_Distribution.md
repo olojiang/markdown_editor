@@ -6,12 +6,11 @@
 pnpm build:mac
 ```
 
-This command runs the typecheck/build pipeline and then creates macOS DMG installers with `electron-builder`.
+This command runs the typecheck/build pipeline and then creates a macOS ARM64 DMG installer with `electron-builder`.
 
 Output files are written to `release/`:
 
-- `Markdown 纪-0.1.3-arm64.dmg` for Apple Silicon Macs.
-- `Markdown 纪-0.1.3-x64.dmg` for Intel Macs.
+- `Markdown 纪-0.1.4-arm64.dmg` for Apple Silicon Macs.
 
 For local development updates, run:
 
@@ -19,7 +18,7 @@ For local development updates, run:
 ./update_app.sh
 ```
 
-The script builds the macOS DMGs, copies the app matching the current CPU architecture to `/Applications/Markdown 纪.app`, removes the old `/Applications/Markdown Editor.app` if present, clears the local quarantine flag, and refreshes LaunchServices registration.
+The script builds the macOS ARM64 DMG, copies the ARM64 app to `/Applications/Markdown 纪.app`, removes the old `/Applications/Markdown Editor.app` if present, clears the local quarantine flag, and refreshes LaunchServices registration.
 
 ## Install Flow
 

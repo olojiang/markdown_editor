@@ -68,6 +68,27 @@ describe('renderMarkdown', () => {
     expect(html).toContain('data-source-line="3"');
     expect(html).toContain('data-source-line="5"');
   });
+
+  it('wraps regular code blocks with a copy action', () => {
+    const html = renderMarkdown('```python\nprint("hello")\n```\n\n    indented()');
+
+    expect(html).toContain('class="markdown-code-frame"');
+    expect(html).toContain('data-code-action="copy"');
+    expect(html).toContain('aria-label="复制代码"');
+    expect(html).toContain('class="language-python"');
+    expect(html).toContain('code-token-builtin">print</span>');
+    expect(html).toContain('code-token-string">&quot;hello&quot;</span>');
+    expect(html).toContain('code-token-function">indented</span>');
+  });
+
+  it('adds syntax token spans without removing the copyable text', () => {
+    const html = renderMarkdown('```python\nimport math\n# comment\nreturn None\n```');
+
+    expect(html).toContain('code-token-keyword">import</span>');
+    expect(html).toContain('code-token-comment"># comment</span>');
+    expect(html).toContain('code-token-keyword">return</span>');
+    expect(html).toContain('code-token-literal">None</span>');
+  });
 });
 
 describe('filterHeadingTree', () => {

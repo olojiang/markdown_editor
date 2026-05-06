@@ -8,24 +8,27 @@ TARGET_DIR="/Applications"
 TARGET_APP="${TARGET_DIR}/${APP_NAME}"
 OLD_TARGET_APP="${TARGET_DIR}/${OLD_APP_NAME}"
 
-cd "$ROOT_DIR"
-
-pnpm build:mac
-
 case "$(uname -m)" in
   arm64)
     BUILT_APP="${ROOT_DIR}/release/mac-arm64/${APP_NAME}"
     ;;
+  x86_64)
+    BUILT_APP="${ROOT_DIR}/release/mac/${APP_NAME}"
+    ;;
   *)
-    echo "Unsupported macOS architecture for the default ARM64 build: $(uname -m)" >&2
+    echo "Unsupported macOS architecture: $(uname -m)" >&2
     exit 1
     ;;
 esac
 
 if [[ ! -d "$BUILT_APP" ]]; then
   echo "Built app not found: $BUILT_APP" >&2
+  echo "Run pnpm build:mac first, then run this script again." >&2
   exit 1
 fi
+
+osascript -e 'tell application "Markdown 纪" to quit' >/dev/null 2>&1 || true
+sleep 1
 
 rm -rf "$TARGET_APP"
 rm -rf "$OLD_TARGET_APP"
@@ -37,4 +40,5 @@ if [[ -x "$LSREGISTER" ]]; then
   "$LSREGISTER" -f "$TARGET_APP" >/dev/null 2>&1 || true
 fi
 
+echo "Copied ${BUILT_APP}"
 echo "Updated ${TARGET_APP}"

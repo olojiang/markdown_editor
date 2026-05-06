@@ -5,6 +5,8 @@ describe('session helpers', () => {
   it('creates an empty session when no previous file exists', () => {
     expect(createDefaultSession()).toEqual({
       filePath: null,
+      tabs: [],
+      activeTabId: null,
       recentFiles: [],
       scrollTop: 0,
       tocWidth: 260,
@@ -20,6 +22,8 @@ describe('session helpers', () => {
       mergeSession({ filePath: '/tmp/a.md', scrollTop: 10 }, { scrollTop: 42 }),
     ).toEqual({
       filePath: '/tmp/a.md',
+      tabs: [],
+      activeTabId: null,
       recentFiles: [],
       scrollTop: 42,
       tocWidth: 260,

@@ -12,10 +12,15 @@ const recentFile = {
   name: 'recent.md',
   content: '# Recent',
 };
+const secondFile = {
+  path: '/docs/second.md',
+  name: 'second.md',
+  content: '# Second',
+};
 const imageAsset = {
   name: 'diagram.png',
-  relativePath: 'readme.assets/diagram.png',
-  absolutePath: '/docs/readme.assets/diagram.png',
+  relativePath: 'assets/images/diagram.png',
+  absolutePath: '/docs/assets/images/diagram.png',
   size: 128,
 };
 
@@ -27,6 +32,36 @@ function expectedShortcut(key: string): string {
 function setScrollMetrics(element: Element, scrollHeight: number, clientHeight: number): void {
   Object.defineProperty(element, 'scrollHeight', { configurable: true, value: scrollHeight });
   Object.defineProperty(element, 'clientHeight', { configurable: true, value: clientHeight });
+}
+
+function setElementTop(element: Element, top: number): void {
+  const rect = {
+    bottom: top,
+    height: 0,
+    left: 0,
+    right: 0,
+    top,
+    width: 0,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  };
+  Object.defineProperty(element, 'offsetTop', { configurable: true, value: top });
+  element.getBoundingClientRect = vi.fn(() => rect);
+  element.getClientRects = vi.fn(() => [rect] as unknown as DOMRectList);
+}
+
+function setPreviewSourceLineGeometry(preview: HTMLElement, containerTop: number, lineTops: Record<number, number>): void {
+  setElementTop(preview, containerTop);
+  preview.querySelectorAll<HTMLElement>('[data-source-line]').forEach((node) => {
+    const line = Number(node.dataset.sourceLine);
+    const relativeTop = lineTops[line];
+    if (relativeTop === undefined) {
+      return;
+    }
+
+    setElementTop(node, containerTop + relativeTop);
+  });
 }
 
 function attachRenderedMermaidSvg(wrapper: ReturnType<typeof mount>): void {
@@ -42,13 +77,16 @@ function attachRenderedMermaidSvg(wrapper: ReturnType<typeof mount>): void {
 describe('App', () => {
   beforeEach(() => {
     vi.useRealTimers();
+    window.localStorage.clear();
     window.markdownBridge = {
       openMarkdownFile: vi.fn().mockResolvedValue(openFile),
       takeLaunchMarkdownFile: vi.fn().mockResolvedValue(null),
+      notifyReadyForExternalOpen: vi.fn().mockResolvedValue(undefined),
       onExternalMarkdownFile: vi.fn().mockReturnValue(() => {}),
+      onToggleEditorShortcut: vi.fn().mockReturnValue(() => {}),
       readLastMarkdownFile: vi.fn().mockResolvedValue(openFile),
       readMarkdownFile: vi.fn().mockImplementation(async (path: string) => ({
-        ...(path === recentFile.path ? recentFile : openFile),
+        ...(path === recentFile.path ? recentFile : path === secondFile.path ? secondFile : openFile),
         path,
         name: path.split('/').pop() ?? 'file.md',
       })),
@@ -58,15 +96,34 @@ describe('App', () => {
         name: 'readme.md',
         content,
       })),
+      saveMarkdownFileAs: vi.fn().mockImplementation(async (content: string, defaultName: string) => ({
+        path: `/docs/${defaultName}`,
+        name: defaultName,
+        content,
+      })),
       exportHtml: vi.fn().mockResolvedValue('/docs/readme.html'),
       exportPdf: vi.fn().mockResolvedValue('/docs/readme.pdf'),
       saveImageAsset: vi.fn().mockResolvedValue(imageAsset),
+      saveTempImageAsset: vi.fn().mockResolvedValue({
+        name: '1778054400000.webp',
+        absolutePath: '/tmp/1778054400000.webp',
+        size: 4,
+        mimeType: 'image/webp',
+      }),
+      uploadCloudImage: vi.fn().mockResolvedValue({
+        url: 'https://assets.pinefield.cn/apps/pinefield.assets/2026-05-06/banner.webp',
+        path: 'apps/pinefield.assets/2026-05-06/banner.webp',
+        uploadedName: 'banner.webp',
+        localPath: '/tmp/1778054400000.webp',
+      }),
       importImageAsset: vi.fn().mockResolvedValue(imageAsset),
       listImageAssets: vi.fn().mockResolvedValue([imageAsset]),
       deleteImageAsset: vi.fn().mockResolvedValue([]),
       assetUrl: vi.fn((_markdownPath: string, relativePath: string) => `markdown-asset://local/?path=${encodeURIComponent(`/docs/${relativePath}`)}`),
       getSession: vi.fn().mockResolvedValue({
         filePath: openFile.path,
+        tabs: [],
+        activeTabId: null,
         recentFiles: [recentFile.path],
         scrollTop: 12,
         tocWidth: 300,
@@ -78,6 +135,11 @@ describe('App', () => {
       saveSession: vi.fn().mockImplementation(async (session) => {
         structuredClone(session);
       }),
+      saveSessionSync: vi.fn().mockImplementation((session) => {
+        structuredClone(session);
+        return true;
+      }),
+      quitApp: vi.fn().mockResolvedValue(undefined),
     };
   });
 
@@ -90,6 +152,7 @@ describe('App', () => {
     await vi.dynamicImportSettled();
 
     expect(window.markdownBridge?.readLastMarkdownFile).toHaveBeenCalled();
+    expect(window.markdownBridge?.notifyReadyForExternalOpen).toHaveBeenCalled();
     expect(wrapper.classes()).toContain('reader-mode');
     expect(wrapper.classes()).toContain('theme-light');
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', openFile.content);
@@ -100,6 +163,8 @@ describe('App', () => {
   it('opens a Finder-launched markdown file in reader mode without editor layout state', async () => {
     vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
       filePath: openFile.path,
+      tabs: [],
+      activeTabId: null,
       recentFiles: [],
       scrollTop: 120,
       tocWidth: 300,
@@ -117,6 +182,7 @@ describe('App', () => {
     await vi.dynamicImportSettled();
 
     expect(window.markdownBridge?.readLastMarkdownFile).not.toHaveBeenCalled();
+    expect(window.markdownBridge?.notifyReadyForExternalOpen).toHaveBeenCalled();
     expect(wrapper.classes()).toContain('reader-mode');
     expect(wrapper.classes()).not.toContain('preview-hidden');
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
@@ -229,11 +295,42 @@ describe('App', () => {
     await vi.dynamicImportSettled();
 
     expect(window.markdownBridge?.importImageAsset).toHaveBeenCalledWith(openFile.path);
-    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('![diagram](readme.assets/diagram.png)');
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('![diagram](assets/images/diagram.png)');
     expect(wrapper.find('[data-testid="asset-list"]').text()).toContain('diagram.png');
   });
 
-  it('saves pasted images into the document asset directory', async () => {
+  it('saves pasted images into assets/images as timestamped WebP files', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-06T08:00:00.000Z'));
+    const close = vi.fn();
+    const createImageBitmap = vi.fn().mockResolvedValue({ width: 8, height: 6, close });
+    vi.stubGlobal('createImageBitmap', createImageBitmap);
+    Object.defineProperty(window, 'createImageBitmap', { configurable: true, value: createImageBitmap });
+    window.createImageBitmap = createImageBitmap as unknown as typeof window.createImageBitmap;
+    const drawImage = vi.fn();
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ drawImage }),
+    });
+    Object.defineProperty(HTMLCanvasElement.prototype, 'toBlob', {
+      configurable: true,
+      value: vi.fn((callback: BlobCallback) => {
+        const webpBlob = new Blob(['webp'], { type: 'image/webp' });
+        Object.defineProperty(webpBlob, 'arrayBuffer', {
+          configurable: true,
+          value: vi.fn().mockResolvedValue(new ArrayBuffer(4)),
+        });
+        callback(webpBlob);
+      }),
+    });
+    const pastedAsset = {
+      name: '1778054400000.webp',
+      relativePath: 'assets/images/1778054400000.webp',
+      absolutePath: '/docs/assets/images/1778054400000.webp',
+      size: 4,
+    };
+    vi.mocked(window.markdownBridge!.saveImageAsset).mockResolvedValue(pastedAsset);
+
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
     const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
@@ -256,11 +353,133 @@ describe('App', () => {
     expect(preventDefault).toHaveBeenCalled();
     expect(window.markdownBridge?.saveImageAsset).toHaveBeenCalledWith(
       openFile.path,
+      '1778054400000.webp',
+      expect.any(ArrayBuffer),
+      'image/webp',
+    );
+    expect(drawImage).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('![1778054400000](assets/images/1778054400000.webp)');
+  });
+
+  it('opens a cloud upload dialog for pasted images and inserts the uploaded URL', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-06T08:00:00.000Z'));
+    Object.defineProperty(HTMLCanvasElement.prototype, 'toBlob', {
+      configurable: true,
+      value: undefined,
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="image-upload-cloud"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const file = {
+      name: 'paste.png',
+      type: 'image/png',
+      arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(4)),
+    };
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [file],
+      },
+    });
+
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveTempImageAsset).toHaveBeenCalledWith(
       'paste.png',
       expect.any(ArrayBuffer),
       'image/png',
     );
-    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('![diagram](readme.assets/diagram.png)');
+    expect(wrapper.find('[data-testid="cloud-upload-modal"]').exists()).toBe(true);
+    expect(wrapper.find<HTMLInputElement>('[data-testid="cloud-upload-app-id"]').element.value).toBe('pinefield.assets');
+    expect(wrapper.find<HTMLInputElement>('[data-testid="cloud-upload-sub-dir"]').element.value).toBe('/2026-05-06');
+
+    await wrapper.find('[data-testid="cloud-upload-link-name"]').setValue('banner');
+    await wrapper.find('form.cloud-upload-dialog').trigger('submit');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.uploadCloudImage).toHaveBeenCalledWith({
+      filePath: '/tmp/1778054400000.webp',
+      appId: 'pinefield.assets',
+      subDir: '/2026-05-06',
+      linkName: 'banner',
+    });
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain(
+      '![banner](https://assets.pinefield.cn/apps/pinefield.assets/2026-05-06/banner.webp)',
+    );
+  });
+
+  it('inserts cloud upload markdown at the original paste cursor after the dialog steals focus', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-06T08:00:00.000Z'));
+    Object.defineProperty(HTMLCanvasElement.prototype, 'toBlob', {
+      configurable: true,
+      value: undefined,
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="image-upload-cloud"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const insertionPoint = '# Title\n'.length;
+    editor.scrollTop = 42;
+    editor.setSelectionRange(insertionPoint, insertionPoint);
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [{
+          name: 'paste.png',
+          type: 'image/png',
+          arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(4)),
+        }],
+      },
+    });
+
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    await wrapper.find('[data-testid="cloud-upload-link-name"]').setValue('banner');
+    await wrapper.find('form.cloud-upload-dialog').trigger('submit');
+    await vi.dynamicImportSettled();
+
+    const inserted = '![banner](https://assets.pinefield.cn/apps/pinefield.assets/2026-05-06/banner.webp)';
+    expect(editor.value.slice(insertionPoint, insertionPoint + inserted.length)).toBe(inserted);
+    expect(editor.selectionStart).toBe(insertionPoint + inserted.length);
+    expect(editor.scrollTop).toBe(42);
+  });
+
+  it('enables cloud image upload mode from the toolbar entry', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="cloud-image-upload"]').trigger('click');
+
+    expect(wrapper.find('[data-testid="image-upload-cloud"]').classes()).toContain('active');
+    expect(window.localStorage.getItem('markdown-editor-cloud-upload-prefs')).toContain('"mode":"cloud"');
+    expect(wrapper.text()).toContain('云端上传已启用');
+  });
+
+  it('restores the persisted image upload mode on launch', async () => {
+    window.localStorage.setItem('markdown-editor-cloud-upload-prefs', JSON.stringify({
+      appId: 'pinefield.assets',
+      mode: 'cloud',
+      subDir: '/2026-05-06',
+    }));
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="image-upload-cloud"]').classes()).toContain('active');
+    await wrapper.find('[data-testid="image-upload-local"]').trigger('click');
+    expect(wrapper.find('[data-testid="image-upload-local"]').classes()).toContain('active');
+    expect(window.localStorage.getItem('markdown-editor-cloud-upload-prefs')).toContain('"mode":"local"');
   });
 
   it('syncs preview position when the editor scrolls', async () => {
@@ -277,6 +496,32 @@ describe('App', () => {
     await wrapper.find('[data-testid="editor"]').trigger('scroll');
 
     expect(preview.scrollTop).toBe(950);
+  });
+
+  it('syncs editor scrolling to preview source anchors relative to the preview pane', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    setScrollMetrics(preview, 2200, 200);
+    preview.scrollTop = 0;
+    setPreviewSourceLineGeometry(preview, 500, {
+      1: 20,
+      3: 80,
+      5: 120,
+      7: 160,
+      9: 210,
+      11: 260,
+    });
+
+    const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 22.4;
+    editor.scrollTop = 6 * lineHeight;
+    await wrapper.find('[data-testid="editor"]').trigger('scroll');
+
+    expect(preview.scrollTop).toBe(110);
   });
 
   it('debounces persisted scroll positions and keeps the latest value', async () => {
@@ -351,6 +596,9 @@ describe('App', () => {
     await wrapper.find('[data-testid="mermaid-modal-zoom-in"]').trigger('click');
     expect(wrapper.find('[data-testid="mermaid-modal-canvas"]').attributes('style')).toContain('scale(1.2)');
 
+    await wrapper.find('[data-testid="mermaid-modal"]').trigger('wheel', { deltaY: 100 });
+    expect(wrapper.find('[data-testid="mermaid-modal-canvas"]').attributes('style')).toContain('scale(1.1)');
+
     await wrapper.find('[data-testid="mermaid-modal"]').trigger('pointerdown', {
       pointerId: 1,
       clientX: 10,
@@ -388,6 +636,99 @@ describe('App', () => {
     expect(wrapper.text()).toContain('已导出 readme-mermaid-1.svg');
   });
 
+  it('wraps preview images with bounded image actions', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Images\n\n![Diagram](readme.assets/diagram.png)');
+    await vi.dynamicImportSettled();
+
+    const frame = wrapper.find('.markdown-image-frame');
+    const image = wrapper.find<HTMLImageElement>('.markdown-image');
+    expect(frame.exists()).toBe(true);
+    expect(image.exists()).toBe(true);
+    expect(image.attributes('src')).toContain('markdown-asset://local/');
+    expect(wrapper.find('[data-image-action="fullscreen"]').exists()).toBe(true);
+    expect(wrapper.find('[data-image-action="download"]').exists()).toBe(true);
+
+    await wrapper.find('[data-image-action="fullscreen"]').trigger('click');
+    expect(wrapper.find('.image-modal-bar strong').text()).toBe('图片 1：Diagram · diagram.png');
+  });
+
+  it('copies preview code blocks from the hover action', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('```python\nprint("hello")\n```');
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('.markdown-code-frame').exists()).toBe(true);
+    expect(wrapper.find('[data-code-action="copy"]').exists()).toBe(true);
+
+    await wrapper.find('[data-code-action="copy"]').trigger('click');
+
+    expect(writeText).toHaveBeenCalledWith('print("hello")\n');
+    expect(wrapper.find('[data-code-action="copy"]').classes()).toContain('is-copied');
+    expect(wrapper.find('[data-code-action="copy"]').attributes('aria-label')).toBe('已复制');
+    expect(wrapper.text()).toContain('已复制代码');
+  });
+
+  it('opens, zooms, drags, and downloads preview images', async () => {
+    const createObjectUrl = vi.fn(() => 'blob:image');
+    const revokeObjectUrl = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectUrl });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      blob: vi.fn().mockResolvedValue(new Blob(['image'], { type: 'image/png' })),
+    }));
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Images\n\n![Diagram](https://example.com/diagram.png)');
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-image-action="fullscreen"]').trigger('click');
+
+    expect(wrapper.find('[data-testid="image-modal"]').exists()).toBe(true);
+    expect(wrapper.find('.image-modal-bar strong').text()).toBe('图片 1：Diagram · diagram.png');
+    expect(wrapper.find<HTMLImageElement>('[data-testid="image-modal-canvas"]').attributes('src')).toBe('https://example.com/diagram.png');
+    expect(wrapper.find<HTMLImageElement>('[data-testid="image-modal-canvas"]').attributes('draggable')).toBe('false');
+
+    await wrapper.find('[data-testid="image-modal-zoom-in"]').trigger('click');
+    expect(wrapper.find('[data-testid="image-modal-canvas"]').attributes('style')).toContain('scale(1.2)');
+
+    await wrapper.find('[data-testid="image-modal"]').trigger('wheel', { deltaY: 100 });
+    expect(wrapper.find('[data-testid="image-modal-canvas"]').attributes('style')).toContain('scale(1.1)');
+
+    await wrapper.find('[data-testid="image-modal"]').trigger('pointerdown', {
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    expect(wrapper.find('[data-testid="image-modal"]').classes()).toContain('image-modal--dragging');
+    await wrapper.find('[data-testid="image-modal"]').trigger('pointermove', {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 45,
+    });
+    expect(wrapper.find('[data-testid="image-modal-canvas"]').attributes('style')).toContain('translate(20px, 35px)');
+
+    await wrapper.find('[data-testid="image-modal-download"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(fetch).toHaveBeenCalledWith('https://example.com/diagram.png');
+    expect(createObjectUrl).toHaveBeenCalledWith(expect.any(Blob));
+    expect(click).toHaveBeenCalled();
+  });
+
   it('filters the table of contents', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -408,6 +749,33 @@ describe('App', () => {
     expect(betaLink?.classes()).toContain('active');
   });
 
+  it('jumps from the table of contents using preview-relative heading positions', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    setScrollMetrics(preview, 2200, 200);
+    preview.scrollTop = 0;
+    setPreviewSourceLineGeometry(preview, 500, {
+      1: 20,
+      3: 80,
+      5: 120,
+      7: 160,
+      9: 210,
+      11: 260,
+    });
+
+    const betaLink = wrapper.findAll('.toc-link').find((link) => link.text() === 'Beta');
+    await betaLink?.trigger('click');
+
+    expect(preview.scrollTop).toBe(144);
+    const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 22.4;
+    expect(editor.scrollTop).toBeCloseTo(6 * lineHeight);
+  });
+
   it('opens a recent file and moves it to the front of the LRU list', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -419,6 +787,189 @@ describe('App', () => {
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ recentFiles: [recentFile.path, openFile.path] }),
+    );
+  });
+
+  it('opens different files in tabs and switches between them', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tab-recent.md"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+
+    expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', openFile.content);
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeTabId: openFile.path.startsWith('/') ? `file:${openFile.path}` : expect.any(String),
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ filePath: openFile.path }),
+          expect.objectContaining({ filePath: recentFile.path }),
+        ]),
+      }),
+    );
+  });
+
+  it('restores multiple tabs from the saved session', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: secondFile.path,
+      tabs: [
+        { id: `file:${openFile.path}`, filePath: openFile.path, name: openFile.name, scrollTop: 10 },
+        { id: `file:${secondFile.path}`, filePath: secondFile.path, name: secondFile.name, scrollTop: 24 },
+      ],
+      activeTabId: `file:${secondFile.path}`,
+      recentFiles: [secondFile.path, openFile.path],
+      scrollTop: 24,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(openFile.path);
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(secondFile.path);
+    expect(window.markdownBridge?.readLastMarkdownFile).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tab-second.md"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', secondFile.content);
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        activeTabId: `file:${openFile.path}`,
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ filePath: openFile.path, scrollTop: 10 }),
+          expect.objectContaining({ filePath: secondFile.path, scrollTop: 24 }),
+        ]),
+      }),
+    );
+  });
+
+  it('restores saved tabs before opening a launch file', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: secondFile.path,
+      tabs: [
+        { id: `file:${openFile.path}`, filePath: openFile.path, name: openFile.name, scrollTop: 10 },
+        { id: `file:${secondFile.path}`, filePath: secondFile.path, name: secondFile.name, scrollTop: 24 },
+      ],
+      activeTabId: `file:${secondFile.path}`,
+      recentFiles: [secondFile.path, openFile.path],
+      scrollTop: 24,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+    vi.mocked(window.markdownBridge!.takeLaunchMarkdownFile).mockResolvedValue({
+      file: recentFile,
+      external: true,
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tab-second.md"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tab-recent.md"]').exists()).toBe(true);
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        activeTabId: `file:${recentFile.path}`,
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ filePath: openFile.path }),
+          expect.objectContaining({ filePath: secondFile.path }),
+          expect.objectContaining({ filePath: recentFile.path }),
+        ]),
+      }),
+    );
+  });
+
+  it('persists tab order when tabs are moved', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
+    await vi.dynamicImportSettled();
+
+    const dragged = { value: '' };
+    const dataTransfer = {
+      effectAllowed: '',
+      setData: vi.fn((_type: string, value: string) => {
+        dragged.value = value;
+      }),
+      getData: vi.fn(() => dragged.value),
+    };
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('dragstart', { dataTransfer });
+    await wrapper.find('[data-testid="tab-recent.md"]').trigger('drop', { dataTransfer });
+
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tabs: [
+          expect.objectContaining({ filePath: recentFile.path }),
+          expect.objectContaining({ filePath: openFile.path }),
+        ],
+      }),
+    );
+  });
+
+  it('quits the app when the final tab closes', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="close-tab-readme.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ tabs: [], activeTabId: null, filePath: null }),
+    );
+    expect(window.markdownBridge?.quitApp).toHaveBeenCalled();
+  });
+
+  it('persists remaining tabs when a non-final tab closes', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="close-tab-recent.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        activeTabId: `file:${openFile.path}`,
+        tabs: [
+          expect.objectContaining({ filePath: openFile.path }),
+        ],
+      }),
+    );
+  });
+
+  it('saves all tabs synchronously before the window unloads', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
+    await vi.dynamicImportSettled();
+    window.dispatchEvent(new Event('beforeunload'));
+
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeTabId: `file:${recentFile.path}`,
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ filePath: openFile.path }),
+          expect.objectContaining({ filePath: recentFile.path }),
+        ]),
+      }),
     );
   });
 
@@ -488,6 +1039,66 @@ describe('App', () => {
     expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalled();
   });
 
+  it('creates an untitled markdown tab with the new-file shortcut', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid^="tab-未命名"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', '');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ filePath: null, content: '' }),
+        ]),
+      }),
+    );
+  });
+
+  it('marks dirty tabs when their content changes', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+
+    expect(wrapper.find('[data-testid="tab-readme.md"]').classes()).toContain('dirty');
+    expect(wrapper.find('[data-testid="tab-readme.md"] .dirty-dot').exists()).toBe(true);
+  });
+
+  it('supports tab context menu duplicate, copy path, save as, and copy content actions', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('contextmenu', {
+      clientX: 80,
+      clientY: 40,
+    });
+    expect(wrapper.find('[data-testid="tab-context-menu"]').exists()).toBe(true);
+
+    await wrapper.find('[data-testid="tab-copy-path"]').trigger('click');
+    expect(writeText).toHaveBeenCalledWith(openFile.path);
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
+    await wrapper.find('[data-testid="tab-copy-content"]').trigger('click');
+    expect(writeText).toHaveBeenCalledWith(openFile.content);
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
+    await wrapper.find('[data-testid="tab-duplicate"]').trigger('click');
+    expect(wrapper.find('[data-testid="tab-readme 副本.md"]').exists()).toBe(true);
+
+    await wrapper.find('[data-testid="tab-readme 副本.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
+    await wrapper.find('[data-testid="tab-save-as"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(window.markdownBridge?.saveMarkdownFileAs).toHaveBeenCalledWith(openFile.content, 'readme 副本.md');
+  });
+
   it('supports Windows-style Ctrl shortcuts', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -509,7 +1120,7 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe(`保存 Markdown 文件 (${expectedShortcut('S')})`);
     expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe(`显示/隐藏预览 (${expectedShortcut('P')})`);
     expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe(`切换阅读/编辑模式 (${expectedShortcut('E')})`);
-    expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('v0.1.3');
+    expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('v0.1.4');
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain(`打开 Markdown${expectedShortcut('O')}`);
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('Mermaid 预览');
   });
@@ -524,6 +1135,24 @@ describe('App', () => {
     expect(wrapper.classes()).toContain('preview-hidden');
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ previewHidden: true }),
+    );
+  });
+
+  it('toggles editor mode from the Electron command shortcut event', async () => {
+    const shortcutCallbacks: Array<() => void> = [];
+    vi.mocked(window.markdownBridge!.onToggleEditorShortcut).mockImplementation((callback) => {
+      shortcutCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    shortcutCallbacks[0]?.();
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.classes()).not.toContain('reader-mode');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ editorVisible: true, previewHidden: false }),
     );
   });
 });

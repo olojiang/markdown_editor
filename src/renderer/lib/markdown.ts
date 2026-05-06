@@ -39,6 +39,394 @@ function plainText(tokens: Token[], index: number): string {
   return inline?.children?.map((child) => child.content).join('') ?? inline?.content ?? '';
 }
 
+function renderCodeCopyButton(): string {
+  return [
+    '<button class="markdown-code-copy icon-button" type="button" data-code-action="copy" aria-label="复制代码" title="复制代码">',
+    '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 8h10v12H8z M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>',
+    '</button>',
+  ].join('');
+}
+
+const languageAliases = new Map([
+  ['bash', 'shell'],
+  ['cjs', 'javascript'],
+  ['console', 'shell'],
+  ['js', 'javascript'],
+  ['jsx', 'javascript'],
+  ['mjs', 'javascript'],
+  ['py', 'python'],
+  ['sh', 'shell'],
+  ['shell-session', 'shell'],
+  ['ts', 'typescript'],
+  ['tsx', 'typescript'],
+  ['zsh', 'shell'],
+]);
+
+const keywordGroups = {
+  generic: new Set([
+    'async',
+    'await',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'default',
+    'def',
+    'else',
+    'export',
+    'for',
+    'from',
+    'function',
+    'if',
+    'import',
+    'in',
+    'let',
+    'return',
+    'switch',
+    'try',
+    'while',
+  ]),
+  javascript: new Set([
+    'as',
+    'async',
+    'await',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'default',
+    'delete',
+    'do',
+    'else',
+    'export',
+    'extends',
+    'finally',
+    'for',
+    'from',
+    'function',
+    'if',
+    'import',
+    'in',
+    'instanceof',
+    'let',
+    'new',
+    'of',
+    'return',
+    'static',
+    'super',
+    'switch',
+    'this',
+    'throw',
+    'try',
+    'typeof',
+    'var',
+    'void',
+    'while',
+    'yield',
+  ]),
+  python: new Set([
+    'and',
+    'as',
+    'assert',
+    'async',
+    'await',
+    'break',
+    'class',
+    'continue',
+    'def',
+    'del',
+    'elif',
+    'else',
+    'except',
+    'finally',
+    'for',
+    'from',
+    'global',
+    'if',
+    'import',
+    'in',
+    'is',
+    'lambda',
+    'nonlocal',
+    'not',
+    'or',
+    'pass',
+    'raise',
+    'return',
+    'try',
+    'while',
+    'with',
+    'yield',
+  ]),
+  shell: new Set([
+    'case',
+    'do',
+    'done',
+    'elif',
+    'else',
+    'esac',
+    'export',
+    'fi',
+    'for',
+    'function',
+    'if',
+    'in',
+    'local',
+    'readonly',
+    'return',
+    'then',
+    'while',
+  ]),
+  typescript: new Set([
+    'abstract',
+    'as',
+    'async',
+    'await',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'default',
+    'delete',
+    'do',
+    'else',
+    'enum',
+    'export',
+    'extends',
+    'finally',
+    'for',
+    'from',
+    'function',
+    'if',
+    'implements',
+    'import',
+    'in',
+    'interface',
+    'let',
+    'namespace',
+    'new',
+    'of',
+    'private',
+    'protected',
+    'public',
+    'readonly',
+    'return',
+    'static',
+    'super',
+    'switch',
+    'this',
+    'throw',
+    'try',
+    'type',
+    'typeof',
+    'var',
+    'void',
+    'while',
+    'yield',
+  ]),
+};
+
+const literals = new Set([
+  'False',
+  'None',
+  'True',
+  'false',
+  'null',
+  'true',
+  'undefined',
+]);
+
+const builtins = new Set([
+  'Array',
+  'Boolean',
+  'Date',
+  'Error',
+  'JSON',
+  'Math',
+  'Number',
+  'Object',
+  'Promise',
+  'Set',
+  'String',
+  'console',
+  'dict',
+  'float',
+  'int',
+  'len',
+  'list',
+  'map',
+  'print',
+  'range',
+  'set',
+  'str',
+  'tuple',
+]);
+
+function normalizeCodeLanguage(language: string): keyof typeof keywordGroups | 'json' {
+  const normalized = language.trim().toLowerCase();
+  const aliased = languageAliases.get(normalized) ?? normalized;
+
+  if (aliased === 'json') {
+    return 'json';
+  }
+  if (aliased in keywordGroups) {
+    return aliased as keyof typeof keywordGroups;
+  }
+  return 'generic';
+}
+
+function tokenSpan(kind: string, value: string): string {
+  return `<span class="code-token code-token-${kind}">${escapeHtml(value)}</span>`;
+}
+
+function isWordStart(char: string): boolean {
+  return /[A-Za-z_$]/.test(char);
+}
+
+function isWordPart(char: string): boolean {
+  return /[\w$]/.test(char);
+}
+
+function readQuotedToken(content: string, start: number): number {
+  const quote = content[start];
+  const isTripleQuote = quote !== '`' && content.slice(start, start + 3) === quote.repeat(3);
+  const terminator = isTripleQuote ? quote.repeat(3) : quote;
+  let index = start + terminator.length;
+
+  while (index < content.length) {
+    if (!isTripleQuote && content[index] === '\\') {
+      index += 2;
+      continue;
+    }
+    if (content.slice(index, index + terminator.length) === terminator) {
+      return index + terminator.length;
+    }
+    index += 1;
+  }
+
+  return content.length;
+}
+
+function readPattern(content: string, start: number, pattern: RegExp): number {
+  const match = pattern.exec(content.slice(start));
+  return match?.index === 0 ? start + match[0].length : start;
+}
+
+function highlightSyntax(content: string, language: string): string {
+  const normalizedLanguage = normalizeCodeLanguage(language);
+  const keywords = normalizedLanguage === 'json' ? new Set<string>() : keywordGroups[normalizedLanguage];
+  const usesHashComments = normalizedLanguage === 'python' || normalizedLanguage === 'shell' || normalizedLanguage === 'generic';
+  const usesSlashComments = normalizedLanguage === 'javascript' || normalizedLanguage === 'typescript' || normalizedLanguage === 'generic';
+  let html = '';
+  let index = 0;
+
+  while (index < content.length) {
+    const char = content[index];
+    const next = content[index + 1];
+
+    if (/\s/.test(char)) {
+      const end = readPattern(content, index, /^\s+/);
+      html += escapeHtml(content.slice(index, end));
+      index = end;
+      continue;
+    }
+
+    if (usesHashComments && char === '#') {
+      const end = content.indexOf('\n', index);
+      const tokenEnd = end === -1 ? content.length : end;
+      html += tokenSpan('comment', content.slice(index, tokenEnd));
+      index = tokenEnd;
+      continue;
+    }
+
+    if (usesSlashComments && char === '/' && next === '/') {
+      const end = content.indexOf('\n', index);
+      const tokenEnd = end === -1 ? content.length : end;
+      html += tokenSpan('comment', content.slice(index, tokenEnd));
+      index = tokenEnd;
+      continue;
+    }
+
+    if (usesSlashComments && char === '/' && next === '*') {
+      const end = content.indexOf('*/', index + 2);
+      const tokenEnd = end === -1 ? content.length : end + 2;
+      html += tokenSpan('comment', content.slice(index, tokenEnd));
+      index = tokenEnd;
+      continue;
+    }
+
+    if (char === '"' || char === '\'' || char === '`') {
+      const end = readQuotedToken(content, index);
+      html += tokenSpan('string', content.slice(index, end));
+      index = end;
+      continue;
+    }
+
+    if (/\d/.test(char)) {
+      const end = readPattern(content, index, /^(?:0x[\da-f]+|0b[01]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i);
+      html += tokenSpan('number', content.slice(index, end));
+      index = end;
+      continue;
+    }
+
+    if (char === '@' && isWordStart(next ?? '')) {
+      const end = readPattern(content, index, /^@[\w$]+/);
+      html += tokenSpan('meta', content.slice(index, end));
+      index = end;
+      continue;
+    }
+
+    if (isWordStart(char)) {
+      const end = readPattern(content, index, /^[A-Za-z_$][\w$]*/);
+      const word = content.slice(index, end);
+      const lookahead = content.slice(end).match(/^\s*(\()/);
+
+      if (keywords.has(word)) {
+        html += tokenSpan('keyword', word);
+      } else if (literals.has(word)) {
+        html += tokenSpan('literal', word);
+      } else if (builtins.has(word)) {
+        html += tokenSpan('builtin', word);
+      } else if (lookahead) {
+        html += tokenSpan('function', word);
+      } else {
+        html += escapeHtml(word);
+      }
+      index = end;
+      continue;
+    }
+
+    if (/[+\-*/%=!<>&|^~?:.,;()[\]{}]/.test(char)) {
+      html += tokenSpan('operator', char);
+      index += 1;
+      continue;
+    }
+
+    html += escapeHtml(char);
+    index += 1;
+  }
+
+  return html;
+}
+
+function renderCopyableCodeBlock(content: string, language: string, sourceLine: string | null | undefined): string {
+  const sourceLineAttr = sourceLine ? ` data-source-line="${escapeHtml(sourceLine)}"` : '';
+  const classAttr = language ? ` class="language-${escapeHtml(language)}"` : '';
+
+  return [
+    `<div class="markdown-code-frame"${sourceLineAttr}>`,
+    renderCodeCopyButton(),
+    `<pre><code${classAttr}>${highlightSyntax(content, language)}</code></pre>`,
+    '</div>',
+  ].join('');
+}
+
 export function buildHeadingTree(markdown: string): HeadingNode[] {
   const md = new MarkdownIt({ html: false, linkify: true, typographer: true });
   const tokens = md.parse(markdown, {});
@@ -102,7 +490,6 @@ export function filterHeadingTree(nodes: HeadingNode[], query: string): HeadingN
 
 export function renderMarkdown(markdown: string): string {
   const md = new MarkdownIt({ html: false, linkify: true, typographer: true });
-  const defaultFence = md.renderer.rules.fence?.bind(md.renderer);
   const slug = createSlugger();
   const sourceLineTokenTypes = new Set([
     'blockquote_open',
@@ -138,13 +525,13 @@ export function renderMarkdown(markdown: string): string {
     });
   });
 
-  md.renderer.rules.fence = (tokens, index, options, env, self) => {
+  md.renderer.rules.fence = (tokens, index) => {
     const token = tokens[index];
-    const language = token.info.trim().split(/\s+/)[0]?.toLowerCase();
+    const language = token.info.trim().split(/\s+/)[0] ?? '';
     const sourceLine = token.attrGet('data-source-line');
     const sourceLineAttr = sourceLine ? ` data-source-line="${sourceLine}"` : '';
 
-    if (language === 'mermaid') {
+    if (language.toLowerCase() === 'mermaid') {
       return [
         `<div class="mermaid-panzoom"${sourceLineAttr} data-scale="1" data-x="0" data-y="0">`,
         '<div class="mermaid-actions" aria-label="Mermaid 图表操作">',
@@ -158,7 +545,12 @@ export function renderMarkdown(markdown: string): string {
       ].join('');
     }
 
-    return defaultFence ? defaultFence(tokens, index, options, env, self) : self.renderToken(tokens, index, options);
+    return renderCopyableCodeBlock(token.content, language, sourceLine);
+  };
+
+  md.renderer.rules.code_block = (tokens, index) => {
+    const token = tokens[index];
+    return renderCopyableCodeBlock(token.content, '', token.attrGet('data-source-line'));
   };
 
   return md.render(markdown);

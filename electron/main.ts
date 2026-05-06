@@ -1,9 +1,21 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol } from 'electron';
+import { execFileSync } from 'node:child_process';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 interface MarkdownSession {
   filePath: string | null;
+  tabs: {
+    id: string;
+    filePath: string | null;
+    name: string;
+    scrollTop: number;
+    content?: string;
+    lastSavedContent?: string;
+  }[];
+  activeTabId: string | null;
   recentFiles: string[];
   scrollTop: number;
   tocWidth: number;
@@ -38,6 +50,27 @@ interface ImageAsset {
   size: number;
 }
 
+interface TempImageAsset {
+  name: string;
+  absolutePath: string;
+  size: number;
+  mimeType: string;
+}
+
+interface CloudImageUploadRequest {
+  filePath: string;
+  appId: string;
+  subDir: string;
+  linkName?: string;
+}
+
+interface CloudImageUploadResult {
+  url: string;
+  path: string;
+  uploadedName: string;
+  localPath: string;
+}
+
 const isDev = !app.isPackaged && process.env.MARKDOWN_EDITOR_FORCE_PROD !== '1';
 const devServerUrl = 'http://127.0.0.1:26543';
 const appTitle = 'Markdown 纪';
@@ -52,8 +85,11 @@ const imageMimeTypes = new Map([
   ['.svg', 'image/svg+xml'],
   ['.webp', 'image/webp'],
 ]);
+const cloudUploadBaseUrl = 'https://test.sheepwall.com/fe-dash/api/oss/aliyun/resource';
 let mainWindow: BrowserWindow | null = null;
 let pendingExternalMarkdownPath: string | null = null;
+let rendererReadyForExternalOpen = false;
+let launchMarkdownPathConsumed = false;
 
 function normalizeTheme(theme: unknown): MarkdownSession['theme'] {
   return theme === 'dark' || theme === 'eye' ? theme : 'light';
@@ -62,6 +98,8 @@ function normalizeTheme(theme: unknown): MarkdownSession['theme'] {
 function createDefaultSession(): MarkdownSession {
   return {
     filePath: null,
+    tabs: [],
+    activeTabId: null,
     recentFiles: [],
     scrollTop: 0,
     tocWidth: 260,
@@ -81,6 +119,43 @@ function normalizeRecentFiles(recentFiles: unknown): string[] {
     .slice(0, 20);
 }
 
+function tabIdForPath(filePath: string): string {
+  return `file:${filePath}`;
+}
+
+function normalizeSessionTabs(tabs: unknown): MarkdownSession['tabs'] {
+  if (!Array.isArray(tabs)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return tabs.flatMap((tab): MarkdownSession['tabs'] => {
+    if (!tab || typeof tab !== 'object') {
+      return [];
+    }
+    const candidate = tab as Partial<MarkdownSession['tabs'][number]>;
+    if (candidate.filePath !== null && typeof candidate.filePath !== 'string') {
+      return [];
+    }
+    const id = typeof candidate.id === 'string'
+      ? candidate.id
+      : candidate.filePath ? tabIdForPath(candidate.filePath) : `draft:${candidate.name ?? 'untitled'}`;
+    if (seen.has(id)) {
+      return [];
+    }
+    seen.add(id);
+    const fallbackName = candidate.filePath ? path.basename(candidate.filePath) : '未命名.md';
+    return [{
+      id,
+      filePath: candidate.filePath ?? null,
+      name: typeof candidate.name === 'string' ? candidate.name : fallbackName,
+      scrollTop: typeof candidate.scrollTop === 'number' ? Math.max(0, candidate.scrollTop) : 0,
+      content: typeof candidate.content === 'string' ? candidate.content : undefined,
+      lastSavedContent: typeof candidate.lastSavedContent === 'string' ? candidate.lastSavedContent : undefined,
+    }];
+  });
+}
+
 function sessionFilePath(): string {
   return path.join(app.getPath('userData'), 'markdown-session.json');
 }
@@ -89,8 +164,13 @@ async function readSession(): Promise<MarkdownSession> {
   try {
     const raw = await fs.readFile(sessionFilePath(), 'utf8');
     const parsed = JSON.parse(raw) as Partial<MarkdownSession>;
+    const tabs = normalizeSessionTabs(parsed.tabs);
     return {
       filePath: typeof parsed.filePath === 'string' ? parsed.filePath : null,
+      tabs,
+      activeTabId: typeof parsed.activeTabId === 'string' && tabs.some((tab) => tab.id === parsed.activeTabId)
+        ? parsed.activeTabId
+        : tabs[0]?.id ?? null,
       recentFiles: normalizeRecentFiles(parsed.recentFiles),
       scrollTop: typeof parsed.scrollTop === 'number' ? parsed.scrollTop : 0,
       tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
@@ -109,8 +189,22 @@ async function saveSession(session: MarkdownSession): Promise<void> {
   await fs.writeFile(sessionFilePath(), JSON.stringify(session, null, 2), 'utf8');
 }
 
+function saveSessionSync(session: MarkdownSession): void {
+  fsSync.mkdirSync(path.dirname(sessionFilePath()), { recursive: true });
+  fsSync.writeFileSync(sessionFilePath(), JSON.stringify(session, null, 2), 'utf8');
+}
+
 function isMarkdownFilePath(filePath: string): boolean {
   return ['.md', '.markdown', '.mdown'].includes(path.extname(filePath).toLowerCase());
+}
+
+function markdownPathFromLaunchValue(value: string): string | null {
+  try {
+    const filePath = value.startsWith('file://') ? fileURLToPath(value) : value;
+    return isMarkdownFilePath(filePath) ? path.resolve(filePath) : null;
+  } catch {
+    return null;
+  }
 }
 
 function markdownBaseName(markdownPath: string): string {
@@ -118,7 +212,7 @@ function markdownBaseName(markdownPath: string): string {
 }
 
 function markdownAssetDir(markdownPath: string): string {
-  return path.join(path.dirname(markdownPath), `${markdownBaseName(markdownPath)}.assets`);
+  return path.join(path.dirname(markdownPath), 'assets', 'images');
 }
 
 function relativeMarkdownPath(markdownPath: string, filePath: string): string {
@@ -146,6 +240,9 @@ function uniqueAssetName(fileName: string): string {
   const sanitized = sanitizeAssetName(fileName);
   const extension = path.extname(sanitized);
   const base = path.basename(sanitized, extension);
+  if (/^\d{13}$/.test(base)) {
+    return sanitized;
+  }
   return `${base}-${Date.now()}${extension}`;
 }
 
@@ -158,6 +255,29 @@ function imageExtensionFromMime(mimeType: string): string {
   }
   const subtype = mimeType.startsWith('image/') ? mimeType.slice('image/'.length) : 'png';
   return imageAssetExtensions.has(`.${subtype}`) ? `.${subtype}` : '.png';
+}
+
+function imageExtensionFromFileName(fileName: string, mimeType: string): string {
+  const extension = path.extname(fileName).toLowerCase();
+  return imageAssetExtensions.has(extension) ? extension : imageExtensionFromMime(mimeType);
+}
+
+function cloudTempDir(): string {
+  return process.platform === 'win32' ? app.getPath('temp') : '/tmp';
+}
+
+async function uniqueTempImagePath(fileName: string, mimeType: string): Promise<string> {
+  const extension = imageExtensionFromFileName(fileName, mimeType);
+  let timestamp = Date.now();
+  for (;;) {
+    const candidate = path.join(cloudTempDir(), `${timestamp}${extension}`);
+    try {
+      await fs.access(candidate);
+      timestamp += 1;
+    } catch {
+      return candidate;
+    }
+  }
 }
 
 function assetPathFromRelative(markdownPath: string, relativePath: string): string {
@@ -183,8 +303,18 @@ async function readMarkdownFile(filePath: string): Promise<MarkdownFile> {
 }
 
 function markdownPathFromArgv(argv: string[]): string | null {
-  const filePath = argv.find((arg) => !arg.startsWith('-') && isMarkdownFilePath(arg));
-  return filePath ? path.resolve(filePath) : null;
+  for (const arg of argv) {
+    if (arg.startsWith('-')) {
+      continue;
+    }
+
+    const filePath = markdownPathFromLaunchValue(arg);
+    if (filePath) {
+      return filePath;
+    }
+  }
+
+  return null;
 }
 
 async function createOpenRequest(filePath: string, external: boolean): Promise<MarkdownOpenRequest> {
@@ -205,6 +335,9 @@ async function dispatchExternalMarkdownPath(filePath: string): Promise<void> {
   }
 
   if (mainWindow.webContents.isLoading()) {
+    return;
+  }
+  if (!rendererReadyForExternalOpen) {
     return;
   }
 
@@ -265,6 +398,20 @@ async function exportHtmlFile(payload: ExportDocumentPayload): Promise<string | 
   return result.filePath;
 }
 
+async function saveMarkdownFileAs(content: string, defaultName: string): Promise<MarkdownFile | null> {
+  const result = await dialog.showSaveDialog({
+    defaultPath: defaultName || '未命名.md',
+    filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] }],
+  });
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  await fs.writeFile(result.filePath, content, 'utf8');
+  return readMarkdownFile(result.filePath);
+}
+
 async function exportPdfFile(payload: ExportDocumentPayload): Promise<string | null> {
   const result = await dialog.showSaveDialog({
     defaultPath: path.join(path.dirname(payload.markdownPath), `${markdownBaseName(payload.markdownPath)}.pdf`),
@@ -312,6 +459,191 @@ async function saveImageAsset(
     relativePath: relativeMarkdownPath(markdownPath, targetPath),
     absolutePath: targetPath,
     size: stat.size,
+  };
+}
+
+async function saveTempImageAsset(fileName: string, data: ArrayBuffer | Uint8Array, mimeType: string): Promise<TempImageAsset> {
+  const targetPath = await uniqueTempImagePath(fileName, mimeType);
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, data instanceof ArrayBuffer ? Buffer.from(new Uint8Array(data)) : Buffer.from(data));
+  const stat = await fs.stat(targetPath);
+  return {
+    name: path.basename(targetPath),
+    absolutePath: targetPath,
+    size: stat.size,
+    mimeType: mimeType || imageMimeTypes.get(path.extname(targetPath).toLowerCase()) || 'image/png',
+  };
+}
+
+function sanitizeCloudFileName(fileName: string): string {
+  const extension = path.extname(fileName).toLowerCase();
+  const base = path.basename(fileName, extension)
+    .replace(/[^\p{L}\p{N}._-]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120) || 'image';
+  return `${base}${extension}`;
+}
+
+function uploadFileName(payload: CloudImageUploadRequest): string {
+  const originalName = path.basename(payload.filePath);
+  const originalExtension = path.extname(originalName).toLowerCase();
+  const requestedName = payload.linkName?.trim();
+  if (!requestedName) {
+    return originalName;
+  }
+
+  const requestedExtension = path.extname(requestedName).toLowerCase();
+  return sanitizeCloudFileName(requestedExtension ? requestedName : `${requestedName}${originalExtension || '.png'}`);
+}
+
+function normalizeCloudAppId(appId: string): string {
+  const normalized = appId.trim();
+  if (!/^[\w.-]+$/.test(normalized)) {
+    throw new Error('appId 只能包含字母、数字、点、下划线和连字符。');
+  }
+  return normalized;
+}
+
+function normalizeCloudSubDir(subDir: string): string {
+  const normalized = subDir.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.some((part) => part === '.' || part === '..')) {
+    throw new Error('subDir 不能包含 . 或 .. 路径片段。');
+  }
+  return parts.join('/');
+}
+
+function cloudResourcePath(appId: string, subDir: string, fileName: string): string {
+  return ['apps', appId, subDir, fileName].filter(Boolean).join('/');
+}
+
+function readPfSessionTokenFromShell(): string | null {
+  const shells = Array.from(new Set([process.env.SHELL, '/bin/zsh'].filter((shell): shell is string => Boolean(shell))));
+  const startMarker = '__MARKDOWN_EDITOR_PF_SESSION_TOKEN_START__';
+  const endMarker = '__MARKDOWN_EDITOR_PF_SESSION_TOKEN_END__';
+  const printTokenScript = `printf '\\n${startMarker}%s${endMarker}\\n' "$PF_SESSION_TOKEN"`;
+
+  for (const shell of shells) {
+    try {
+      const output = execFileSync(shell, ['-ic', printTokenScript], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 3000,
+      });
+      const token = output.match(new RegExp(`${startMarker}([\\s\\S]*?)${endMarker}`))?.[1]?.trim();
+      if (token) {
+        return token;
+      }
+    } catch {
+      // GUI-launched Electron apps may not inherit shell env; this fallback is best-effort.
+    }
+  }
+
+  return null;
+}
+
+function pfSessionToken(): string | null {
+  return process.env.PF_SESSION_TOKEN?.trim() || readPfSessionTokenFromShell();
+}
+
+function bearerAuthorizationHeader(): string {
+  const token = pfSessionToken();
+  if (!token) {
+    throw new Error('缺少 PF_SESSION_TOKEN 环境变量，且无法从 shell 配置读取，无法上传云端图片。');
+  }
+  return token.toLowerCase().startsWith('bearer ') ? token : `Bearer ${token}`;
+}
+
+function escapeMultipartHeader(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]/g, ' ');
+}
+
+function multipartUploadBody(fileName: string, mimeType: string, dir: string, fileData: Buffer): { body: Buffer; boundary: string } {
+  const boundary = `----markdown-editor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const chunks = [
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="dir"\r\n\r\n${dir}\r\n`),
+    Buffer.from(
+      `--${boundary}\r\n`
+      + `Content-Disposition: form-data; name="files"; filename="${escapeMultipartHeader(fileName)}"\r\n`
+      + `Content-Type: ${mimeType || 'application/octet-stream'}\r\n\r\n`,
+    ),
+    fileData,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ];
+  return { body: Buffer.concat(chunks), boundary };
+}
+
+async function readJsonResponse(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`云端图片接口请求失败：${response.status} ${text.slice(0, 300)}`);
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function extractUrlFromJson(value: unknown): string | null {
+  if (typeof value === 'string') {
+    return /^https?:\/\//i.test(value) ? value : null;
+  }
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of ['url', 'cdnUrl', 'ossUrl', 'resourceUrl', 'fileUrl', 'downloadUrl']) {
+    const found = extractUrlFromJson(record[key]);
+    if (found) {
+      return found;
+    }
+  }
+  for (const item of Object.values(record)) {
+    const found = extractUrlFromJson(item);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+async function uploadCloudImage(payload: CloudImageUploadRequest): Promise<CloudImageUploadResult> {
+  const appId = normalizeCloudAppId(payload.appId);
+  const subDir = normalizeCloudSubDir(payload.subDir);
+  const filePath = path.resolve(payload.filePath);
+  const fileName = uploadFileName({ ...payload, filePath });
+  const extension = path.extname(fileName).toLowerCase();
+  const mimeType = imageMimeTypes.get(extension) ?? 'application/octet-stream';
+  const resourcePath = cloudResourcePath(appId, subDir, fileName);
+  const { body, boundary } = multipartUploadBody(fileName, mimeType, `/${path.posix.dirname(resourcePath)}`, await fs.readFile(filePath));
+  const authorization = bearerAuthorizationHeader();
+
+  await readJsonResponse(await fetch(`${cloudUploadBaseUrl}/upload`, {
+    method: 'POST',
+    headers: {
+      authorization,
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+    },
+    body: new Uint8Array(body),
+  }));
+
+  const detailUrl = new URL(`${cloudUploadBaseUrl}/detail`);
+  detailUrl.searchParams.set('path', resourcePath);
+  const detail = await readJsonResponse(await fetch(detailUrl, {
+    headers: { authorization },
+  }));
+  const url = extractUrlFromJson(detail);
+  if (!url) {
+    throw new Error('上传成功，但资源详情接口没有返回可用图片链接。');
+  }
+
+  return {
+    url,
+    path: resourcePath,
+    uploadedName: fileName,
+    localPath: filePath,
   };
 }
 
@@ -372,9 +704,21 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow = window;
+  rendererReadyForExternalOpen = false;
   window.on('closed', () => {
     if (mainWindow === window) {
       mainWindow = null;
+    }
+  });
+  window.webContents.on('before-input-event', (event, input) => {
+    if (
+      input.type === 'keyDown'
+      && input.key.toLowerCase() === 'e'
+      && (input.meta || input.control)
+      && !input.alt
+    ) {
+      event.preventDefault();
+      window.webContents.send('markdown:toggle-editor-shortcut');
     }
   });
   if (isDev) {
@@ -400,13 +744,23 @@ ipcMain.handle('markdown:open', async () => {
 });
 
 ipcMain.handle('markdown:take-launch-file', async () => {
-  if (!pendingExternalMarkdownPath) {
+  const filePath = pendingExternalMarkdownPath
+    ?? (launchMarkdownPathConsumed ? null : markdownPathFromArgv(process.argv));
+  launchMarkdownPathConsumed = true;
+
+  if (!filePath) {
     return null;
   }
 
-  const filePath = pendingExternalMarkdownPath;
   pendingExternalMarkdownPath = null;
   return createOpenRequest(filePath, true);
+});
+
+ipcMain.handle('markdown:ready-for-external-open', async () => {
+  rendererReadyForExternalOpen = true;
+  if (pendingExternalMarkdownPath) {
+    await dispatchExternalMarkdownPath(pendingExternalMarkdownPath);
+  }
 });
 
 ipcMain.handle('markdown:read-last', async () => {
@@ -432,6 +786,10 @@ ipcMain.handle('markdown:save', async (_event, filePath: string, content: string
   return readMarkdownFile(filePath);
 });
 
+ipcMain.handle('markdown:save-as', async (_event, content: string, defaultName: string) => {
+  return saveMarkdownFileAs(content, defaultName);
+});
+
 ipcMain.handle('markdown:export-html', async (_event, payload: ExportDocumentPayload) => {
   return exportHtmlFile(payload);
 });
@@ -442,6 +800,14 @@ ipcMain.handle('markdown:export-pdf', async (_event, payload: ExportDocumentPayl
 
 ipcMain.handle('asset:save-image', async (_event, markdownPath: string, fileName: string, data: ArrayBuffer, mimeType: string) => {
   return saveImageAsset(markdownPath, fileName, data, mimeType);
+});
+
+ipcMain.handle('asset:save-temp-image', async (_event, fileName: string, data: ArrayBuffer, mimeType: string) => {
+  return saveTempImageAsset(fileName, data, mimeType);
+});
+
+ipcMain.handle('asset:upload-cloud-image', async (_event, payload: CloudImageUploadRequest) => {
+  return uploadCloudImage(payload);
 });
 
 ipcMain.handle('asset:import-image', async (_event, markdownPath: string) => {
@@ -471,12 +837,22 @@ ipcMain.handle('session:save', async (_event, session: MarkdownSession) => {
   await saveSession(session);
 });
 
+ipcMain.on('session:save-sync', (event, session: MarkdownSession) => {
+  saveSessionSync(session);
+  event.returnValue = true;
+});
+
+ipcMain.handle('app:quit', () => {
+  app.quit();
+});
+
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
-  if (!isMarkdownFilePath(filePath)) {
+  const markdownPath = markdownPathFromLaunchValue(filePath);
+  if (!markdownPath) {
     return;
   }
-  void dispatchExternalMarkdownPath(filePath);
+  void dispatchExternalMarkdownPath(markdownPath);
 });
 
 const singleInstanceLock = app.requestSingleInstanceLock();
@@ -505,9 +881,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  app.quit();
 });
 
 app.on('activate', () => {
