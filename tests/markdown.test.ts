@@ -69,6 +69,15 @@ describe('renderMarkdown', () => {
     expect(html).toContain('data-source-line="5"');
   });
 
+  it('wraps tables in a scrollable presentation frame', () => {
+    const html = renderMarkdown('| Scene | Why |\n| --- | --- |\n| Daily work | Fast search |');
+
+    expect(html).toContain('class="markdown-table-frame"');
+    expect(html).toContain('<table data-source-line="1">');
+    expect(html).toContain('<th>Scene</th>');
+    expect(html).toContain('<td>Daily work</td>');
+  });
+
   it('wraps regular code blocks with a copy action', () => {
     const html = renderMarkdown('```python\nprint("hello")\n```\n\n    indented()');
 

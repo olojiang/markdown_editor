@@ -553,5 +553,15 @@ export function renderMarkdown(markdown: string): string {
     return renderCopyableCodeBlock(token.content, '', token.attrGet('data-source-line'));
   };
 
+  md.renderer.rules.table_open = (tokens, index, options, env, self) => {
+    const sourceLine = tokens[index].attrGet('data-source-line');
+    const sourceLineAttr = sourceLine ? ` data-source-line="${sourceLine}"` : '';
+    return `<div class="markdown-table-frame"${sourceLineAttr}>${self.renderToken(tokens, index, options)}`;
+  };
+
+  md.renderer.rules.table_close = (tokens, index, options, env, self) => {
+    return `${self.renderToken(tokens, index, options)}</div>`;
+  };
+
   return md.render(markdown);
 }
