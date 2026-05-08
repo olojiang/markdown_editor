@@ -86,6 +86,7 @@ describe('App', () => {
       onExternalMarkdownFile: vi.fn().mockReturnValue(() => {}),
       onMarkdownFileChanged: vi.fn().mockReturnValue(() => {}),
       onToggleEditorShortcut: vi.fn().mockReturnValue(() => {}),
+      onCloseRequest: vi.fn().mockReturnValue(() => {}),
       readLastMarkdownFile: vi.fn().mockResolvedValue(openFile),
       readMarkdownFile: vi.fn().mockImplementation(async (path: string) => ({
         ...(path === recentFile.path ? recentFile : path === secondFile.path ? secondFile : openFile),
@@ -146,6 +147,7 @@ describe('App', () => {
         return true;
       }),
       quitApp: vi.fn().mockResolvedValue(undefined),
+      confirmClose: vi.fn().mockResolvedValue(undefined),
     };
   });
 
@@ -1002,7 +1004,7 @@ describe('App', () => {
     );
   });
 
-  it('quits the app when the final tab closes', async () => {
+  it('closes the app when the final clean tab closes', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
@@ -1012,7 +1014,7 @@ describe('App', () => {
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ tabs: [], activeTabId: null, filePath: null }),
     );
-    expect(window.markdownBridge?.quitApp).toHaveBeenCalled();
+    expect(window.markdownBridge?.confirmClose).toHaveBeenCalled();
   });
 
   it('persists remaining tabs when a non-final tab closes', async () => {
@@ -1051,6 +1053,48 @@ describe('App', () => {
         ]),
       }),
     );
+  });
+
+  it('asks how to handle dirty tabs before the app closes', async () => {
+    const closeCallbacks: Array<() => void> = [];
+    vi.mocked(window.markdownBridge!.onCloseRequest).mockImplementation((callback) => {
+      closeCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+    closeCallbacks[0]?.();
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="close-confirm-modal"]').exists()).toBe(true);
+
+    await wrapper.find('[data-testid="close-save-all"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalledWith(openFile.path, '# Changed');
+    expect(window.markdownBridge?.confirmClose).toHaveBeenCalled();
+  });
+
+  it('can discard dirty tabs before the app closes', async () => {
+    const closeCallbacks: Array<() => void> = [];
+    vi.mocked(window.markdownBridge!.onCloseRequest).mockImplementation((callback) => {
+      closeCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+    closeCallbacks[0]?.();
+    await nextTick();
+
+    await wrapper.find('[data-testid="close-discard-all"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveMarkdownFile).not.toHaveBeenCalled();
+    expect(window.markdownBridge?.confirmClose).toHaveBeenCalled();
   });
 
   it('opens a dropped markdown file', async () => {
@@ -1210,6 +1254,18 @@ describe('App', () => {
 
     expect(wrapper.find('[data-testid="tab-readme.md"]').classes()).toContain('dirty');
     expect(wrapper.find('[data-testid="tab-readme.md"] .dirty-dot').exists()).toBe(true);
+    expect(wrapper.find('.title-block strong').text()).toBe('readme.md *');
+    expect(wrapper.find('.title-block span').text()).toContain('未保存');
+  });
+
+  it('does not auto-save file edits before the manual save shortcut', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
+
+    expect(window.markdownBridge?.saveMarkdownFile).not.toHaveBeenCalled();
   });
 
   it('supports tab context menu duplicate, copy path, save as, and copy content actions', async () => {

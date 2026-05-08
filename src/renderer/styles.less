@@ -1134,7 +1134,8 @@ button.markdown-code-copy.is-copied:hover {
 .mermaid-modal,
 .image-modal,
 .cloud-upload-modal,
-.editor-config-modal {
+.editor-config-modal,
+.close-confirm-modal {
   align-items: stretch;
   background: rgba(10, 16, 24, 0.86);
   display: grid;
@@ -1146,14 +1147,16 @@ button.markdown-code-copy.is-copied:hover {
 }
 
 .cloud-upload-modal,
-.editor-config-modal {
+.editor-config-modal,
+.close-confirm-modal {
   align-items: center;
   grid-template-rows: minmax(0, 1fr);
   justify-items: center;
 }
 
 .cloud-upload-dialog,
-.editor-config-dialog {
+.editor-config-dialog,
+.close-confirm-dialog {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1166,7 +1169,8 @@ button.markdown-code-copy.is-copied:hover {
 }
 
 .cloud-upload-dialog-bar,
-.editor-config-dialog-bar {
+.editor-config-dialog-bar,
+.close-confirm-dialog-bar {
   align-items: center;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -1178,6 +1182,21 @@ button.markdown-code-copy.is-copied:hover {
     min-height: 34px;
     min-width: 34px;
     width: 34px;
+  }
+}
+
+.close-confirm-dialog {
+  max-width: min(460px, calc(100vw - 32px));
+}
+
+.close-confirm-body {
+  color: var(--text);
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+
+  p {
+    margin: 0;
   }
 }
 
@@ -1243,7 +1262,8 @@ button.markdown-code-copy.is-copied:hover {
 }
 
 .cloud-upload-actions,
-.editor-config-actions {
+.editor-config-actions,
+.close-confirm-actions {
   border-top: 1px solid var(--border);
   display: flex;
   gap: 8px;

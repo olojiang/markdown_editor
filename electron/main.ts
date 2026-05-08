@@ -93,6 +93,7 @@ let mainWindow: BrowserWindow | null = null;
 let pendingExternalMarkdownPath: string | null = null;
 let rendererReadyForExternalOpen = false;
 let launchMarkdownPathConsumed = false;
+let closeConfirmed = false;
 const watchedMarkdownFiles = new Map<string, fsSync.FSWatcher>();
 const markdownChangeTimers = new Map<string, NodeJS.Timeout>();
 
@@ -776,6 +777,14 @@ async function createWindow(): Promise<void> {
       mainWindow = null;
     }
   });
+  window.on('close', (event) => {
+    if (closeConfirmed) {
+      return;
+    }
+
+    event.preventDefault();
+    window.webContents.send('app:close-request');
+  });
   window.webContents.on('before-input-event', (event, input) => {
     if (
       input.type === 'keyDown'
@@ -910,6 +919,11 @@ ipcMain.on('session:save-sync', (event, session: MarkdownSession) => {
 
 ipcMain.handle('app:quit', () => {
   app.quit();
+});
+
+ipcMain.handle('app:confirm-close', () => {
+  closeConfirmed = true;
+  mainWindow?.close();
 });
 
 app.on('open-file', (event, filePath) => {

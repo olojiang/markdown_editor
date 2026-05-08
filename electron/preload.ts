@@ -70,6 +70,11 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     ipcRenderer.on('markdown:toggle-editor-shortcut', listener);
     return () => ipcRenderer.removeListener('markdown:toggle-editor-shortcut', listener);
   },
+  onCloseRequest: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('app:close-request', listener);
+    return () => ipcRenderer.removeListener('app:close-request', listener);
+  },
   readLastMarkdownFile: () => ipcRenderer.invoke('markdown:read-last'),
   readMarkdownFile: (filePath: string) => ipcRenderer.invoke('markdown:read-path', filePath),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
@@ -146,4 +151,5 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     theme: 'light' | 'dark' | 'eye';
   }) => ipcRenderer.sendSync('session:save-sync', session),
   quitApp: () => ipcRenderer.invoke('app:quit'),
+  confirmClose: () => ipcRenderer.invoke('app:confirm-close'),
 });

@@ -160,9 +160,10 @@ const tabContextMenu = ref<TabContextMenu | null>(null);
 const editorConfigDialogOpen = ref(false);
 const editorConfigDraft = ref('');
 const editorConfigError = ref('');
+const closeConfirmationVisible = ref(false);
+const closeConfirmationBusy = ref(false);
 const draggedTabId = ref<string | null>(null);
 const activeResize = ref<'toc' | 'editor' | null>(null);
-let saveTimer: number | undefined;
 let sessionSaveTimer: number | undefined;
 let untitledCounter = 1;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
@@ -170,6 +171,7 @@ let scrollSyncFrame: number | undefined;
 let removeExternalOpenListener: (() => void) | undefined;
 let removeMarkdownFileChangedListener: (() => void) | undefined;
 let removeToggleEditorShortcutListener: (() => void) | undefined;
+let removeCloseRequestListener: (() => void) | undefined;
 let mermaidModalDragged = false;
 let imageModalDragged = false;
 let isRestoringStartup = false;
@@ -211,6 +213,9 @@ const activeImageStyle = computed(() => {
 });
 const isEditorVisible = computed(() => session.value.editorVisible || !currentFile.value);
 const hasUnsavedChanges = computed(() => currentFile.value !== null && source.value !== lastSavedContent.value);
+const unsavedTabCount = computed(() => openTabs.value.filter((tab) => tab.source !== tab.lastSavedContent).length);
+const displayTitle = computed(() => (hasUnsavedChanges.value ? `${title.value} *` : title.value));
+const statusText = computed(() => (hasUnsavedChanges.value ? `${status.value} · 未保存` : status.value));
 const shortcutModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'));
 const openShortcutHint = computed(() => `打开 Markdown 文件 (${shortcutModifier.value}+O)`);
 const saveShortcutHint = computed(() => `保存 Markdown 文件 (${shortcutModifier.value}+S)`);
@@ -456,6 +461,120 @@ function saveSessionBeforeUnload(): void {
   } catch {
     saveSessionNow();
   }
+}
+
+function unsavedTabs(): OpenTab[] {
+  syncActiveTabState();
+  return openTabs.value.filter((tab) => tab.source !== tab.lastSavedContent);
+}
+
+async function saveAllUnsavedTabs(): Promise<boolean> {
+  if (!bridge) {
+    return false;
+  }
+
+  for (const tab of unsavedTabs()) {
+    if (!tab.file.path) {
+      await saveTabAs(tab.id);
+      if (!tab.file.path || tab.source !== tab.lastSavedContent) {
+        return false;
+      }
+      continue;
+    }
+
+    const saved = await bridge.saveMarkdownFile(tab.file.path, tab.source);
+    tab.file = saved;
+    tab.source = saved.content;
+    tab.lastSavedContent = saved.content;
+    if (tab.id === activeTabId.value) {
+      currentFile.value = saved;
+      source.value = saved.content;
+      lastSavedContent.value = saved.content;
+      status.value = `已保存 ${saved.path}`;
+    }
+  }
+
+  saveSessionNow();
+  return true;
+}
+
+function discardUnsavedChangesBeforeClose(): void {
+  syncActiveTabState();
+  openTabs.value = openTabs.value.flatMap((tab) => {
+    if (tab.source === tab.lastSavedContent) {
+      return [tab];
+    }
+    if (!tab.file.path) {
+      return [];
+    }
+
+    return [{
+      ...tab,
+      file: {
+        ...tab.file,
+        content: tab.lastSavedContent,
+      },
+      source: tab.lastSavedContent,
+    }];
+  });
+
+  const active = openTabs.value.find((tab) => tab.id === activeTabId.value) ?? openTabs.value[0] ?? null;
+  activeTabId.value = active?.id ?? null;
+  currentFile.value = active?.file ?? null;
+  source.value = active?.source ?? '';
+  lastSavedContent.value = active?.lastSavedContent ?? '';
+  status.value = active?.file.path ?? (active ? '未保存的新 Markdown 文件' : '请选择或打开一个 Markdown 文件');
+  saveSessionNow();
+}
+
+async function closeApplication(): Promise<void> {
+  saveSessionBeforeUnload();
+  if (bridge?.confirmClose) {
+    await bridge.confirmClose();
+    return;
+  }
+  await bridge?.quitApp?.();
+}
+
+async function requestApplicationClose(): Promise<void> {
+  if (unsavedTabs().length === 0) {
+    await closeApplication();
+    return;
+  }
+
+  closeConfirmationVisible.value = true;
+}
+
+async function saveAllAndClose(): Promise<void> {
+  closeConfirmationBusy.value = true;
+  try {
+    const saved = await saveAllUnsavedTabs();
+    if (saved) {
+      closeConfirmationVisible.value = false;
+      await closeApplication();
+      return;
+    }
+    status.value = '仍有未保存文件，已取消关闭';
+  } catch {
+    status.value = '保存失败，已取消关闭';
+  } finally {
+    closeConfirmationBusy.value = false;
+  }
+}
+
+async function discardAllAndClose(): Promise<void> {
+  closeConfirmationBusy.value = true;
+  try {
+    discardUnsavedChangesBeforeClose();
+    closeConfirmationVisible.value = false;
+    await closeApplication();
+  } finally {
+    closeConfirmationBusy.value = false;
+  }
+}
+
+function cancelCloseConfirmation(): void {
+  closeConfirmationVisible.value = false;
 }
 
 function recentFileName(filePath: string): string {
@@ -956,6 +1075,11 @@ async function closeTab(tabId: string, event?: MouseEvent): Promise<void> {
     return;
   }
 
+  if (openTabs.value.length === 1 && openTabs.value[index].source !== openTabs.value[index].lastSavedContent) {
+    closeConfirmationVisible.value = true;
+    return;
+  }
+
   openTabs.value.splice(index, 1);
   if (openTabs.value.length === 0) {
     activeTabId.value = null;
@@ -964,7 +1088,7 @@ async function closeTab(tabId: string, event?: MouseEvent): Promise<void> {
     lastSavedContent.value = '';
     status.value = '请选择或打开一个 Markdown 文件';
     persistTabSession({ filePath: null, activeTabId: null, scrollTop: 0 });
-    await bridge?.quitApp?.();
+    await closeApplication();
     return;
   }
 
@@ -1724,18 +1848,7 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
 }
 
 function scheduleSave(): void {
-  if (!currentFilePath()) {
-    scheduleSessionSave();
-    return;
-  }
-
-  if (saveTimer) {
-    window.clearTimeout(saveTimer);
-  }
-
-  saveTimer = window.setTimeout(() => {
-    void saveCurrentFile();
-  }, 350);
+  scheduleSessionSave();
 }
 
 function findNext(): void {
@@ -2689,6 +2802,7 @@ onMounted(async () => {
   removeExternalOpenListener = bridge?.onExternalMarkdownFile(queueMarkdownOpenRequest);
   removeMarkdownFileChangedListener = bridge?.onMarkdownFileChanged(onMarkdownFileChanged);
   removeToggleEditorShortcutListener = bridge?.onToggleEditorShortcut(toggleEditor);
+  removeCloseRequestListener = bridge?.onCloseRequest(requestApplicationClose);
   const launchRequest = await bridge?.takeLaunchMarkdownFile();
   if (launchRequest) {
     queuedOpenRequests.push(launchRequest);
@@ -2722,6 +2836,7 @@ onBeforeUnmount(() => {
   removeExternalOpenListener?.();
   removeMarkdownFileChangedListener?.();
   removeToggleEditorShortcutListener?.();
+  removeCloseRequestListener?.();
   window.removeEventListener('keydown', onKeyDown, true);
   window.removeEventListener('click', closeTabContextMenu);
   window.removeEventListener('beforeunload', saveSessionBeforeUnload);
@@ -2746,8 +2861,8 @@ onBeforeUnmount(() => {
   >
     <header class="topbar">
       <div class="title-block">
-        <strong>{{ title }}</strong>
-        <span>{{ status }}</span>
+        <strong>{{ displayTitle }}</strong>
+        <span>{{ statusText }}</span>
       </div>
       <div class="actions">
         <div class="theme-switcher" aria-label="主题">
@@ -3178,6 +3293,36 @@ onBeforeUnmount(() => {
         v-html="previewHtml"
       />
     </section>
+
+    <div
+      v-if="closeConfirmationVisible"
+      class="close-confirm-modal"
+      data-testid="close-confirm-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="关闭前处理未保存文件"
+    >
+      <div class="close-confirm-dialog">
+        <div class="close-confirm-dialog-bar">
+          <strong>有未保存的修改</strong>
+        </div>
+        <div class="close-confirm-body">
+          <p>{{ unsavedTabCount }} 个文件还没有手工保存。</p>
+          <p>关闭前可以全部保存，也可以放弃这些未保存修改。</p>
+        </div>
+        <div class="close-confirm-actions">
+          <button type="button" class="secondary-button" :disabled="closeConfirmationBusy" @click="cancelCloseConfirmation">
+            取消
+          </button>
+          <button type="button" class="secondary-button" data-testid="close-discard-all" :disabled="closeConfirmationBusy" @click="discardAllAndClose">
+            放弃修改并关闭
+          </button>
+          <button type="button" class="primary-button" data-testid="close-save-all" :disabled="closeConfirmationBusy" @click="saveAllAndClose">
+            全部保存并关闭
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div
       v-if="cloudUploadDialog"

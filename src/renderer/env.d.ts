@@ -84,6 +84,7 @@ interface MarkdownBridge {
   onExternalMarkdownFile(callback: (request: MarkdownOpenRequest) => void): () => void;
   onMarkdownFileChanged(callback: (file: MarkdownFile) => void): () => void;
   onToggleEditorShortcut(callback: () => void): () => void;
+  onCloseRequest(callback: () => void): () => void;
   readLastMarkdownFile(): Promise<MarkdownFile | null>;
   readMarkdownFile(path: string): Promise<MarkdownFile>;
   getPathForFile(file: File): string;
@@ -102,6 +103,7 @@ interface MarkdownBridge {
   saveSession(session: MarkdownSession): Promise<void>;
   saveSessionSync(session: MarkdownSession): boolean;
   quitApp(): Promise<void>;
+  confirmClose(): Promise<void>;
 }
 
 interface Window {
