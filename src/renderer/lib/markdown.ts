@@ -47,6 +47,25 @@ function renderCodeCopyButton(): string {
   ].join('');
 }
 
+function normalizeSequenceMessage(message: string): string {
+  return message
+    .replace(/=>/g, '⇒')
+    .replace(/,/g, '，')
+    .replace(/\.\.\./g, '…')
+    .replace(/[{};]/g, ' ');
+}
+
+export function normalizeMermaidSource(source: string): string {
+  if (!/^\s*sequenceDiagram\b/m.test(source)) {
+    return source;
+  }
+
+  return source.split('\n').map((line) => {
+    const message = line.match(/^(\s*\w+\s*(?:--|-)>>[+-]?\s*\w+\s*:)(.*)$/);
+    return message ? `${message[1]}${normalizeSequenceMessage(message[2])}` : line;
+  }).join('\n');
+}
+
 const languageAliases = new Map([
   ['bash', 'shell'],
   ['cjs', 'javascript'],
@@ -540,7 +559,7 @@ export function renderMarkdown(markdown: string): string {
         '<button class="icon-button" type="button" data-mermaid-action="download-png" aria-label="导出 PNG" title="导出 PNG">▧</button>',
         '<button class="icon-button" type="button" data-mermaid-action="download-webp" aria-label="导出 WebP" title="导出 WebP">▣</button>',
         '</div>',
-        `<pre class="mermaid">${escapeHtml(token.content)}</pre>`,
+        `<pre class="mermaid">${escapeHtml(normalizeMermaidSource(token.content))}</pre>`,
         '</div>',
       ].join('');
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHeadingTree, filterHeadingTree, renderMarkdown } from '@/renderer/lib/markdown';
+import { buildHeadingTree, filterHeadingTree, normalizeMermaidSource, renderMarkdown } from '@/renderer/lib/markdown';
 
 describe('buildHeadingTree', () => {
   it('returns collapsible heading nodes with stable slugs', () => {
@@ -59,6 +59,14 @@ describe('renderMarkdown', () => {
     expect(html).toContain('data-mermaid-action="download-png"');
     expect(html).toContain('data-mermaid-action="download-webp"');
     expect(html).toContain('graph TD');
+  });
+
+  it('normalizes sequence diagram message text that Mermaid parses as syntax', () => {
+    const source = `sequenceDiagram
+A->>B: evaluate_script("(() => { const el = ...; el.dispatchEvent(new MouseEvent('click',...)); })()")`;
+
+    expect(normalizeMermaidSource(source)).toContain('MouseEvent(\'click\'，…)');
+    expect(renderMarkdown(`\`\`\`mermaid\n${source}\n\`\`\``)).toContain('⇒');
   });
 
   it('adds source line anchors to rendered block elements', () => {

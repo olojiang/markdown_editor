@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import MarkdownMonacoEditor from '@/renderer/components/MarkdownMonacoEditor.vue';
 import TocTree from '@/renderer/components/TocTree.vue';
+import { parseEditorConfig } from '@/renderer/lib/editorConfig';
+import { rendererLog } from '@/renderer/lib/logger';
 import {
   buildHeadingTree,
   filterHeadingTree,
@@ -58,6 +61,15 @@ interface EditorInsertionRange {
   scrollTop: number;
 }
 
+interface EditorSurface {
+  focus(): void;
+  getElement(): HTMLElement | null;
+  getScrollTop(): number;
+  getSelectionRange(): { start: number; end: number };
+  setScrollTop(value: number): void;
+  setSelectionRange(start: number, end: number): void;
+}
+
 interface ActiveMermaidDiagram {
   container: HTMLElement;
   html: string;
@@ -100,6 +112,7 @@ const icons = {
   fileText: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13h8 M8 17h8 M8 9h2',
   image: 'M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z M8.5 11.5 11 14l2-2.5L17 16 M8 9h.01',
   info: 'M12 17v-5 M12 8h.01 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z',
+  keyboard: 'M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M6 10h.01 M10 10h.01 M14 10h.01 M18 10h.01 M7 14h10',
   link: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71 M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
   moon: 'M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z',
   minus: 'M5 12h14',
@@ -109,6 +122,7 @@ const icons = {
   replace: 'M3 7h11 M10 3l4 4-4 4 M21 17H10 M14 13l-4 4 4 4',
   save: 'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z M17 21v-8H7v8 M7 3v5h8',
   search: 'M21 21l-4.35-4.35 M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z',
+  settings: 'M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 0-.33 1.82V22a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8.6 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-.6-1 1.65 1.65 0 0 0-1.82-.33H2a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 8.6a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-.6 1.65 1.65 0 0 0 .33-1.82V2a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15.4 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.37.37.7.6 1 .45.58 1.14.73 1.82.5H22a2 2 0 1 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15z',
   sun: 'M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42 M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z',
   trash: 'M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6 M10 11v6 M14 11v6',
   upload: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12',
@@ -125,21 +139,27 @@ const source = ref('');
 const lastSavedContent = ref('');
 const session = ref<MarkdownSession>(createDefaultSession());
 const isPreviewFullscreen = ref(false);
+const previewZoom = ref(1);
 const activeMermaidDiagram = shallowRef<ActiveMermaidDiagram | null>(null);
 const activeImagePreview = shallowRef<ActiveImagePreview | null>(null);
 const preview = ref<HTMLElement | null>(null);
-const editor = ref<HTMLTextAreaElement | null>(null);
+const editor = ref<EditorSurface | null>(null);
 const status = ref('请选择或打开一个 Markdown 文件');
 const tocSearch = ref('');
 const collapsedHeadingIds = ref(new Set<string>());
 const activeHeadingId = ref('');
+const editorSearchVisible = ref(false);
 const editorSearch = ref('');
 const editorReplace = ref('');
+const editorSearchInput = ref<HTMLInputElement | null>(null);
 const imageAssets = ref<ImageAsset[]>([]);
 const selectedAssetPath = ref('');
 const imageUploadMode = ref<ImageUploadMode>(loadImageUploadMode());
 const cloudUploadDialog = ref<CloudUploadDialog | null>(null);
 const tabContextMenu = ref<TabContextMenu | null>(null);
+const editorConfigDialogOpen = ref(false);
+const editorConfigDraft = ref('');
+const editorConfigError = ref('');
 const draggedTabId = ref<string | null>(null);
 const activeResize = ref<'toc' | 'editor' | null>(null);
 let saveTimer: number | undefined;
@@ -148,6 +168,7 @@ let untitledCounter = 1;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
 let removeExternalOpenListener: (() => void) | undefined;
+let removeMarkdownFileChangedListener: (() => void) | undefined;
 let removeToggleEditorShortcutListener: (() => void) | undefined;
 let mermaidModalDragged = false;
 let imageModalDragged = false;
@@ -156,6 +177,9 @@ let isFlushingOpenQueue = false;
 const queuedOpenRequests: MarkdownOpenRequest[] = [];
 const previewScrollOffset = -50;
 const sessionSaveDelay = 200;
+const previewZoomStep = 0.1;
+const previewZoomMin = 0.7;
+const previewZoomMax = 1.6;
 const cloudUploadPrefsKey = 'markdown-editor-cloud-upload-prefs';
 const codeCopyResetTimers = new WeakMap<HTMLButtonElement, number>();
 const codeCopyIconSvg = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 8h10v12H8z M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>';
@@ -190,14 +214,23 @@ const hasUnsavedChanges = computed(() => currentFile.value !== null && source.va
 const shortcutModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'));
 const openShortcutHint = computed(() => `打开 Markdown 文件 (${shortcutModifier.value}+O)`);
 const saveShortcutHint = computed(() => `保存 Markdown 文件 (${shortcutModifier.value}+S)`);
+const refreshShortcutHint = computed(() => `从磁盘重新读取当前 Markdown 文件 (${shortcutModifier.value}+R)`);
 const previewShortcutHint = computed(() => `显示/隐藏预览 (${shortcutModifier.value}+P)`);
 const editorShortcutHint = computed(() => `切换阅读/编辑模式 (${shortcutModifier.value}+E)`);
+const previewZoomPercent = computed(() => Math.round(previewZoom.value * 100));
+const previewZoomStyle = computed(() => ({
+  '--preview-zoom': previewZoom.value,
+}));
+const isPreviewZoomResettable = computed(() => Math.abs(previewZoom.value - 1) > 0.001);
 const helpItems = computed(() => [
   { label: '新建 Markdown', shortcut: `${shortcutModifier.value}+T`, detail: '创建一个未保存的空白 Markdown 标签页' },
   { label: '打开 Markdown', shortcut: `${shortcutModifier.value}+O`, detail: '选择本地 .md、.markdown、.mdown 文件' },
   { label: '保存当前文件', shortcut: `${shortcutModifier.value}+S`, detail: '有改动时写回原文件' },
+  { label: '刷新当前文件', shortcut: `${shortcutModifier.value}+R`, detail: '从磁盘重新读取；有未保存修改时不会覆盖' },
   { label: '阅读/编辑', shortcut: `${shortcutModifier.value}+E`, detail: '阅读模式只显示预览，需要时切回源码编辑' },
   { label: '显示/隐藏预览', shortcut: `${shortcutModifier.value}+P`, detail: '编辑时切换右侧预览区域' },
+  { label: '预览缩放', shortcut: `${shortcutModifier.value}+/ ${shortcutModifier.value}+-`, detail: '放大或缩小 Markdown 预览' },
+  { label: '还原预览缩放', shortcut: `${shortcutModifier.value}+0`, detail: '把预览缩放还原为 100%' },
   { label: '最近文件', shortcut: '', detail: '快速打开最近访问过的 Markdown 文件' },
   { label: '导出 HTML/PDF', shortcut: '', detail: '把当前渲染结果导出为独立文件' },
   { label: '目录', shortcut: '', detail: '搜索、折叠标题，并跳转到对应位置' },
@@ -484,8 +517,25 @@ function sourceLineCount(): number {
   return Math.max(1, source.value.split('\n').length);
 }
 
+function editorElement(): HTMLElement | null {
+  return editor.value?.getElement() ?? null;
+}
+
+function editorSelectionRange(): { start: number; end: number } | null {
+  return editor.value?.getSelectionRange() ?? null;
+}
+
+function editorScrollTop(): number {
+  return editor.value?.getScrollTop() ?? 0;
+}
+
+function setEditorScrollTop(scrollTop: number): void {
+  editor.value?.setScrollTop(scrollTop);
+}
+
 function editorLineHeight(): number {
-  const lineHeight = Number.parseFloat(window.getComputedStyle(editor.value as Element).lineHeight);
+  const element = editorElement();
+  const lineHeight = element ? Number.parseFloat(window.getComputedStyle(element).lineHeight) : 0;
   return Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 22.4;
 }
 
@@ -510,7 +560,7 @@ function interpolateTopFromAnchors(line: number, anchors: ScrollAnchor[]): numbe
 }
 
 function editorAnchors(): ScrollAnchor[] {
-  const element = editor.value;
+  const element = editorElement();
   if (!element || !document.body) {
     return [];
   }
@@ -579,7 +629,7 @@ function editorAnchors(): ScrollAnchor[] {
 }
 
 function lineFromEditorScroll(): number {
-  const element = editor.value;
+  const element = editorElement();
   if (!element) {
     return 1;
   }
@@ -593,24 +643,24 @@ function lineFromEditorScroll(): number {
 }
 
 function lineFromEditorSelection(): number {
-  const element = editor.value;
-  if (!element) {
+  const selection = editorSelectionRange();
+  if (!selection) {
     return 1;
   }
 
-  const selectionStart = Math.min(Math.max(0, element.selectionStart), source.value.length);
+  const selectionStart = Math.min(Math.max(0, selection.start), source.value.length);
   return source.value.slice(0, selectionStart).split('\n').length;
 }
 
 function syncEditorToLine(line: number): void {
-  const element = editor.value;
+  const element = editorElement();
   if (!element) {
     return;
   }
 
   const anchors = editorAnchors();
   const targetTop = anchors.length > 0 ? interpolateTopFromAnchors(line, anchors) : (line - 1) * editorLineHeight();
-  element.scrollTop = Math.min(maxScrollTop(element), Math.max(0, targetTop));
+  setEditorScrollTop(Math.min(maxScrollTop(element), Math.max(0, targetTop)));
 }
 
 function previewNodeScrollTop(node: HTMLElement, container: HTMLElement): number {
@@ -685,7 +735,7 @@ function syncPreviewToLine(line: number, lock = true): void {
     return;
   }
 
-  const sourceElement = editor.value;
+  const sourceElement = editorElement();
   const targetElement = preview.value;
   if (!sourceElement || !targetElement || session.value.previewHidden || !isEditorVisible.value) {
     return;
@@ -716,8 +766,8 @@ function syncScroll(from: 'editor' | 'preview', lock = true): void {
     return;
   }
 
-  const sourceElement = from === 'editor' ? editor.value : preview.value;
-  const targetElement = from === 'editor' ? preview.value : editor.value;
+  const sourceElement = from === 'editor' ? editorElement() : preview.value;
+  const targetElement = from === 'editor' ? preview.value : editorElement();
   if (!sourceElement || !targetElement || session.value.previewHidden || !isEditorVisible.value) {
     return;
   }
@@ -756,7 +806,7 @@ function onEditorFocusLineChange(): void {
     const line = lineFromEditorSelection();
     syncPreviewToLine(line);
     updateActiveHeadingFromSourceLine(line);
-    rememberScroll(preview.value?.scrollTop ?? editor.value?.scrollTop ?? 0);
+    rememberScroll(preview.value?.scrollTop ?? editorScrollTop());
   });
 }
 
@@ -1128,6 +1178,83 @@ async function openFilePath(filePath: string): Promise<void> {
   }
 }
 
+function applyFreshFileContent(file: MarkdownFile, message: string): void {
+  if (!file.path) {
+    return;
+  }
+  const tab = openTabs.value.find((item) => item.file.path === file.path);
+  if (!tab) {
+    return;
+  }
+
+  const scrollTop = tab.scrollTop;
+  tab.file = file;
+  tab.lastSavedContent = file.content;
+  tab.source = file.content;
+
+  if (tab.id !== activeTabId.value) {
+    persistTabSession(undefined, { syncActive: false, deferred: true });
+    return;
+  }
+
+  currentFile.value = file;
+  lastSavedContent.value = file.content;
+  source.value = file.content;
+  status.value = message;
+  persistTabSession({
+    filePath: file.path,
+    tabs: serializedOpenTabs(),
+    scrollTop,
+  }, { syncActive: false, deferred: true });
+  void refreshImageAssets(file.path ?? undefined);
+  void nextTick(() => {
+    if (preview.value) {
+      preview.value.scrollTop = scrollTop;
+    }
+    syncScroll('preview', false);
+    updateActiveHeadingFromPreview();
+    void renderMermaid();
+  });
+}
+
+function onMarkdownFileChanged(file: MarkdownFile): void {
+  if (!file.path) {
+    return;
+  }
+  const tab = openTabs.value.find((item) => item.file.path === file.path);
+  if (!tab) {
+    return;
+  }
+  if (tab.source === file.content && tab.lastSavedContent === file.content) {
+    return;
+  }
+  if (tab.source !== tab.lastSavedContent) {
+    if (tab.id === activeTabId.value) {
+      status.value = '磁盘文件已更新；当前有未保存修改，未自动刷新';
+    }
+    return;
+  }
+
+  applyFreshFileContent(file, `已自动刷新 ${file.path}`);
+}
+
+async function refreshCurrentFile(): Promise<void> {
+  const filePath = currentFile.value?.path;
+  if (!filePath || !bridge) {
+    return;
+  }
+  if (hasUnsavedChanges.value) {
+    status.value = '当前有未保存修改，未从磁盘刷新';
+    return;
+  }
+
+  try {
+    applyFreshFileContent(await bridge.readMarkdownFile(filePath), `已刷新 ${filePath}`);
+  } catch {
+    status.value = `无法刷新 ${filePath}`;
+  }
+}
+
 function isMarkdownPath(filePath: string): boolean {
   return /\.(md|markdown|mdown)$/i.test(filePath);
 }
@@ -1257,15 +1384,15 @@ async function exportDocument(format: 'html' | 'pdf'): Promise<void> {
 }
 
 function editorInsertionRange(): EditorInsertionRange | null {
-  const element = editor.value;
-  if (!element) {
+  const selection = editorSelectionRange();
+  if (!selection) {
     return null;
   }
 
   return {
-    start: element.selectionStart,
-    end: element.selectionEnd,
-    scrollTop: element.scrollTop,
+    start: selection.start,
+    end: selection.end,
+    scrollTop: editorScrollTop(),
   };
 }
 
@@ -1285,9 +1412,9 @@ function replaceEditorRange(
   const end = Math.min(Math.max(start, range.end), source.value.length);
   source.value = `${source.value.slice(0, start)}${replacement}${source.value.slice(end)}`;
   void nextTick(() => {
-    element.focus();
-    element.setSelectionRange(start + selectionStartOffset, start + selectionEndOffset);
-    element.scrollTop = range.scrollTop;
+    editor.value?.focus();
+    editor.value?.setSelectionRange(start + selectionStartOffset, start + selectionEndOffset);
+    editor.value?.setScrollTop(range.scrollTop);
   });
 }
 
@@ -1296,8 +1423,8 @@ function replaceSelection(replacement: string, selectionStartOffset = replacemen
 }
 
 function selectedEditorText(): string {
-  const element = editor.value;
-  return element ? source.value.slice(element.selectionStart, element.selectionEnd) : '';
+  const selection = editorSelectionRange();
+  return selection ? source.value.slice(selection.start, selection.end) : '';
 }
 
 function insertTable(): void {
@@ -1547,6 +1674,11 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
   }
 
   event.preventDefault();
+  rendererLog.info('editor.paste.image.detected', {
+    fileName: imageFile.name,
+    mode: imageUploadMode.value,
+    type: imageFile.type,
+  });
   if (imageUploadMode.value === 'cloud') {
     if (!bridge?.saveTempImageAsset || !bridge.uploadCloudImage) {
       status.value = '当前环境不支持云端图片上传';
@@ -1558,6 +1690,11 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
       scrollTop: 0,
     };
     const converted = await convertImageFileToWebp(imageFile);
+    rendererLog.info('editor.paste.image.converted', {
+      fileName: converted.fileName,
+      mode: 'cloud',
+      mimeType: converted.mimeType,
+    });
     const tempAsset = await bridge.saveTempImageAsset(converted.fileName, converted.data, converted.mimeType);
     openCloudUploadDialog(tempAsset, insertionRange);
     return;
@@ -1570,6 +1707,11 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
   }
 
   const converted = await convertImageFileToWebp(imageFile);
+  rendererLog.info('editor.paste.image.converted', {
+    fileName: converted.fileName,
+    mode: 'local',
+    mimeType: converted.mimeType,
+  });
   const asset = await bridge.saveImageAsset(
     markdownPath,
     converted.fileName,
@@ -1598,12 +1740,12 @@ function scheduleSave(): void {
 
 function findNext(): void {
   const term = editorSearch.value;
-  const element = editor.value;
-  if (!term || !element) {
+  const selection = editorSelectionRange();
+  if (!term || !selection || !editor.value) {
     return;
   }
 
-  const start = element.selectionEnd === element.selectionStart ? element.selectionEnd : element.selectionEnd;
+  const start = selection.end;
   let index = source.value.indexOf(term, start);
   if (index === -1 && start > 0) {
     index = source.value.indexOf(term, 0);
@@ -1613,30 +1755,30 @@ function findNext(): void {
     return;
   }
 
-  element.focus();
-  element.setSelectionRange(index, index + term.length);
+  editor.value.focus();
+  editor.value.setSelectionRange(index, index + term.length);
 }
 
 function replaceCurrent(): void {
   const term = editorSearch.value;
-  const element = editor.value;
-  if (!term || !element) {
+  const selection = editorSelectionRange();
+  if (!term || !selection || !editor.value) {
     return;
   }
 
-  const selected = source.value.slice(element.selectionStart, element.selectionEnd);
+  const selected = source.value.slice(selection.start, selection.end);
   if (selected !== term) {
     findNext();
     return;
   }
 
-  const before = source.value.slice(0, element.selectionStart);
-  const after = source.value.slice(element.selectionEnd);
+  const before = source.value.slice(0, selection.start);
+  const after = source.value.slice(selection.end);
   const cursor = before.length + editorReplace.value.length;
   source.value = `${before}${editorReplace.value}${after}`;
   void nextTick(() => {
-    element.focus();
-    element.setSelectionRange(cursor, cursor);
+    editor.value?.focus();
+    editor.value?.setSelectionRange(cursor, cursor);
   });
 }
 
@@ -1651,8 +1793,80 @@ function replaceAll(): void {
   status.value = `已替换 ${count} 处`;
 }
 
+function showEditorSearch(): void {
+  editorSearchVisible.value = true;
+  if (!isEditorVisible.value) {
+    persistSession({
+      editorVisible: true,
+      previewHidden: false,
+    });
+  }
+  void nextTick(() => {
+    editorSearchInput.value?.focus();
+    editorSearchInput.value?.select();
+  });
+}
+
+function hideEditorSearch(): void {
+  editorSearchVisible.value = false;
+  void nextTick(() => editor.value?.focus());
+}
+
 function setTheme(theme: ThemeMode): void {
   persistSession({ theme });
+  rendererLog.info('app.theme.changed', { theme });
+}
+
+function persistEditorPreferences(patch: Partial<MarkdownSession['editorPreferences']>): void {
+  const editorPreferences = {
+    ...session.value.editorPreferences,
+    ...patch,
+  };
+  persistSession({ editorPreferences });
+  rendererLog.info('editor.preferences.persisted', {
+    configLength: editorPreferences.configText.length,
+    vimEnabled: editorPreferences.vimEnabled,
+  });
+}
+
+function toggleVimMode(): void {
+  const vimEnabled = !session.value.editorPreferences.vimEnabled;
+  persistEditorPreferences({ vimEnabled });
+  status.value = vimEnabled ? 'Vim 模式已开启' : 'Vim 模式已关闭';
+}
+
+function openEditorConfigDialog(): void {
+  editorConfigDraft.value = session.value.editorPreferences.configText;
+  editorConfigError.value = '';
+  editorConfigDialogOpen.value = true;
+}
+
+function closeEditorConfigDialog(): void {
+  editorConfigDialogOpen.value = false;
+  editorConfigError.value = '';
+  void nextTick(() => editor.value?.focus());
+}
+
+function saveEditorConfig(): void {
+  try {
+    parseEditorConfig(editorConfigDraft.value);
+  } catch (error) {
+    editorConfigError.value = '编辑器配置不是合法 JSON';
+    status.value = editorConfigError.value;
+    rendererLog.warn('editor.config.invalid', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+
+  persistEditorPreferences({ configText: editorConfigDraft.value });
+  editorConfigDialogOpen.value = false;
+  editorConfigError.value = '';
+  status.value = '编辑器配置已保存';
+}
+
+function onVimStatus(message: string): void {
+  status.value = message;
 }
 
 function toggleEditor(): void {
@@ -1701,6 +1915,18 @@ function stopResize(): void {
   activeResize.value = null;
 }
 
+function setPreviewZoom(value: number): void {
+  previewZoom.value = Math.min(previewZoomMax, Math.max(previewZoomMin, Number(value.toFixed(2))));
+}
+
+function zoomPreview(delta: number): void {
+  setPreviewZoom(previewZoom.value + delta);
+}
+
+function resetPreviewZoom(): void {
+  setPreviewZoom(1);
+}
+
 function onKeyDown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && activeMermaidDiagram.value) {
     activeMermaidDiagram.value = null;
@@ -1712,6 +1938,11 @@ function onKeyDown(event: KeyboardEvent): void {
     event.preventDefault();
     return;
   }
+  if (event.key === 'Escape' && editorSearchVisible.value) {
+    hideEditorSearch();
+    event.preventDefault();
+    return;
+  }
 
   const command = event.metaKey || event.ctrlKey;
   if (!command) {
@@ -1719,6 +1950,25 @@ function onKeyDown(event: KeyboardEvent): void {
   }
 
   const key = event.key.toLowerCase();
+  if (key === '+' || key === '=') {
+    event.preventDefault();
+    zoomPreview(previewZoomStep);
+    return;
+  }
+  if (key === '-' || key === '_') {
+    event.preventDefault();
+    zoomPreview(-previewZoomStep);
+    return;
+  }
+  if (key === '0') {
+    event.preventDefault();
+    resetPreviewZoom();
+    return;
+  }
+  if (key === 'f') {
+    event.preventDefault();
+    showEditorSearch();
+  }
   if (key === 'o') {
     event.preventDefault();
     void openFile();
@@ -1730,6 +1980,10 @@ function onKeyDown(event: KeyboardEvent): void {
   if (key === 's') {
     event.preventDefault();
     void saveCurrentFile();
+  }
+  if (key === 'r') {
+    event.preventDefault();
+    void refreshCurrentFile();
   }
   if (key === 'p') {
     event.preventDefault();
@@ -1783,27 +2037,27 @@ function mermaidThemeConfig(): Record<string, unknown> {
 
 async function renderMermaid(): Promise<void> {
   await nextTick();
-  const diagrams = preview.value?.querySelectorAll('.mermaid');
+  const diagrams = Array.from(preview.value?.querySelectorAll<HTMLElement>('.mermaid') ?? []);
   if (!diagrams?.length) {
     return;
   }
 
-  try {
-    const mermaid = await import('mermaid');
-    mermaid.default.initialize(mermaidThemeConfig());
-    await mermaid.default.run({ nodes: Array.from(diagrams) as HTMLElement[] });
-    applyMermaidTransforms();
-  } catch {
-    Array.from(diagrams).forEach((diagram) => {
-      const element = diagram as HTMLElement;
+  const mermaid = await import('mermaid');
+  mermaid.default.initialize(mermaidThemeConfig());
+  for (const element of diagrams) {
+    try {
+      await mermaid.default.run({ nodes: [element] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message.split('\n')[0] : '请检查语法';
       element.removeAttribute('data-processed');
-      element.textContent = 'Mermaid 图渲染失败，请检查语法';
+      element.textContent = `Mermaid 图渲染失败：${message}`;
       element.classList.add('mermaid-error');
       element.style.transform = '';
       element.style.transformOrigin = '';
-    });
-    status.value = 'Mermaid 图渲染失败，请检查语法';
+      status.value = `Mermaid 图渲染失败：${message}`;
+    }
   }
+  applyMermaidTransforms();
 }
 
 function mermaidSvg(container: HTMLElement): SVGSVGElement | null {
@@ -2433,6 +2687,7 @@ onMounted(async () => {
   isRestoringStartup = true;
   session.value = normalizeSession((await bridge?.getSession()) ?? createDefaultSession());
   removeExternalOpenListener = bridge?.onExternalMarkdownFile(queueMarkdownOpenRequest);
+  removeMarkdownFileChangedListener = bridge?.onMarkdownFileChanged(onMarkdownFileChanged);
   removeToggleEditorShortcutListener = bridge?.onToggleEditorShortcut(toggleEditor);
   const launchRequest = await bridge?.takeLaunchMarkdownFile();
   if (launchRequest) {
@@ -2450,7 +2705,7 @@ onMounted(async () => {
   await flushQueuedOpenRequests();
   await bridge?.notifyReadyForExternalOpen?.();
   await renderMermaid();
-  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('click', closeTabContextMenu);
   window.addEventListener('beforeunload', saveSessionBeforeUnload);
   window.addEventListener('pointermove', onResizeMove);
@@ -2465,8 +2720,9 @@ onBeforeUnmount(() => {
     saveSessionNow();
   }
   removeExternalOpenListener?.();
+  removeMarkdownFileChangedListener?.();
   removeToggleEditorShortcutListener?.();
-  window.removeEventListener('keydown', onKeyDown);
+  window.removeEventListener('keydown', onKeyDown, true);
   window.removeEventListener('click', closeTabContextMenu);
   window.removeEventListener('beforeunload', saveSessionBeforeUnload);
   window.removeEventListener('pointermove', onResizeMove);
@@ -2573,6 +2829,17 @@ onBeforeUnmount(() => {
           <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.save" /></svg>
         </button>
         <button
+          data-testid="refresh-file"
+          class="icon-button"
+          type="button"
+          :disabled="!currentFilePath()"
+          aria-label="刷新"
+          :title="refreshShortcutHint"
+          @click="refreshCurrentFile"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
+        </button>
+        <button
           data-testid="export-html"
           class="icon-button"
           type="button"
@@ -2623,6 +2890,39 @@ onBeforeUnmount(() => {
           @click="isPreviewFullscreen = !isPreviewFullscreen"
         >
           <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.expand" /></svg>
+        </button>
+        <button
+          data-testid="preview-zoom-out"
+          class="icon-button"
+          type="button"
+          :disabled="previewZoom <= previewZoomMin"
+          aria-label="缩小预览"
+          :title="`缩小预览 (${shortcutModifier}+-)，当前 ${previewZoomPercent}%`"
+          @click="zoomPreview(-previewZoomStep)"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.minus" /></svg>
+        </button>
+        <button
+          v-if="isPreviewZoomResettable"
+          data-testid="preview-zoom-reset"
+          class="icon-button"
+          type="button"
+          aria-label="还原预览缩放"
+          :title="`还原预览缩放 (${shortcutModifier}+0)，当前 ${previewZoomPercent}%`"
+          @click="resetPreviewZoom"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
+        </button>
+        <button
+          data-testid="preview-zoom-in"
+          class="icon-button"
+          type="button"
+          :disabled="previewZoom >= previewZoomMax"
+          aria-label="放大预览"
+          :title="`放大预览 (${shortcutModifier}++)，当前 ${previewZoomPercent}%`"
+          @click="zoomPreview(previewZoomStep)"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.plus" /></svg>
         </button>
         <div class="help-menu">
           <button
@@ -2702,11 +3002,11 @@ onBeforeUnmount(() => {
       <button type="button" role="menuitem" data-testid="tab-copy-path" @click="copyTabPath(tabContextMenu.tabId)">
         复制路径
       </button>
-      <button type="button" role="menuitem" data-testid="tab-save-as" @click="saveContextTabAs(tabContextMenu.tabId)">
-        另存为
-      </button>
       <button type="button" role="menuitem" data-testid="tab-copy-content" @click="copyTabContent(tabContextMenu.tabId)">
         复制内容
+      </button>
+      <button type="button" role="menuitem" data-testid="tab-save-as" @click="saveContextTabAs(tabContextMenu.tabId)">
+        另存为
       </button>
     </div>
 
@@ -2743,7 +3043,7 @@ onBeforeUnmount(() => {
         @pointerdown="startResize('toc', $event)"
       />
 
-      <section class="editor-panel">
+      <section class="editor-panel" :class="{ 'search-visible': editorSearchVisible }">
         <div class="format-toolbar" aria-label="Markdown 快捷工具栏">
           <div class="format-actions">
             <button data-testid="insert-table" class="icon-button" type="button" aria-label="插入表格" title="插入表格" @click="insertTable">
@@ -2754,6 +3054,27 @@ onBeforeUnmount(() => {
             </button>
             <button data-testid="insert-code" class="icon-button" type="button" aria-label="插入代码块" title="插入代码块" @click="insertCodeBlock">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.code" /></svg>
+            </button>
+            <button
+              data-testid="toggle-vim-mode"
+              class="icon-button"
+              type="button"
+              :class="{ active: session.editorPreferences.vimEnabled }"
+              :aria-label="session.editorPreferences.vimEnabled ? '关闭 Vim' : '开启 Vim'"
+              :title="session.editorPreferences.vimEnabled ? '关闭 Vim 模式' : '开启 Vim 模式'"
+              @click="toggleVimMode"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.keyboard" /></svg>
+            </button>
+            <button
+              data-testid="open-editor-config"
+              class="icon-button"
+              type="button"
+              aria-label="编辑器配置"
+              title="配置 Monaco 与 Vim"
+              @click="openEditorConfigDialog"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.settings" /></svg>
             </button>
             <button data-testid="import-image" class="icon-button" type="button" :disabled="!currentFilePath()" aria-label="导入图片" title="选择图片并复制到资源目录" @click="importImageAsset">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.image" /></svg>
@@ -2809,8 +3130,8 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
-        <div class="editor-tools">
-          <input v-model="editorSearch" data-testid="editor-search" type="search" placeholder="搜索源码" />
+        <div v-if="editorSearchVisible" class="editor-tools">
+          <input ref="editorSearchInput" v-model="editorSearch" data-testid="editor-search" type="search" placeholder="搜索源码" />
           <input v-model="editorReplace" data-testid="editor-replace" type="text" placeholder="替换为" />
           <button class="icon-button" type="button" aria-label="查找" title="查找" @click="findNext">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.search" /></svg>
@@ -2823,21 +3144,16 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <div class="source-editor-shell">
-          <textarea
+          <MarkdownMonacoEditor
             ref="editor"
             v-model="source"
-            class="source-editor"
-            data-testid="editor"
-            wrap="soft"
-            spellcheck="false"
-            placeholder="# 开始写 Markdown"
-            @click="onEditorFocusLineChange"
-            @focus="onEditorFocusLineChange"
-            @input="onEditorFocusLineChange"
-            @keyup="onEditorFocusLineChange"
+            :config-text="session.editorPreferences.configText"
+            :theme="session.theme"
+            :vim-enabled="session.editorPreferences.vimEnabled"
+            @focus-line-change="onEditorFocusLineChange"
             @scroll="onEditorScroll"
-            @select="onEditorFocusLineChange"
             @paste="onEditorPaste"
+            @vim-status="onVimStatus"
           />
         </div>
       </section>
@@ -2853,6 +3169,7 @@ onBeforeUnmount(() => {
         ref="preview"
         class="preview"
         data-testid="preview"
+        :style="previewZoomStyle"
         @scroll="onPreviewScroll"
         @wheel="onPreviewWheel"
         @click="onPreviewClick"
@@ -2899,6 +3216,36 @@ onBeforeUnmount(() => {
           <button type="submit" class="primary-button" data-testid="cloud-upload-confirm" :disabled="cloudUploadDialog.isUploading">
             {{ cloudUploadDialog.isUploading ? '上传中...' : '确认上传' }}
           </button>
+        </div>
+      </form>
+    </div>
+
+    <div
+      v-if="editorConfigDialogOpen"
+      class="editor-config-modal"
+      data-testid="editor-config-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="编辑器配置"
+      @click.self="closeEditorConfigDialog"
+    >
+      <form class="editor-config-dialog" @submit.prevent="saveEditorConfig">
+        <div class="editor-config-dialog-bar">
+          <strong>Monaco / Vim 配置</strong>
+          <button class="icon-button" type="button" aria-label="关闭" title="关闭" @click="closeEditorConfigDialog">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.x" /></svg>
+          </button>
+        </div>
+        <textarea
+          v-model="editorConfigDraft"
+          data-testid="editor-config-text"
+          spellcheck="false"
+          aria-label="编辑器配置 JSON"
+        />
+        <p v-if="editorConfigError" class="editor-config-error" data-testid="editor-config-error">{{ editorConfigError }}</p>
+        <div class="editor-config-actions">
+          <button type="button" class="secondary-button" @click="closeEditorConfigDialog">取消</button>
+          <button type="button" class="primary-button" data-testid="editor-config-save" @click="saveEditorConfig">保存配置</button>
         </div>
       </form>
     </div>

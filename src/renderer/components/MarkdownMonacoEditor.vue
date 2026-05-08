@@ -1,0 +1,368 @@
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
+import {
+  defaultEditorConfigText,
+  parseEditorConfig,
+  type ParsedEditorConfig,
+} from '@/renderer/lib/editorConfig';
+import { rendererLog } from '@/renderer/lib/logger';
+
+interface SelectionRange {
+  end: number;
+  start: number;
+}
+
+const props = defineProps<{
+  configText: string;
+  modelValue: string;
+  theme: 'light' | 'dark' | 'eye';
+  vimEnabled: boolean;
+}>();
+
+const emit = defineEmits<{
+  (event: 'focus-line-change'): void;
+  (event: 'paste', value: ClipboardEvent): void;
+  (event: 'scroll', value: Event): void;
+  (event: 'update:modelValue', value: string): void;
+  (event: 'vim-status', value: string): void;
+}>();
+
+const container = ref<HTMLElement | null>(null);
+const statusbar = ref<HTMLElement | null>(null);
+const fallbackEditor = ref<HTMLTextAreaElement | null>(null);
+const isTestMode = computed(() => (import.meta as ImportMeta & { env?: { MODE?: string } }).env?.MODE === 'test');
+const parsedConfig = computed(() => {
+  try {
+    return parseEditorConfig(props.configText);
+  } catch (error) {
+    rendererLog.warn('editor.config.fallback', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return parseEditorConfig(defaultEditorConfigText);
+  }
+});
+
+let monacoModule: typeof Monaco | null = null;
+let monacoEditor: Monaco.editor.IStandaloneCodeEditor | null = null;
+let vimMode: { dispose(): void } | null = null;
+let ignoreModelChange = false;
+let disposables: Array<{ dispose(): void }> = [];
+
+function editorTheme(): string {
+  return props.theme === 'dark' ? 'markdown-dark' : props.theme === 'eye' ? 'markdown-eye' : 'markdown-light';
+}
+
+function monacoOptions(config: ParsedEditorConfig): Monaco.editor.IStandaloneEditorConstructionOptions {
+  return {
+    automaticLayout: true,
+    detectIndentation: false,
+    fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+    fontSize: config.fontSize,
+    insertSpaces: config.insertSpaces,
+    language: 'markdown',
+    lineNumbers: config.lineNumbers,
+    minimap: { enabled: config.minimap },
+    padding: { bottom: 18, top: 18 },
+    renderLineHighlight: 'line',
+    scrollBeyondLastLine: false,
+    tabSize: config.tabSize,
+    theme: editorTheme(),
+    value: props.modelValue,
+    wordWrap: config.wordWrap,
+    wrappingIndent: 'same',
+  };
+}
+
+function defineMonacoThemes(monaco: typeof Monaco): void {
+  monaco.editor.defineTheme('markdown-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#fbfdff',
+      'editor.foreground': '#172026',
+      'editorCursor.foreground': '#0b7a75',
+      'editor.lineHighlightBackground': '#d9e8f255',
+    },
+  });
+  monaco.editor.defineTheme('markdown-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#0f1724',
+      'editor.foreground': '#e5edf6',
+      'editorCursor.foreground': '#5eead4',
+      'editor.lineHighlightBackground': '#123b3c66',
+    },
+  });
+  monaco.editor.defineTheme('markdown-eye', {
+    base: 'vs',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#fffef2',
+      'editor.foreground': '#243024',
+      'editorCursor.foreground': '#557a35',
+      'editor.lineHighlightBackground': '#dfead066',
+    },
+  });
+}
+
+function emitFocusLineChange(): void {
+  emit('focus-line-change');
+}
+
+function emitScroll(): void {
+  emit('scroll', new Event('scroll'));
+}
+
+function onFallbackInput(event: Event): void {
+  emit('update:modelValue', (event.target as HTMLTextAreaElement).value);
+  emitFocusLineChange();
+}
+
+function onFallbackPaste(event: ClipboardEvent): void {
+  emit('paste', event);
+}
+
+function onPasteCapture(event: ClipboardEvent): void {
+  emit('paste', event);
+}
+
+async function startVimMode(): Promise<void> {
+  if (!monacoEditor || vimMode) {
+    return;
+  }
+
+  const [{ initVimMode, VimMode }] = await Promise.all([import('monaco-vim')]);
+  vimMode = initVimMode(monacoEditor, statusbar.value);
+  const vimApi = (VimMode as unknown as { Vim?: {
+    mapclear?(mode?: string): void;
+    map?(before: string, after: string, mode?: string): void;
+    setOption?(name: string, value: unknown): void;
+  } }).Vim;
+  const config = parsedConfig.value;
+  vimApi?.setOption?.('mapleader', config.vimLeader);
+  vimApi?.mapclear?.();
+  config.vimKeymaps.forEach((keymap) => {
+    vimApi?.map?.(keymap.before, keymap.after, keymap.mode);
+  });
+  emit('vim-status', 'Vim 模式已开启');
+  rendererLog.info('editor.vim.enabled', {
+    keymaps: config.vimKeymaps.length,
+    leader: config.vimLeader,
+  });
+}
+
+function stopVimMode(): void {
+  if (!vimMode) {
+    return;
+  }
+  vimMode.dispose();
+  vimMode = null;
+  statusbar.value?.replaceChildren();
+  emit('vim-status', 'Vim 模式已关闭');
+  rendererLog.info('editor.vim.disabled');
+}
+
+async function syncVimMode(): Promise<void> {
+  if (!monacoEditor) {
+    return;
+  }
+  if (props.vimEnabled) {
+    await startVimMode();
+    return;
+  }
+  stopVimMode();
+}
+
+async function createMonacoEditor(): Promise<void> {
+  if (isTestMode.value || !container.value || monacoEditor) {
+    return;
+  }
+
+  rendererLog.info('editor.monaco.init.start', {
+    theme: props.theme,
+    vimEnabled: props.vimEnabled,
+  });
+  monacoModule = await import('monaco-editor/esm/vs/editor/editor.api.js');
+  defineMonacoThemes(monacoModule);
+  monacoEditor = monacoModule.editor.create(container.value, monacoOptions(parsedConfig.value));
+  disposables = [
+    monacoEditor.onDidChangeModelContent(() => {
+      if (ignoreModelChange) {
+        return;
+      }
+      emit('update:modelValue', monacoEditor?.getValue() ?? '');
+      emitFocusLineChange();
+    }),
+    monacoEditor.onDidScrollChange(emitScroll),
+    monacoEditor.onDidChangeCursorPosition(emitFocusLineChange),
+  ];
+  container.value.addEventListener('paste', onPasteCapture);
+  await syncVimMode();
+  rendererLog.info('editor.monaco.init.done', {
+    lineCount: monacoEditor.getModel()?.getLineCount() ?? 0,
+  });
+}
+
+function applyConfig(): void {
+  if (!monacoEditor) {
+    return;
+  }
+  try {
+    const config = parsedConfig.value;
+    monacoEditor.updateOptions(monacoOptions(config));
+    rendererLog.info('editor.monaco.config.applied', { ...config });
+  } catch (error) {
+    rendererLog.error('editor.monaco.config.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function getModel(): Monaco.editor.ITextModel | null {
+  return monacoEditor?.getModel() ?? null;
+}
+
+function getSelectionRange(): SelectionRange {
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    return {
+      start: fallback.selectionStart,
+      end: fallback.selectionEnd,
+    };
+  }
+
+  const model = getModel();
+  const selection = monacoEditor?.getSelection();
+  if (!model || !selection) {
+    return { start: props.modelValue.length, end: props.modelValue.length };
+  }
+
+  return {
+    start: model.getOffsetAt(selection.getStartPosition()),
+    end: model.getOffsetAt(selection.getEndPosition()),
+  };
+}
+
+function setSelectionRange(start: number, end: number): void {
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    fallback.setSelectionRange(start, end);
+    return;
+  }
+
+  const model = getModel();
+  if (!model || !monacoEditor) {
+    return;
+  }
+  const startPosition = model.getPositionAt(start);
+  const endPosition = model.getPositionAt(end);
+  monacoEditor.setSelection({
+    startLineNumber: startPosition.lineNumber,
+    startColumn: startPosition.column,
+    endLineNumber: endPosition.lineNumber,
+    endColumn: endPosition.column,
+  });
+  monacoEditor.revealPositionInCenterIfOutsideViewport(endPosition);
+}
+
+function getScrollTop(): number {
+  return fallbackEditor.value?.scrollTop ?? monacoEditor?.getScrollTop() ?? 0;
+}
+
+function setScrollTop(value: number): void {
+  if (fallbackEditor.value) {
+    fallbackEditor.value.scrollTop = value;
+    return;
+  }
+  monacoEditor?.setScrollTop(value);
+}
+
+function focus(): void {
+  fallbackEditor.value?.focus();
+  monacoEditor?.focus();
+}
+
+function getElement(): HTMLElement | null {
+  return fallbackEditor.value ?? monacoEditor?.getDomNode() ?? null;
+}
+
+onMounted(() => {
+  void createMonacoEditor();
+});
+
+onBeforeUnmount(() => {
+  stopVimMode();
+  disposables.forEach((disposable) => disposable.dispose());
+  disposables = [];
+  container.value?.removeEventListener('paste', onPasteCapture);
+  monacoEditor?.dispose();
+  monacoEditor = null;
+});
+
+watch(() => props.modelValue, (value) => {
+  const fallback = fallbackEditor.value;
+  if (fallback && fallback.value !== value) {
+    fallback.value = value;
+  }
+  if (!monacoEditor || monacoEditor.getValue() === value) {
+    return;
+  }
+  ignoreModelChange = true;
+  monacoEditor.setValue(value);
+  ignoreModelChange = false;
+});
+
+watch(() => props.theme, () => {
+  monacoModule?.editor.setTheme(editorTheme());
+});
+
+watch(() => props.configText, () => {
+  applyConfig();
+  if (props.vimEnabled) {
+    stopVimMode();
+    void nextTick(syncVimMode);
+  }
+});
+
+watch(() => props.vimEnabled, () => {
+  void syncVimMode();
+});
+
+defineExpose({
+  focus,
+  getElement,
+  getScrollTop,
+  getSelectionRange,
+  setScrollTop,
+  setSelectionRange,
+});
+</script>
+
+<template>
+  <div class="monaco-editor-host">
+    <textarea
+      v-if="isTestMode"
+      ref="fallbackEditor"
+      class="source-editor"
+      data-testid="editor"
+      :value="modelValue"
+      wrap="soft"
+      spellcheck="false"
+      placeholder="# 开始写 Markdown"
+      @click="emitFocusLineChange"
+      @focus="emitFocusLineChange"
+      @input="onFallbackInput"
+      @keyup="emitFocusLineChange"
+      @paste="onFallbackPaste"
+      @scroll="$emit('scroll', $event)"
+      @select="emitFocusLineChange"
+    />
+    <div v-else ref="container" class="source-editor monaco-editor-surface" data-testid="editor" />
+    <div ref="statusbar" class="vim-statusbar" data-testid="vim-statusbar" />
+  </div>
+</template>

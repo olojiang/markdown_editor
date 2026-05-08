@@ -1,3 +1,9 @@
+import {
+  defaultEditorPreferences,
+  normalizeEditorPreferences,
+  type EditorPreferences,
+} from '@/renderer/lib/editorConfig';
+
 export type ThemeMode = 'light' | 'dark' | 'eye';
 export const maxRecentFiles = 20;
 
@@ -20,6 +26,7 @@ export interface MarkdownSession {
   editorWidth: number;
   previewHidden: boolean;
   editorVisible: boolean;
+  editorPreferences: EditorPreferences;
   theme: ThemeMode;
 }
 
@@ -34,6 +41,7 @@ export function createDefaultSession(): MarkdownSession {
     editorWidth: 560,
     previewHidden: false,
     editorVisible: false,
+    editorPreferences: { ...defaultEditorPreferences },
     theme: 'light',
   };
 }
@@ -110,6 +118,7 @@ export function normalizeSession(session: Partial<MarkdownSession> | null | unde
     editorWidth: Math.max(320, Math.min(1200, typeof session?.editorWidth === 'number' ? session.editorWidth : 560)),
     previewHidden: session?.previewHidden === true,
     editorVisible: session?.editorVisible === true,
+    editorPreferences: normalizeEditorPreferences(session?.editorPreferences),
     theme: normalizeTheme(session?.theme),
   };
 }
@@ -127,5 +136,8 @@ export function mergeSession(
     activeTabId: patch.activeTabId === undefined ? normalized.activeTabId : patch.activeTabId,
     recentFiles: patch.recentFiles === undefined ? normalized.recentFiles : normalizeRecentFiles(patch.recentFiles),
     scrollTop: patch.scrollTop === undefined ? normalized.scrollTop : patch.scrollTop,
+    editorPreferences: patch.editorPreferences === undefined
+      ? normalized.editorPreferences
+      : normalizeEditorPreferences(patch.editorPreferences),
   };
 }

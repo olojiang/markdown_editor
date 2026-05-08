@@ -13,6 +13,10 @@ describe('session helpers', () => {
       editorWidth: 560,
       previewHidden: false,
       editorVisible: false,
+      editorPreferences: {
+        vimEnabled: false,
+        configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
+      },
       theme: 'light',
     });
   });
@@ -30,6 +34,10 @@ describe('session helpers', () => {
       editorWidth: 560,
       previewHidden: false,
       editorVisible: false,
+      editorPreferences: {
+        vimEnabled: false,
+        configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
+      },
       theme: 'light',
     });
   });
@@ -43,6 +51,36 @@ describe('session helpers', () => {
     );
     expect(mergeSession({ theme: 'unknown' } as never, {})).toEqual(
       expect.objectContaining({ theme: 'light' }),
+    );
+  });
+
+  it('normalizes persisted Monaco and Vim editor preferences', () => {
+    expect(mergeSession({
+      editorPreferences: {
+        vimEnabled: true,
+        configText: '{ "tabSize": 4, "wordWrap": "off", "minimap": true }',
+      },
+    }, {})).toEqual(
+      expect.objectContaining({
+        editorPreferences: {
+          vimEnabled: true,
+          configText: '{ "tabSize": 4, "wordWrap": "off", "minimap": true }',
+        },
+      }),
+    );
+
+    expect(mergeSession({
+      editorPreferences: {
+        vimEnabled: 'yes',
+        configText: 42,
+      },
+    } as never, {})).toEqual(
+      expect.objectContaining({
+        editorPreferences: {
+          vimEnabled: false,
+          configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
+        },
+      }),
     );
   });
 

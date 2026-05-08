@@ -93,6 +93,8 @@ let mainWindow: BrowserWindow | null = null;
 let pendingExternalMarkdownPath: string | null = null;
 let rendererReadyForExternalOpen = false;
 let launchMarkdownPathConsumed = false;
+const watchedMarkdownFiles = new Map<string, fsSync.FSWatcher>();
+const markdownChangeTimers = new Map<string, NodeJS.Timeout>();
 
 function normalizeTheme(theme: unknown): MarkdownSession['theme'] {
   return theme === 'dark' || theme === 'eye' ? theme : 'light';
@@ -298,11 +300,72 @@ async function readMarkdownFile(filePath: string): Promise<MarkdownFile> {
   }
 
   const content = await fs.readFile(filePath, 'utf8');
-  return {
+  const file = {
     path: filePath,
     name: path.basename(filePath),
     content,
   };
+  watchMarkdownFile(filePath);
+  return file;
+}
+
+function sendMarkdownFileChanged(filePath: string): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  void fs.readFile(filePath, 'utf8')
+    .then((content) => {
+      mainWindow?.webContents.send('markdown:file-changed', {
+        path: filePath,
+        name: path.basename(filePath),
+        content,
+      } satisfies MarkdownFile);
+    })
+    .catch(() => {
+      closeMarkdownWatcher(filePath);
+    });
+}
+
+function scheduleMarkdownFileChanged(filePath: string): void {
+  const previousTimer = markdownChangeTimers.get(filePath);
+  if (previousTimer) {
+    clearTimeout(previousTimer);
+  }
+
+  markdownChangeTimers.set(filePath, setTimeout(() => {
+    markdownChangeTimers.delete(filePath);
+    sendMarkdownFileChanged(filePath);
+  }, 120));
+}
+
+function closeMarkdownWatcher(filePath: string): void {
+  const timer = markdownChangeTimers.get(filePath);
+  if (timer) {
+    clearTimeout(timer);
+    markdownChangeTimers.delete(filePath);
+  }
+
+  watchedMarkdownFiles.get(filePath)?.close();
+  watchedMarkdownFiles.delete(filePath);
+}
+
+function watchMarkdownFile(filePath: string): void {
+  if (watchedMarkdownFiles.has(filePath)) {
+    return;
+  }
+
+  try {
+    const watcher = fsSync.watch(filePath, (eventType) => {
+      if (eventType === 'change' || eventType === 'rename') {
+        scheduleMarkdownFileChanged(filePath);
+      }
+    });
+    watcher.on('error', () => closeMarkdownWatcher(filePath));
+    watchedMarkdownFiles.set(filePath, watcher);
+  } catch {
+    // Some filesystems do not support fs.watch; opening still works without live refresh.
+  }
 }
 
 function markdownPathFromArgv(argv: string[]): string | null {
@@ -885,6 +948,10 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   app.quit();
+});
+
+app.on('before-quit', () => {
+  Array.from(watchedMarkdownFiles.keys()).forEach(closeMarkdownWatcher);
 });
 
 app.on('activate', () => {

@@ -35,6 +35,10 @@ interface MarkdownSession {
   editorWidth: number;
   previewHidden: boolean;
   editorVisible: boolean;
+  editorPreferences?: {
+    vimEnabled: boolean;
+    configText: string;
+  };
   theme: 'light' | 'dark' | 'eye';
 }
 
@@ -78,6 +82,7 @@ interface MarkdownBridge {
   takeLaunchMarkdownFile(): Promise<MarkdownOpenRequest | null>;
   notifyReadyForExternalOpen(): Promise<void>;
   onExternalMarkdownFile(callback: (request: MarkdownOpenRequest) => void): () => void;
+  onMarkdownFileChanged(callback: (file: MarkdownFile) => void): () => void;
   onToggleEditorShortcut(callback: () => void): () => void;
   readLastMarkdownFile(): Promise<MarkdownFile | null>;
   readMarkdownFile(path: string): Promise<MarkdownFile>;
@@ -93,7 +98,7 @@ interface MarkdownBridge {
   listImageAssets(markdownPath: string): Promise<ImageAsset[]>;
   deleteImageAsset(markdownPath: string, relativePath: string): Promise<ImageAsset[]>;
   assetUrl(markdownPath: string, relativePath: string): string;
-  getSession(): Promise<MarkdownSession>;
+  getSession(): Promise<Partial<MarkdownSession> | null | undefined>;
   saveSession(session: MarkdownSession): Promise<void>;
   saveSessionSync(session: MarkdownSession): boolean;
   quitApp(): Promise<void>;

@@ -60,6 +60,11 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     ipcRenderer.on('markdown:external-open', listener);
     return () => ipcRenderer.removeListener('markdown:external-open', listener);
   },
+  onMarkdownFileChanged: (callback: (file: { path: string; name: string; content: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, file: { path: string; name: string; content: string }) => callback(file);
+    ipcRenderer.on('markdown:file-changed', listener);
+    return () => ipcRenderer.removeListener('markdown:file-changed', listener);
+  },
   onToggleEditorShortcut: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on('markdown:toggle-editor-shortcut', listener);

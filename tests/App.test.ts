@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick } from 'vue';
 import App from '@/renderer/App.vue';
 
 const openFile = {
@@ -83,6 +84,7 @@ describe('App', () => {
       takeLaunchMarkdownFile: vi.fn().mockResolvedValue(null),
       notifyReadyForExternalOpen: vi.fn().mockResolvedValue(undefined),
       onExternalMarkdownFile: vi.fn().mockReturnValue(() => {}),
+      onMarkdownFileChanged: vi.fn().mockReturnValue(() => {}),
       onToggleEditorShortcut: vi.fn().mockReturnValue(() => {}),
       readLastMarkdownFile: vi.fn().mockResolvedValue(openFile),
       readMarkdownFile: vi.fn().mockImplementation(async (path: string) => ({
@@ -130,6 +132,10 @@ describe('App', () => {
         editorWidth: 640,
         previewHidden: false,
         editorVisible: false,
+        editorPreferences: {
+          vimEnabled: false,
+          configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
+        },
         theme: 'light',
       }),
       saveSession: vi.fn().mockImplementation(async (session) => {
@@ -223,6 +229,50 @@ describe('App', () => {
     expect(wrapper.classes()).not.toContain('reader-mode');
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ editorVisible: true, previewHidden: false }),
+    );
+  });
+
+  it('toggles Vim mode and persists the editor preference', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-vim-mode"]').trigger('click');
+
+    expect(wrapper.find('[data-testid="toggle-vim-mode"]').classes()).toContain('active');
+    expect(wrapper.text()).toContain('Vim 模式已开启');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        editorPreferences: expect.objectContaining({ vimEnabled: true }),
+      }),
+    );
+  });
+
+  it('edits and validates custom Monaco and Vim configuration JSON', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="open-editor-config"]').trigger('click');
+    expect(wrapper.find('[data-testid="editor-config-modal"]').exists()).toBe(true);
+
+    await wrapper.find('[data-testid="editor-config-text"]').setValue('{ bad json');
+    await wrapper.find('[data-testid="editor-config-save"]').trigger('click');
+    expect(wrapper.text()).toContain('编辑器配置不是合法 JSON');
+    expect(window.markdownBridge?.saveSession).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        editorPreferences: expect.objectContaining({ configText: '{ bad json' }),
+      }),
+    );
+
+    const configText = '{\n  "tabSize": 4,\n  "wordWrap": "off",\n  "minimap": true\n}';
+    await wrapper.find('[data-testid="editor-config-text"]').setValue(configText);
+    await wrapper.find('[data-testid="editor-config-save"]').trigger('click');
+
+    expect(wrapper.find('[data-testid="editor-config-modal"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('编辑器配置已保存');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        editorPreferences: expect.objectContaining({ configText }),
+      }),
     );
   });
 
@@ -1036,12 +1086,35 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }));
+    await nextTick();
+
     await wrapper.find('[data-testid="editor-search"]').setValue('hello');
     await wrapper.find('[data-testid="editor-replace"]').setValue('hi');
     await wrapper.find('[data-testid="replace-all"]').trigger('click');
 
     expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('hi alpha');
     expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('hi beta');
+  });
+
+  it('shows and hides source search from keyboard shortcuts', async () => {
+    const wrapper = mount(App, { attachTo: document.body });
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="editor-search"]').exists()).toBe(false);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }));
+    await nextTick();
+
+    const searchInput = wrapper.find<HTMLInputElement>('[data-testid="editor-search"]');
+    expect(searchInput.exists()).toBe(true);
+    expect(document.activeElement).toBe(searchInput.element);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="editor-search"]').exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it('hides preview and persists the layout preference', async () => {
@@ -1079,6 +1152,36 @@ describe('App', () => {
 
     expect(window.markdownBridge?.openMarkdownFile).toHaveBeenCalled();
     expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalled();
+  });
+
+  it('zooms the preview from keyboard shortcuts and resets to 100%', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="preview-zoom-reset"]').exists()).toBe(false);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '+', metaKey: true }));
+    await nextTick();
+
+    expect(wrapper.get('[data-testid="preview"]').attributes('style')).toContain('--preview-zoom: 1.1');
+    expect(wrapper.get('[data-testid="preview-zoom-reset"]').attributes('title')).toContain('当前 110%');
+
+    await wrapper.get('[data-testid="preview-zoom-out"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.get('[data-testid="preview"]').attributes('style')).toContain('--preview-zoom: 1');
+    expect(wrapper.find('[data-testid="preview-zoom-reset"]').exists()).toBe(false);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '-', metaKey: true }));
+    await nextTick();
+
+    expect(wrapper.get('[data-testid="preview"]').attributes('style')).toContain('--preview-zoom: 0.9');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', metaKey: true }));
+    await nextTick();
+
+    expect(wrapper.get('[data-testid="preview"]').attributes('style')).toContain('--preview-zoom: 1');
+    expect(wrapper.find('[data-testid="preview-zoom-reset"]').exists()).toBe(false);
   });
 
   it('creates an untitled markdown tab with the new-file shortcut', async () => {
@@ -1139,6 +1242,60 @@ describe('App', () => {
     await wrapper.find('[data-testid="tab-save-as"]').trigger('click');
     await vi.dynamicImportSettled();
     expect(window.markdownBridge?.saveMarkdownFileAs).toHaveBeenCalledWith(openFile.content, 'readme 副本.md');
+  });
+
+  it('auto-refreshes externally changed clean files without overwriting dirty edits', async () => {
+    const changedCallbacks: Array<(file: MarkdownFile) => void> = [];
+    vi.mocked(window.markdownBridge!.onMarkdownFileChanged).mockImplementation((callback) => {
+      changedCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    changedCallbacks[0]?.({ ...openFile, content: '# External' });
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toBe('# External');
+    expect(wrapper.text()).toContain('已自动刷新');
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Local unsaved');
+    changedCallbacks[0]?.({ ...openFile, content: '# External again' });
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toBe('# Local unsaved');
+    expect(wrapper.text()).toContain('未自动刷新');
+  });
+
+  it('manually refreshes the current clean file from disk', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    vi.mocked(window.markdownBridge!.readMarkdownFile).mockResolvedValueOnce({
+      ...openFile,
+      content: '# Disk version',
+    });
+
+    await wrapper.find('[data-testid="refresh-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(openFile.path);
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toBe('# Disk version');
+    expect(wrapper.text()).toContain('已刷新');
+  });
+
+  it('uses the command refresh shortcut for clean files', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    vi.mocked(window.markdownBridge!.readMarkdownFile).mockResolvedValueOnce({
+      ...openFile,
+      content: '# Shortcut refresh',
+    });
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', metaKey: true }));
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(openFile.path);
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toBe('# Shortcut refresh');
   });
 
   it('supports Windows-style Ctrl shortcuts', async () => {
