@@ -75,6 +75,22 @@ function attachRenderedMermaidSvg(wrapper: ReturnType<typeof mount>): void {
   container.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 100 80" width="100" height="80"><text>Flow</text></svg>');
 }
 
+function offsetForLineColumn(value: string, lineNumber: number, column: number): number {
+  const lines = value.split('\n');
+  const lineIndex = Math.min(Math.max(1, lineNumber), lines.length) - 1;
+  const prefix = lines.slice(0, lineIndex).join('\n');
+  return (lineIndex === 0 ? 0 : prefix.length + 1) + Math.min(Math.max(1, column), lines[lineIndex].length + 1) - 1;
+}
+
+async function openRecentFileFromMenu(wrapper: ReturnType<typeof mount>, label: string): Promise<void> {
+  await wrapper.find('[data-testid="recent-files"]').trigger('click');
+  await nextTick();
+  const row = wrapper.findAll('.recent-file-row').find((item) => item.text().includes(label));
+  expect(row).toBeTruthy();
+  await row!.find('.recent-file-open').trigger('click');
+  await vi.dynamicImportSettled();
+}
+
 describe('App', () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -87,6 +103,7 @@ describe('App', () => {
       onMarkdownFileChanged: vi.fn().mockReturnValue(() => {}),
       onToggleEditorShortcut: vi.fn().mockReturnValue(() => {}),
       onCloseRequest: vi.fn().mockReturnValue(() => {}),
+      onAppMenuCommand: vi.fn().mockReturnValue(() => {}),
       readLastMarkdownFile: vi.fn().mockResolvedValue(openFile),
       readMarkdownFile: vi.fn().mockImplementation(async (path: string) => ({
         ...(path === recentFile.path ? recentFile : path === secondFile.path ? secondFile : openFile),
@@ -104,6 +121,7 @@ describe('App', () => {
         name: defaultName,
         content,
       })),
+      revealInFolder: vi.fn().mockResolvedValue(undefined),
       exportHtml: vi.fn().mockResolvedValue('/docs/readme.html'),
       exportPdf: vi.fn().mockResolvedValue('/docs/readme.pdf'),
       saveImageAsset: vi.fn().mockResolvedValue(imageAsset),
@@ -148,6 +166,8 @@ describe('App', () => {
       }),
       quitApp: vi.fn().mockResolvedValue(undefined),
       confirmClose: vi.fn().mockResolvedValue(undefined),
+      confirmCloseSync: vi.fn().mockReturnValue(true),
+      debugLog: vi.fn().mockResolvedValue(undefined),
     };
   });
 
@@ -862,8 +882,7 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
-    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
-    await vi.dynamicImportSettled();
+    await openRecentFileFromMenu(wrapper, recentFile.name);
 
     expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(recentFile.path);
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
@@ -872,12 +891,138 @@ describe('App', () => {
     );
   });
 
+  it('deduplicates recent file options and exposes full paths as hover titles', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [],
+      activeTabId: null,
+      recentFiles: [
+        '/docs/kv_curls.md',
+        '/docs/other.md',
+        'file:///docs/kv_curls.md',
+        '/docs/remote image.md',
+        '/DOCS/REMOTE IMAGE.md',
+      ],
+      scrollTop: 12,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="recent-files"]').trigger('click');
+    await nextTick();
+
+    const options = wrapper.findAll('.recent-file-row')
+      .map((row) => ({
+        text: row.find('.recent-file-open').text(),
+        title: row.attributes('title'),
+      }));
+
+    expect(options.filter((option) => option.text === 'kv_curls.md')).toHaveLength(1);
+    expect(options.filter((option) => option.text === 'remote image.md')).toHaveLength(1);
+    expect(options).toContainEqual(expect.objectContaining({
+      text: 'kv_curls.md',
+      title: '/docs/kv_curls.md',
+    }));
+  });
+
+  it('disambiguates recent file options that share the same file name', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [],
+      activeTabId: null,
+      recentFiles: [
+        '/projects/alpha/remote image.md',
+        '/projects/beta/remote image.md',
+        '/projects/alpha/finder launch.md',
+        '/projects/beta/finder launch.md',
+      ],
+      scrollTop: 12,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="recent-files"]').trigger('click');
+    await nextTick();
+
+    const optionLabels = wrapper.findAll('.recent-file-open')
+      .map((option) => option.text());
+
+    expect(optionLabels).toContain('remote image.md (alpha)');
+    expect(optionLabels).toContain('remote image.md (beta)');
+    expect(optionLabels).toContain('finder launch.md (alpha)');
+    expect(optionLabels).toContain('finder launch.md (beta)');
+  });
+
+  it('removes a recent file from the custom recent menu without opening it', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="recent-files"]').trigger('click');
+    await nextTick();
+    const row = wrapper.findAll('.recent-file-row').find((item) => item.text().includes(recentFile.name));
+    expect(row).toBeTruthy();
+
+    await row!.find('.recent-file-delete').trigger('click');
+    await nextTick();
+
+    expect(window.markdownBridge?.readMarkdownFile).not.toHaveBeenCalledWith(recentFile.path);
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ recentFiles: [openFile.path] }),
+    );
+    expect(wrapper.findAll('.recent-file-row').some((item) => item.text().includes(recentFile.name))).toBe(false);
+  });
+
+  it('removes an unreadable recent file by normalized path', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [],
+      activeTabId: null,
+      recentFiles: [
+        'file:///docs/recent.md',
+        secondFile.path,
+      ],
+      scrollTop: 12,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+    vi.mocked(window.markdownBridge!.readMarkdownFile).mockImplementation(async (filePath: string) => {
+      if (filePath === recentFile.path) {
+        throw new Error('missing');
+      }
+      return {
+        ...(filePath === secondFile.path ? secondFile : openFile),
+        path: filePath,
+        name: filePath.split('/').pop() ?? 'file.md',
+      };
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await openRecentFileFromMenu(wrapper, recentFile.name);
+
+    const savedSession = vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0];
+    expect(savedSession?.recentFiles).toContain(secondFile.path);
+    expect(savedSession?.recentFiles).not.toContain(recentFile.path);
+  });
+
   it('opens different files in tabs and switches between them', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
-    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
-    await vi.dynamicImportSettled();
+    await openRecentFileFromMenu(wrapper, recentFile.name);
 
     expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="tab-recent.md"]').exists()).toBe(true);
@@ -979,8 +1124,7 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
-    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
-    await vi.dynamicImportSettled();
+    await openRecentFileFromMenu(wrapper, recentFile.name);
 
     const dragged = { value: '' };
     const dataTransfer = {
@@ -1014,15 +1158,14 @@ describe('App', () => {
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ tabs: [], activeTabId: null, filePath: null }),
     );
-    expect(window.markdownBridge?.confirmClose).toHaveBeenCalled();
+    expect(window.markdownBridge?.confirmCloseSync).toHaveBeenCalled();
   });
 
   it('persists remaining tabs when a non-final tab closes', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
-    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
-    await vi.dynamicImportSettled();
+    await openRecentFileFromMenu(wrapper, recentFile.name);
     await wrapper.find('[data-testid="close-tab-recent.md"]').trigger('click');
     await vi.dynamicImportSettled();
 
@@ -1040,8 +1183,7 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
-    await wrapper.find('[data-testid="recent-files"]').setValue(recentFile.path);
-    await vi.dynamicImportSettled();
+    await openRecentFileFromMenu(wrapper, recentFile.name);
     window.dispatchEvent(new Event('beforeunload'));
 
     expect(window.markdownBridge?.saveSessionSync).toHaveBeenCalledWith(
@@ -1074,7 +1216,7 @@ describe('App', () => {
     await vi.dynamicImportSettled();
 
     expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalledWith(openFile.path, '# Changed');
-    expect(window.markdownBridge?.confirmClose).toHaveBeenCalled();
+    expect(window.markdownBridge?.confirmCloseSync).toHaveBeenCalled();
   });
 
   it('can discard dirty tabs before the app closes', async () => {
@@ -1094,7 +1236,31 @@ describe('App', () => {
     await vi.dynamicImportSettled();
 
     expect(window.markdownBridge?.saveMarkdownFile).not.toHaveBeenCalled();
-    expect(window.markdownBridge?.confirmClose).toHaveBeenCalled();
+    expect(window.markdownBridge?.confirmCloseSync).toHaveBeenCalled();
+  });
+
+  it('closes from a stale close dialog after dirty tabs were saved elsewhere', async () => {
+    const closeCallbacks: Array<() => void> = [];
+    vi.mocked(window.markdownBridge!.onCloseRequest).mockImplementation((callback) => {
+      closeCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+    closeCallbacks[0]?.();
+    await nextTick();
+    expect(wrapper.find('[data-testid="close-confirm-modal"]').exists()).toBe(true);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', metaKey: true }));
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="close-confirm-modal"]').text()).toContain('0 个文件');
+    await wrapper.find('[data-testid="close-save-all"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.confirmCloseSync).toHaveBeenCalled();
   });
 
   it('opens a dropped markdown file', async () => {
@@ -1124,6 +1290,23 @@ describe('App', () => {
     await wrapper.find('[data-testid="expand-toc"]').trigger('click');
     expect(wrapper.find('[data-testid="toc"]').text()).toContain('Alpha');
     expect(wrapper.find('[data-testid="toc"]').text()).toContain('Beta');
+  });
+
+  it('expands and collapses the table of contents sidebar', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-toc-panel"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.classes()).toContain('toc-collapsed');
+    expect(wrapper.find('.workspace').attributes('style')).toContain('44px 0px');
+
+    await wrapper.find('[data-testid="toggle-toc-panel"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.classes()).not.toContain('toc-collapsed');
+    expect(wrapper.find('.workspace').attributes('style')).toContain('300px 6px');
   });
 
   it('replaces all source matches in the editor', async () => {
@@ -1198,6 +1381,66 @@ describe('App', () => {
     expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalled();
   });
 
+  it('keeps cursor history for cross-line moves and updates same-line columns', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const firstOffset = offsetForLineColumn(openFile.content, 1, 3);
+    const alphaColumnOffset = offsetForLineColumn(openFile.content, 3, 4);
+    const alphaUpdatedOffset = offsetForLineColumn(openFile.content, 3, 7);
+
+    editor.setSelectionRange(firstOffset, firstOffset);
+    await wrapper.find('[data-testid="editor"]').trigger('keyup');
+    editor.setSelectionRange(alphaColumnOffset, alphaColumnOffset);
+    await wrapper.find('[data-testid="editor"]').trigger('keyup');
+    editor.setSelectionRange(alphaUpdatedOffset, alphaUpdatedOffset);
+    await wrapper.find('[data-testid="editor"]').trigger('keyup');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '[', ctrlKey: true }));
+    await vi.dynamicImportSettled();
+    expect(editor.selectionStart).toBe(firstOffset);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ']', ctrlKey: true }));
+    await vi.dynamicImportSettled();
+    expect(editor.selectionStart).toBe(alphaUpdatedOffset);
+  });
+
+  it('jumps cursor history across open files', async () => {
+    vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValueOnce(secondFile);
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    let editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const firstFileOffset = offsetForLineColumn(openFile.content, 5, 3);
+    editor.setSelectionRange(firstFileOffset, firstFileOffset);
+    await wrapper.find('[data-testid="editor"]').trigger('keyup');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', metaKey: true }));
+    await vi.dynamicImportSettled();
+
+    editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const secondFileOffset = offsetForLineColumn(secondFile.content, 1, 4);
+    editor.setSelectionRange(secondFileOffset, secondFileOffset);
+    await wrapper.find('[data-testid="editor"]').trigger('keyup');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '[', ctrlKey: true }));
+    await vi.dynamicImportSettled();
+    editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+
+    expect(editor.value).toBe(openFile.content);
+    expect(editor.selectionStart).toBe(firstFileOffset);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ']', ctrlKey: true }));
+    await vi.dynamicImportSettled();
+    editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+
+    expect(editor.value).toBe(secondFile.content);
+    expect(editor.selectionStart).toBe(secondFileOffset);
+  });
+
   it('zooms the preview from keyboard shortcuts and resets to 100%', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -1268,7 +1511,7 @@ describe('App', () => {
     expect(window.markdownBridge?.saveMarkdownFile).not.toHaveBeenCalled();
   });
 
-  it('supports tab context menu duplicate, copy path, save as, and copy content actions', async () => {
+  it('supports tab context menu duplicate, copy path, reveal, save as, and copy content actions', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -1289,6 +1532,10 @@ describe('App', () => {
     await wrapper.find('[data-testid="tab-readme.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
     await wrapper.find('[data-testid="tab-copy-content"]').trigger('click');
     expect(writeText).toHaveBeenCalledWith(openFile.content);
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
+    await wrapper.find('[data-testid="tab-reveal-in-folder"]').trigger('click');
+    expect(window.markdownBridge?.revealInFolder).toHaveBeenCalledWith(openFile.path);
 
     await wrapper.find('[data-testid="tab-readme.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
     await wrapper.find('[data-testid="tab-duplicate"]').trigger('click');
@@ -1376,6 +1623,8 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe(`显示/隐藏预览 (${expectedShortcut('P')})`);
     expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe(`切换阅读/编辑模式 (${expectedShortcut('E')})`);
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('v0.1.4');
+    expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('文件');
+    expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('插入与资源');
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain(`打开 Markdown${expectedShortcut('O')}`);
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('Mermaid 预览');
   });
@@ -1409,5 +1658,31 @@ describe('App', () => {
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ editorVisible: true, previewHidden: false }),
     );
+  });
+
+  it('routes native app menu commands to grouped editor actions', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    menuCallbacks[0]?.('insert-table');
+    await nextTick();
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('| 列 1 | 列 2 |');
+
+    menuCallbacks[0]?.('export-pdf');
+    await vi.dynamicImportSettled();
+    expect(window.markdownBridge?.exportPdf).toHaveBeenCalled();
+
+    menuCallbacks[0]?.('theme-dark');
+    await nextTick();
+    expect(wrapper.classes()).toContain('theme-dark');
+
+    menuCallbacks[0]?.('show-help');
+    await nextTick();
+    expect(wrapper.find('.help-menu').classes()).toContain('is-open');
   });
 });

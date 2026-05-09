@@ -94,6 +94,17 @@ describe('Electron build configuration', () => {
 
     expect(mainSource).toContain("app.on('window-all-closed', () => {\n  app.quit();\n});");
     expect(mainSource).toContain("ipcMain.on('session:save-sync'");
+    expect(mainSource).toContain("import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell");
+    expect(mainSource).toContain("'markdown:reveal-in-folder'");
+    expect(mainSource).toContain('shell.showItemInFolder');
+    expect(mainSource).toContain("'Alt+Shift+I'");
+    expect(mainSource).toContain("window.webContents.toggleDevTools()");
+    expect(mainSource).toContain("mainLog('devtools.shortcut-toggle'");
+    expect(mainSource).toContain("'markdown-editor-debug.log'");
+    expect(mainSource).toContain("'app:confirm-close-sync'");
+    expect(mainSource).toContain("'app:debug-log'");
+    expect(preloadSource).toContain("ipcRenderer.sendSync('app:confirm-close-sync'");
+    expect(preloadSource).toContain("ipcRenderer.invoke('app:debug-log'");
     expect(mainSource).toContain("let rendererReadyForExternalOpen = false;");
     expect(mainSource).toContain("'markdown:ready-for-external-open'");
     expect(mainSource).toContain("fileURLToPath");
@@ -102,6 +113,12 @@ describe('Electron build configuration', () => {
     expect(mainSource).toContain("launchMarkdownPathConsumed ? null : markdownPathFromArgv(process.argv)");
     expect(mainSource).toContain("window.webContents.on('before-input-event'");
     expect(mainSource).toContain("'markdown:toggle-editor-shortcut'");
+    expect(mainSource).toContain('buildApplicationMenu');
+    expect(mainSource).toContain("label: '文件'");
+    expect(mainSource).toContain("label: '插入'");
+    expect(mainSource).toContain("label: '资源'");
+    expect(mainSource).toContain("'app:menu-command'");
+    expect(preloadSource).toContain("ipcRenderer.on('app:menu-command'");
     expect(preloadSource).toContain("ipcRenderer.sendSync('session:save-sync'");
     expect(preloadSource).toContain("notifyReadyForExternalOpen");
     expect(preloadSource).toContain("ipcRenderer.on('markdown:toggle-editor-shortcut'");

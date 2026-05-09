@@ -18,6 +18,50 @@ interface MarkdownOpenRequest {
   external: boolean;
 }
 
+type AppMenuCommand =
+  | 'new-file'
+  | 'open-file'
+  | 'refresh-file'
+  | 'save-file'
+  | 'save-as'
+  | 'save-all'
+  | 'export-html'
+  | 'export-pdf'
+  | 'close-tab'
+  | 'duplicate-tab'
+  | 'copy-tab-path'
+  | 'copy-tab-content'
+  | 'undo'
+  | 'redo'
+  | 'show-search'
+  | 'find-next'
+  | 'replace-current'
+  | 'replace-all'
+  | 'insert-table'
+  | 'insert-link'
+  | 'insert-code'
+  | 'import-image'
+  | 'image-upload-local'
+  | 'image-upload-cloud'
+  | 'refresh-assets'
+  | 'insert-selected-asset'
+  | 'delete-selected-asset'
+  | 'toggle-editor'
+  | 'toggle-toc-panel'
+  | 'toggle-preview'
+  | 'toggle-fullscreen-preview'
+  | 'preview-zoom-in'
+  | 'preview-zoom-out'
+  | 'preview-zoom-reset'
+  | 'theme-light'
+  | 'theme-dark'
+  | 'theme-eye'
+  | 'expand-toc'
+  | 'collapse-toc'
+  | 'toggle-vim'
+  | 'open-editor-config'
+  | 'show-help';
+
 interface MarkdownSession {
   filePath: string | null;
   tabs: {
@@ -85,11 +129,13 @@ interface MarkdownBridge {
   onMarkdownFileChanged(callback: (file: MarkdownFile) => void): () => void;
   onToggleEditorShortcut(callback: () => void): () => void;
   onCloseRequest(callback: () => void): () => void;
+  onAppMenuCommand?(callback: (command: AppMenuCommand) => void): () => void;
   readLastMarkdownFile(): Promise<MarkdownFile | null>;
   readMarkdownFile(path: string): Promise<MarkdownFile>;
   getPathForFile(file: File): string;
   saveMarkdownFile(path: string, content: string): Promise<MarkdownFile>;
   saveMarkdownFileAs(content: string, defaultName: string): Promise<MarkdownFile | null>;
+  revealInFolder(path: string): Promise<void>;
   exportHtml(payload: ExportDocumentPayload): Promise<string | null>;
   exportPdf(payload: ExportDocumentPayload): Promise<string | null>;
   saveImageAsset(markdownPath: string, fileName: string, data: ArrayBuffer, mimeType: string): Promise<ImageAsset>;
@@ -104,6 +150,8 @@ interface MarkdownBridge {
   saveSessionSync(session: MarkdownSession): boolean;
   quitApp(): Promise<void>;
   confirmClose(): Promise<void>;
+  confirmCloseSync?(): boolean;
+  debugLog?(event: string, payload?: Record<string, unknown>): Promise<void>;
 }
 
 interface Window {

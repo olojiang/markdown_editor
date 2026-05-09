@@ -75,11 +75,17 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     ipcRenderer.on('app:close-request', listener);
     return () => ipcRenderer.removeListener('app:close-request', listener);
   },
+  onAppMenuCommand: (callback: (command: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, command: string) => callback(command);
+    ipcRenderer.on('app:menu-command', listener);
+    return () => ipcRenderer.removeListener('app:menu-command', listener);
+  },
   readLastMarkdownFile: () => ipcRenderer.invoke('markdown:read-last'),
   readMarkdownFile: (filePath: string) => ipcRenderer.invoke('markdown:read-path', filePath),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   saveMarkdownFile: (filePath: string, content: string) => ipcRenderer.invoke('markdown:save', filePath, content),
   saveMarkdownFileAs: (content: string, defaultName: string) => ipcRenderer.invoke('markdown:save-as', content, defaultName),
+  revealInFolder: (filePath: string) => ipcRenderer.invoke('markdown:reveal-in-folder', filePath),
   exportHtml: (payload: {
     markdownPath: string;
     title: string;
@@ -152,4 +158,7 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   }) => ipcRenderer.sendSync('session:save-sync', session),
   quitApp: () => ipcRenderer.invoke('app:quit'),
   confirmClose: () => ipcRenderer.invoke('app:confirm-close'),
+  confirmCloseSync: () => ipcRenderer.sendSync('app:confirm-close-sync'),
+  debugLog: (event: string, payload: Record<string, unknown> = {}) =>
+    ipcRenderer.invoke('app:debug-log', event, payload),
 });

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { addRecentFile, createDefaultSession, maxRecentFiles, mergeSession } from '@/renderer/lib/session';
+import {
+  addRecentFile,
+  createDefaultSession,
+  maxRecentFiles,
+  mergeSession,
+  removeRecentFile,
+} from '@/renderer/lib/session';
 
 describe('session helpers', () => {
   it('creates an empty session when no previous file exists', () => {
@@ -92,5 +98,27 @@ describe('session helpers', () => {
     expect(recentFiles[0]).toBe('/tmp/24.md');
     expect(recentFiles).not.toContain('/tmp/0.md');
     expect(addRecentFile(recentFiles, '/tmp/20.md')[0]).toBe('/tmp/20.md');
+  });
+
+  it('deduplicates recent files by normalized path when moving entries to the front', () => {
+    expect(addRecentFile([
+      '/docs/remote image.md',
+      '/docs/other.md',
+      '/docs/REMOTE IMAGE.md',
+      'file:///docs/remote%20image.md',
+    ], '/docs/remote image.md')).toEqual([
+      '/docs/remote image.md',
+      '/docs/other.md',
+    ]);
+  });
+
+  it('removes recent files by normalized path', () => {
+    expect(removeRecentFile([
+      '/docs/remote image.md',
+      '/docs/other.md',
+      'file:///docs/REMOTE%20IMAGE.md',
+    ], 'file:///docs/remote%20image.md')).toEqual([
+      '/docs/other.md',
+    ]);
   });
 });

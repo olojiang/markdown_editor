@@ -55,12 +55,50 @@ export function normalizeRecentFiles(recentFiles: unknown): string[] {
     return [];
   }
 
-  return Array.from(new Set(recentFiles.filter((filePath): filePath is string => typeof filePath === 'string')))
-    .slice(0, maxRecentFiles);
+  const seen = new Set<string>();
+  return recentFiles.flatMap((filePath): string[] => {
+    if (typeof filePath !== 'string') {
+      return [];
+    }
+    const normalized = normalizeRecentFilePath(filePath);
+    const key = recentFileKey(normalized);
+    if (!normalized || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [normalized];
+  }).slice(0, maxRecentFiles);
 }
 
 export function addRecentFile(recentFiles: unknown, filePath: string): string[] {
-  return normalizeRecentFiles([filePath, ...normalizeRecentFiles(recentFiles).filter((recent) => recent !== filePath)]);
+  return normalizeRecentFiles([filePath, ...normalizeRecentFiles(recentFiles)]);
+}
+
+export function removeRecentFile(recentFiles: unknown, filePath: string): string[] {
+  const removedKey = recentFileKey(filePath);
+  return normalizeRecentFiles(recentFiles).filter((recent) => recentFileKey(recent) !== removedKey);
+}
+
+export function normalizeRecentFilePath(filePath: string): string {
+  let normalized = filePath.trim();
+  if (normalized.startsWith('file://')) {
+    try {
+      const url = new URL(normalized);
+      normalized = decodeURIComponent(url.pathname);
+      if (/^\/[A-Za-z]:\//.test(normalized)) {
+        normalized = normalized.slice(1);
+      }
+    } catch {
+      // Keep the original value when it is not a valid file URL.
+    }
+  }
+
+  normalized = normalized.replace(/\\/g, '/');
+  return normalized.length > 1 ? normalized.replace(/\/+$/g, '') : normalized;
+}
+
+function recentFileKey(filePath: string): string {
+  return normalizeRecentFilePath(filePath).toLocaleLowerCase();
 }
 
 export function tabIdForPath(filePath: string): string {

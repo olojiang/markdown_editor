@@ -13,6 +13,11 @@ interface SelectionRange {
   start: number;
 }
 
+interface CursorPosition {
+  column: number;
+  lineNumber: number;
+}
+
 const props = defineProps<{
   configText: string;
   modelValue: string;
@@ -25,6 +30,7 @@ const emit = defineEmits<{
   (event: 'paste', value: ClipboardEvent): void;
   (event: 'scroll', value: Event): void;
   (event: 'update:modelValue', value: string): void;
+  (event: 'vim-command', value: 'write' | 'write-quit' | 'quit' | 'force-quit'): void;
   (event: 'vim-status', value: string): void;
 }>();
 
@@ -139,11 +145,17 @@ async function startVimMode(): Promise<void> {
   const [{ initVimMode, VimMode }] = await Promise.all([import('monaco-vim')]);
   vimMode = initVimMode(monacoEditor, statusbar.value);
   const vimApi = (VimMode as unknown as { Vim?: {
+    defineEx?(name: string, prefix: string, callback: unknown): void;
     mapclear?(mode?: string): void;
     map?(before: string, after: string, mode?: string): void;
     setOption?(name: string, value: unknown): void;
   } }).Vim;
   const config = parsedConfig.value;
+  vimApi?.defineEx?.('write', 'w', () => emit('vim-command', 'write'));
+  vimApi?.defineEx?.('wq', 'wq', () => emit('vim-command', 'write-quit'));
+  vimApi?.defineEx?.('quit', 'q', (_cm: unknown, params: { argString?: string } = {}) => {
+    emit('vim-command', params.argString?.trim() === '!' ? 'force-quit' : 'quit');
+  });
   vimApi?.setOption?.('mapleader', config.vimLeader);
   vimApi?.mapclear?.();
   config.vimKeymaps.forEach((keymap) => {
@@ -248,6 +260,55 @@ function getSelectionRange(): SelectionRange {
   };
 }
 
+function cursorPositionFromOffset(value: string, offset: number): CursorPosition {
+  const safeOffset = Math.min(Math.max(0, offset), value.length);
+  const lines = value.slice(0, safeOffset).split('\n');
+  return {
+    column: lines[lines.length - 1].length + 1,
+    lineNumber: lines.length,
+  };
+}
+
+function offsetFromCursorPosition(value: string, position: CursorPosition): number {
+  const lines = value.split('\n');
+  const lineIndex = Math.min(Math.max(1, position.lineNumber), lines.length) - 1;
+  const beforeLines = lines.slice(0, lineIndex).join('\n');
+  const lineOffset = lineIndex === 0 ? 0 : beforeLines.length + 1;
+  const columnOffset = Math.min(Math.max(1, position.column), lines[lineIndex].length + 1) - 1;
+
+  return lineOffset + columnOffset;
+}
+
+function getCursorPosition(): CursorPosition {
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    return cursorPositionFromOffset(fallback.value, fallback.selectionStart);
+  }
+
+  return monacoEditor?.getPosition() ?? { column: 1, lineNumber: 1 };
+}
+
+function setCursorPosition(position: CursorPosition): void {
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    const offset = offsetFromCursorPosition(fallback.value, position);
+    fallback.setSelectionRange(offset, offset);
+    fallback.focus();
+    return;
+  }
+
+  const model = getModel();
+  if (!model || !monacoEditor) {
+    return;
+  }
+
+  const lineNumber = Math.min(Math.max(1, position.lineNumber), model.getLineCount());
+  const column = Math.min(Math.max(1, position.column), model.getLineMaxColumn(lineNumber));
+  monacoEditor.setPosition({ column, lineNumber });
+  monacoEditor.revealPositionInCenterIfOutsideViewport({ column, lineNumber });
+  monacoEditor.focus();
+}
+
 function setSelectionRange(start: number, end: number): void {
   const fallback = fallbackEditor.value;
   if (fallback) {
@@ -274,6 +335,18 @@ function getScrollTop(): number {
   return fallbackEditor.value?.scrollTop ?? monacoEditor?.getScrollTop() ?? 0;
 }
 
+function getMaxScrollTop(): number {
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    return Math.max(0, fallback.scrollHeight - fallback.clientHeight);
+  }
+  if (!monacoEditor) {
+    return 0;
+  }
+
+  return Math.max(0, monacoEditor.getScrollHeight() - monacoEditor.getLayoutInfo().height);
+}
+
 function setScrollTop(value: number): void {
   if (fallbackEditor.value) {
     fallbackEditor.value.scrollTop = value;
@@ -285,6 +358,26 @@ function setScrollTop(value: number): void {
 function focus(): void {
   fallbackEditor.value?.focus();
   monacoEditor?.focus();
+}
+
+function undo(): void {
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    document.execCommand?.('undo');
+    emit('update:modelValue', fallback.value);
+    return;
+  }
+  monacoEditor?.trigger('keyboard', 'undo', null);
+}
+
+function redo(): void {
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    document.execCommand?.('redo');
+    emit('update:modelValue', fallback.value);
+    return;
+  }
+  monacoEditor?.trigger('keyboard', 'redo', null);
 }
 
 function getElement(): HTMLElement | null {
@@ -335,11 +428,16 @@ watch(() => props.vimEnabled, () => {
 
 defineExpose({
   focus,
+  getCursorPosition,
   getElement,
+  getMaxScrollTop,
   getScrollTop,
   getSelectionRange,
+  redo,
+  setCursorPosition,
   setScrollTop,
   setSelectionRange,
+  undo,
 });
 </script>
 

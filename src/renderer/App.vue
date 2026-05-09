@@ -14,7 +14,9 @@ import {
   addRecentFile,
   createDefaultSession,
   mergeSession,
+  normalizeRecentFiles,
   normalizeSession,
+  removeRecentFile,
   tabIdForPath,
   type MarkdownSession,
   type ThemeMode,
@@ -45,6 +47,22 @@ interface TabContextMenu {
   y: number;
 }
 
+interface HelpItem {
+  label: string;
+  shortcut: string;
+  detail: string;
+}
+
+interface HelpGroup {
+  title: string;
+  items: HelpItem[];
+}
+
+interface RecentFileOption {
+  path: string;
+  label: string;
+}
+
 interface CloudUploadDialog {
   file: TempImageAsset;
   appId: string;
@@ -61,14 +79,32 @@ interface EditorInsertionRange {
   scrollTop: number;
 }
 
+interface CursorPosition {
+  column: number;
+  lineNumber: number;
+}
+
+interface CursorHistoryEntry extends CursorPosition {
+  fileName: string;
+  filePath: string | null;
+  tabId: string;
+}
+
 interface EditorSurface {
   focus(): void;
+  getCursorPosition(): CursorPosition;
   getElement(): HTMLElement | null;
+  getMaxScrollTop(): number;
   getScrollTop(): number;
   getSelectionRange(): { start: number; end: number };
+  redo(): void;
+  setCursorPosition(position: CursorPosition): void;
   setScrollTop(value: number): void;
   setSelectionRange(start: number, end: number): void;
+  undo(): void;
 }
+
+type VimCommand = 'write' | 'write-quit' | 'quit' | 'force-quit';
 
 interface ActiveMermaidDiagram {
   container: HTMLElement;
@@ -162,26 +198,35 @@ const editorConfigDraft = ref('');
 const editorConfigError = ref('');
 const closeConfirmationVisible = ref(false);
 const closeConfirmationBusy = ref(false);
+const helpPopoverPinned = ref(false);
+const recentFilesOpen = ref(false);
+const isTocPanelCollapsed = ref(false);
 const draggedTabId = ref<string | null>(null);
 const activeResize = ref<'toc' | 'editor' | null>(null);
+const cursorHistory = ref<CursorHistoryEntry[]>([]);
 let sessionSaveTimer: number | undefined;
 let untitledCounter = 1;
+let cursorHistoryIndex = -1;
+let isNavigatingCursorHistory = false;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
 let removeExternalOpenListener: (() => void) | undefined;
 let removeMarkdownFileChangedListener: (() => void) | undefined;
 let removeToggleEditorShortcutListener: (() => void) | undefined;
 let removeCloseRequestListener: (() => void) | undefined;
+let removeAppMenuCommandListener: (() => void) | undefined;
 let mermaidModalDragged = false;
 let imageModalDragged = false;
 let isRestoringStartup = false;
 let isFlushingOpenQueue = false;
+let lastRecentFilesDiagnosticSignature = '';
 const queuedOpenRequests: MarkdownOpenRequest[] = [];
 const previewScrollOffset = -50;
 const sessionSaveDelay = 200;
 const previewZoomStep = 0.1;
 const previewZoomMin = 0.7;
 const previewZoomMax = 1.6;
+const cursorHistoryMax = 200;
 const cloudUploadPrefsKey = 'markdown-editor-cloud-upload-prefs';
 const codeCopyResetTimers = new WeakMap<HTMLButtonElement, number>();
 const codeCopyIconSvg = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 8h10v12H8z M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>';
@@ -216,6 +261,8 @@ const hasUnsavedChanges = computed(() => currentFile.value !== null && source.va
 const unsavedTabCount = computed(() => openTabs.value.filter((tab) => tab.source !== tab.lastSavedContent).length);
 const displayTitle = computed(() => (hasUnsavedChanges.value ? `${title.value} *` : title.value));
 const statusText = computed(() => (hasUnsavedChanges.value ? `${status.value} · 未保存` : status.value));
+const recentFilePaths = computed(() => normalizeRecentFiles(session.value.recentFiles));
+const recentFileOptions = computed(() => buildRecentFileOptions(recentFilePaths.value));
 const shortcutModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'));
 const openShortcutHint = computed(() => `打开 Markdown 文件 (${shortcutModifier.value}+O)`);
 const saveShortcutHint = computed(() => `保存 Markdown 文件 (${shortcutModifier.value}+S)`);
@@ -227,44 +274,73 @@ const previewZoomStyle = computed(() => ({
   '--preview-zoom': previewZoom.value,
 }));
 const isPreviewZoomResettable = computed(() => Math.abs(previewZoom.value - 1) > 0.001);
-const helpItems = computed(() => [
-  { label: '新建 Markdown', shortcut: `${shortcutModifier.value}+T`, detail: '创建一个未保存的空白 Markdown 标签页' },
-  { label: '打开 Markdown', shortcut: `${shortcutModifier.value}+O`, detail: '选择本地 .md、.markdown、.mdown 文件' },
-  { label: '保存当前文件', shortcut: `${shortcutModifier.value}+S`, detail: '有改动时写回原文件' },
-  { label: '刷新当前文件', shortcut: `${shortcutModifier.value}+R`, detail: '从磁盘重新读取；有未保存修改时不会覆盖' },
-  { label: '阅读/编辑', shortcut: `${shortcutModifier.value}+E`, detail: '阅读模式只显示预览，需要时切回源码编辑' },
-  { label: '显示/隐藏预览', shortcut: `${shortcutModifier.value}+P`, detail: '编辑时切换右侧预览区域' },
-  { label: '预览缩放', shortcut: `${shortcutModifier.value}+/ ${shortcutModifier.value}+-`, detail: '放大或缩小 Markdown 预览' },
-  { label: '还原预览缩放', shortcut: `${shortcutModifier.value}+0`, detail: '把预览缩放还原为 100%' },
-  { label: '最近文件', shortcut: '', detail: '快速打开最近访问过的 Markdown 文件' },
-  { label: '导出 HTML/PDF', shortcut: '', detail: '把当前渲染结果导出为独立文件' },
-  { label: '目录', shortcut: '', detail: '搜索、折叠标题，并跳转到对应位置' },
-  { label: '图片资源', shortcut: '', detail: '导入或粘贴图片到当前文档的 assets/images 目录' },
-  { label: '图片预览', shortcut: '', detail: '在预览中查看、放大、拖拽和下载 Markdown 图片' },
-  { label: 'Mermaid 预览', shortcut: `${shortcutModifier.value}+滚轮`, detail: '在预览或放大视图中缩放，拖拽移动图表' },
-  { label: '关闭弹窗', shortcut: 'Esc', detail: '关闭 Mermaid 放大视图' },
+const tocColumnWidth = computed(() => (isTocPanelCollapsed.value ? 44 : session.value.tocWidth));
+watch(recentFilePaths, (filePaths) => {
+  logRecentFileDiagnostics(filePaths);
+}, { immediate: true });
+const helpGroups = computed<HelpGroup[]>(() => [
+  {
+    title: '文件',
+    items: [
+      { label: '新建 Markdown', shortcut: `${shortcutModifier.value}+T`, detail: '创建一个未保存的空白 Markdown 标签页' },
+      { label: '打开 Markdown', shortcut: `${shortcutModifier.value}+O`, detail: '选择本地 .md、.markdown、.mdown 文件' },
+      { label: '保存 / 另存为', shortcut: `${shortcutModifier.value}+S`, detail: '保存当前文件；菜单栏里也提供另存为和全部保存' },
+      { label: '刷新当前文件', shortcut: `${shortcutModifier.value}+R`, detail: '从磁盘重新读取；有未保存修改时不会覆盖' },
+      { label: '最近文件', shortcut: '', detail: '快速打开最近访问过的 Markdown 文件' },
+      { label: '导出 HTML/PDF', shortcut: '', detail: '把当前渲染结果导出为独立文件' },
+    ],
+  },
+  {
+    title: '编辑',
+    items: [
+      { label: '搜索 / 替换', shortcut: `${shortcutModifier.value}+F`, detail: '打开源码搜索栏，支持查找、替换和全部替换' },
+      { label: '光标历史', shortcut: 'Ctrl+[ / Ctrl+]', detail: '在跨行或跨文件的光标位置之间后退和前进' },
+      { label: '阅读/编辑', shortcut: `${shortcutModifier.value}+E`, detail: '阅读模式只显示预览，需要时切回源码编辑' },
+      { label: 'Vim 与编辑器配置', shortcut: '', detail: '开启 Vim 模式，或配置 Monaco / Vim JSON 选项' },
+    ],
+  },
+  {
+    title: '插入与资源',
+    items: [
+      { label: '表格 / 链接 / 代码块', shortcut: `${shortcutModifier.value}+K`, detail: '从插入菜单或编辑器工具栏插入常用 Markdown 片段' },
+      { label: '图片资源', shortcut: '', detail: '导入或粘贴图片到当前文档的 assets/images 目录' },
+      { label: '云端图片', shortcut: '', detail: '切换粘贴图片上传方式，上传后插入远程图片链接' },
+      { label: '图片预览', shortcut: '', detail: '在预览中查看、放大、拖拽和下载 Markdown 图片' },
+    ],
+  },
+  {
+    title: '视图',
+    items: [
+      { label: '显示/隐藏预览', shortcut: `${shortcutModifier.value}+P`, detail: '编辑时切换右侧预览区域' },
+      { label: '预览缩放', shortcut: `${shortcutModifier.value}+/ ${shortcutModifier.value}+-`, detail: '放大或缩小 Markdown 预览' },
+      { label: '还原预览缩放', shortcut: `${shortcutModifier.value}+0`, detail: '把预览缩放还原为 100%' },
+      { label: '目录', shortcut: '', detail: '搜索、折叠标题，并跳转到对应位置' },
+      { label: 'Mermaid 预览', shortcut: `${shortcutModifier.value}+滚轮`, detail: '在预览或放大视图中缩放，拖拽移动图表' },
+      { label: '关闭弹窗', shortcut: 'Esc', detail: '关闭 Mermaid 或图片放大视图' },
+    ],
+  },
 ]);
 const gridStyle = computed(() => {
   if (isPreviewFullscreen.value) {
     return {
-      gridTemplateColumns: `${session.value.tocWidth}px 6px minmax(0, 1fr) 6px 0`,
+      gridTemplateColumns: `${tocColumnWidth.value}px ${isTocPanelCollapsed.value ? 0 : 6}px minmax(0, 1fr) 6px 0`,
     };
   }
 
   if (!isEditorVisible.value) {
     return {
-      gridTemplateColumns: `${session.value.tocWidth}px 6px 0 0 minmax(0, 1fr)`,
+      gridTemplateColumns: `${tocColumnWidth.value}px ${isTocPanelCollapsed.value ? 0 : 6}px 0 0 minmax(0, 1fr)`,
     };
   }
 
   if (session.value.previewHidden) {
     return {
-      gridTemplateColumns: `${session.value.tocWidth}px 6px minmax(0, 1fr) 6px 0`,
+      gridTemplateColumns: `${tocColumnWidth.value}px ${isTocPanelCollapsed.value ? 0 : 6}px minmax(0, 1fr) 6px 0`,
     };
   }
 
   return {
-    gridTemplateColumns: `${session.value.tocWidth}px 6px minmax(0, ${session.value.editorWidth}px) 6px minmax(0, 1fr)`,
+    gridTemplateColumns: `${tocColumnWidth.value}px ${isTocPanelCollapsed.value ? 0 : 6}px minmax(0, ${session.value.editorWidth}px) 6px minmax(0, 1fr)`,
   };
 });
 
@@ -370,6 +446,117 @@ function tabPath(tab: OpenTab): string | null {
   return tab.file.path;
 }
 
+function currentCursorHistoryEntry(): CursorHistoryEntry | null {
+  const tab = activeTab.value;
+  const position = editor.value?.getCursorPosition();
+  if (!tab || !position) {
+    return null;
+  }
+
+  return {
+    tabId: tab.id,
+    filePath: tab.file.path,
+    fileName: tab.file.name,
+    lineNumber: position.lineNumber,
+    column: position.column,
+  };
+}
+
+function isSameCursorLine(first: CursorHistoryEntry, second: CursorHistoryEntry): boolean {
+  return first.tabId === second.tabId
+    && first.filePath === second.filePath
+    && first.lineNumber === second.lineNumber;
+}
+
+function pushCursorHistoryEntry(entry: CursorHistoryEntry): void {
+  if (cursorHistory.value.length >= cursorHistoryMax) {
+    cursorHistory.value.shift();
+    cursorHistoryIndex = Math.max(-1, cursorHistoryIndex - 1);
+  }
+  cursorHistory.value.push(entry);
+  cursorHistoryIndex = cursorHistory.value.length - 1;
+}
+
+function rememberCursorPosition(): void {
+  if (isNavigatingCursorHistory) {
+    return;
+  }
+
+  const entry = currentCursorHistoryEntry();
+  if (!entry) {
+    return;
+  }
+
+  const current = cursorHistory.value[cursorHistoryIndex];
+  if (!current) {
+    pushCursorHistoryEntry(entry);
+    return;
+  }
+
+  if (isSameCursorLine(current, entry)) {
+    Object.assign(current, entry);
+    return;
+  }
+
+  if (cursorHistoryIndex < cursorHistory.value.length - 1) {
+    cursorHistory.value.splice(cursorHistoryIndex + 1);
+  }
+
+  pushCursorHistoryEntry(entry);
+}
+
+function activeTabMatchesCursorHistory(entry: CursorHistoryEntry): boolean {
+  return activeTabId.value === entry.tabId || Boolean(entry.filePath && currentFile.value?.path === entry.filePath);
+}
+
+async function activateCursorHistoryTarget(entry: CursorHistoryEntry): Promise<boolean> {
+  const openedTab = openTabs.value.find((tab) => tab.id === entry.tabId)
+    ?? openTabs.value.find((tab) => entry.filePath !== null && tab.file.path === entry.filePath);
+  if (openedTab) {
+    if (!activeTabMatchesCursorHistory(entry)) {
+      activateTab(openedTab.id);
+      await nextTick();
+    }
+    return true;
+  }
+
+  if (!entry.filePath || !bridge) {
+    return false;
+  }
+
+  await openFilePath(entry.filePath);
+  await nextTick();
+  return currentFile.value?.path === entry.filePath;
+}
+
+async function jumpToCursorHistory(direction: -1 | 1): Promise<void> {
+  rememberCursorPosition();
+  const targetIndex = cursorHistoryIndex + direction;
+  const target = cursorHistory.value[targetIndex];
+  if (!target) {
+    status.value = direction < 0 ? '没有更早的光标历史' : '没有更新的光标历史';
+    return;
+  }
+
+  isNavigatingCursorHistory = true;
+  try {
+    if (!await activateCursorHistoryTarget(target)) {
+      status.value = `无法跳转到 ${target.fileName}`;
+      return;
+    }
+
+    cursorHistoryIndex = targetIndex;
+    await nextTick();
+    editor.value?.setCursorPosition(target);
+    syncPreviewToLine(target.lineNumber);
+    updateActiveHeadingFromSourceLine(target.lineNumber);
+    status.value = `已跳转到 ${target.fileName}:${target.lineNumber}:${target.column}`;
+  } finally {
+    await nextTick();
+    isNavigatingCursorHistory = false;
+  }
+}
+
 function activeScrollTop(): number {
   return preview.value?.scrollTop ?? activeTab.value?.scrollTop ?? session.value.scrollTop;
 }
@@ -415,6 +602,33 @@ function persistableSession(): MarkdownSession {
   };
 }
 
+function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
+  const normalized = normalizeSession(snapshot ?? persistableSession());
+  return {
+    filePath: normalized.filePath,
+    tabs: normalized.tabs.map((tab) => ({
+      id: tab.id,
+      filePath: tab.filePath,
+      name: tab.name,
+      scrollTop: tab.scrollTop,
+      content: tab.content,
+      lastSavedContent: tab.lastSavedContent,
+    })),
+    activeTabId: normalized.activeTabId,
+    recentFiles: [...normalized.recentFiles],
+    scrollTop: normalized.scrollTop,
+    tocWidth: normalized.tocWidth,
+    editorWidth: normalized.editorWidth,
+    previewHidden: normalized.previewHidden,
+    editorVisible: normalized.editorVisible,
+    editorPreferences: {
+      vimEnabled: normalized.editorPreferences.vimEnabled,
+      configText: normalized.editorPreferences.configText,
+    },
+    theme: normalized.theme,
+  };
+}
+
 function persistTabSession(
   patch: Partial<MarkdownSession> = {},
   options: { deferred?: boolean; syncActive?: boolean } = {},
@@ -436,7 +650,7 @@ function saveSessionNow(snapshot?: MarkdownSession): void {
     window.clearTimeout(sessionSaveTimer);
     sessionSaveTimer = undefined;
   }
-  void bridge?.saveSession(snapshot ? normalizeSession(snapshot) : persistableSession());
+  void bridge?.saveSession(cloneableSession(snapshot));
 }
 
 function scheduleSessionSave(): void {
@@ -446,7 +660,7 @@ function scheduleSessionSave(): void {
 
   sessionSaveTimer = window.setTimeout(() => {
     sessionSaveTimer = undefined;
-    void bridge?.saveSession(persistableSession());
+    void bridge?.saveSession(cloneableSession());
   }, sessionSaveDelay);
 }
 
@@ -457,10 +671,36 @@ function saveSessionBeforeUnload(): void {
   }
 
   try {
-    bridge?.saveSessionSync?.(persistableSession());
-  } catch {
+    bridge?.saveSessionSync?.(cloneableSession());
+  } catch (error) {
+    debugLog('session.save-sync.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
     saveSessionNow();
   }
+}
+
+function debugLog(event: string, payload: Record<string, unknown> = {}): void {
+  rendererLog.info(event, payload);
+  void bridge?.debugLog?.(event, payload);
+}
+
+function logRecentFileDiagnostics(filePaths: string[]): void {
+  const duplicateBasenameGroups = recentFileDuplicateBasenameGroups(filePaths);
+  if (duplicateBasenameGroups.length === 0) {
+    lastRecentFilesDiagnosticSignature = '';
+    return;
+  }
+
+  const signature = JSON.stringify(duplicateBasenameGroups);
+  if (signature === lastRecentFilesDiagnosticSignature) {
+    return;
+  }
+  lastRecentFilesDiagnosticSignature = signature;
+  debugLog('recent-files.duplicate-basename.detected', {
+    total: filePaths.length,
+    duplicateGroups: duplicateBasenameGroups,
+  });
 }
 
 function unsavedTabs(): OpenTab[] {
@@ -528,16 +768,31 @@ function discardUnsavedChangesBeforeClose(): void {
 }
 
 async function closeApplication(): Promise<void> {
+  debugLog('app.close-application.start', {
+    hasConfirmClose: Boolean(bridge?.confirmClose),
+    hasConfirmCloseSync: Boolean(bridge?.confirmCloseSync),
+    unsavedCount: unsavedTabs().length,
+  });
   saveSessionBeforeUnload();
+  if (bridge?.confirmCloseSync) {
+    bridge.confirmCloseSync();
+    debugLog('app.close-application.confirm-close-sync-sent');
+    return;
+  }
   if (bridge?.confirmClose) {
     await bridge.confirmClose();
+    debugLog('app.close-application.confirm-close-sent');
     return;
   }
   await bridge?.quitApp?.();
+  debugLog('app.close-application.quit-sent');
 }
 
 async function requestApplicationClose(): Promise<void> {
-  if (unsavedTabs().length === 0) {
+  const unsavedCount = unsavedTabs().length;
+  debugLog('app.close-request.received', { unsavedCount });
+  if (unsavedCount === 0) {
+    closeConfirmationVisible.value = false;
     await closeApplication();
     return;
   }
@@ -548,6 +803,11 @@ async function requestApplicationClose(): Promise<void> {
 async function saveAllAndClose(): Promise<void> {
   closeConfirmationBusy.value = true;
   try {
+    if (unsavedTabs().length === 0) {
+      closeConfirmationVisible.value = false;
+      await closeApplication();
+      return;
+    }
     const saved = await saveAllUnsavedTabs();
     if (saved) {
       closeConfirmationVisible.value = false;
@@ -565,7 +825,9 @@ async function saveAllAndClose(): Promise<void> {
 async function discardAllAndClose(): Promise<void> {
   closeConfirmationBusy.value = true;
   try {
-    discardUnsavedChangesBeforeClose();
+    if (unsavedTabs().length > 0) {
+      discardUnsavedChangesBeforeClose();
+    }
     closeConfirmationVisible.value = false;
     await closeApplication();
   } finally {
@@ -579,6 +841,79 @@ function cancelCloseConfirmation(): void {
 
 function recentFileName(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath;
+}
+
+function recentFileDirectory(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  const slashIndex = normalized.lastIndexOf('/');
+  if (slashIndex < 0) {
+    return '';
+  }
+  if (slashIndex === 0) {
+    return '/';
+  }
+  return normalized.slice(0, slashIndex);
+}
+
+function recentFileParentName(filePath: string): string {
+  const directory = recentFileDirectory(filePath);
+  if (!directory) {
+    return '.';
+  }
+  if (directory === '/') {
+    return '/';
+  }
+  return directory.split('/').filter(Boolean).at(-1) ?? directory;
+}
+
+function buildRecentFileOptions(filePaths: string[]): RecentFileOption[] {
+  const paths = normalizeRecentFiles(filePaths);
+  const nameCounts = new Map<string, number>();
+  paths.forEach((filePath) => {
+    const key = recentFileName(filePath).toLocaleLowerCase();
+    nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
+  });
+
+  const candidateLabels = paths.map((filePath) => {
+    const name = recentFileName(filePath);
+    if ((nameCounts.get(name.toLocaleLowerCase()) ?? 0) <= 1) {
+      return name;
+    }
+    return `${name} (${recentFileParentName(filePath)})`;
+  });
+  const labelCounts = new Map<string, number>();
+  candidateLabels.forEach((label) => {
+    const key = label.toLocaleLowerCase();
+    labelCounts.set(key, (labelCounts.get(key) ?? 0) + 1);
+  });
+
+  return paths.map((filePath, index) => {
+    const candidateLabel = candidateLabels[index];
+    const label = (labelCounts.get(candidateLabel.toLocaleLowerCase()) ?? 0) > 1
+      ? `${recentFileName(filePath)} (${recentFileDirectory(filePath) || filePath})`
+      : candidateLabel;
+    return { path: filePath, label };
+  });
+}
+
+function recentFileTriggerLabel(): string {
+  const currentPath = currentFile.value?.path;
+  if (!currentPath) {
+    return '最近文件';
+  }
+  return recentFileOptions.value.find((file) => file.path === currentPath)?.label ?? '最近文件';
+}
+
+function recentFileDuplicateBasenameGroups(filePaths: string[]): { name: string; paths: string[] }[] {
+  const groups = new Map<string, { name: string; paths: string[] }>();
+  normalizeRecentFiles(filePaths).forEach((filePath) => {
+    const name = recentFileName(filePath);
+    const key = name.toLocaleLowerCase();
+    const group = groups.get(key) ?? { name, paths: [] };
+    group.paths.push(filePath);
+    groups.set(key, group);
+  });
+  return Array.from(groups.values()).filter((group) => group.paths.length > 1);
 }
 
 function persistOpenedFile(file: MarkdownFile, scrollTop: number, tabId = file.path ? tabIdForPath(file.path) : ''): void {
@@ -638,6 +973,11 @@ function sourceLineCount(): number {
 
 function editorElement(): HTMLElement | null {
   return editor.value?.getElement() ?? null;
+}
+
+function eventTargetIsEditor(target: EventTarget | null): boolean {
+  const element = editorElement();
+  return target instanceof Node && Boolean(element?.contains(target));
 }
 
 function editorSelectionRange(): { start: number; end: number } | null {
@@ -748,17 +1088,16 @@ function editorAnchors(): ScrollAnchor[] {
 }
 
 function lineFromEditorScroll(): number {
-  const element = editorElement();
-  if (!element) {
+  if (!editor.value) {
     return 1;
   }
 
   const anchors = editorAnchors();
   if (anchors.length > 0) {
-    return interpolateLineFromAnchors(element.scrollTop, anchors);
+    return interpolateLineFromAnchors(editorScrollTop(), anchors);
   }
 
-  return Math.min(sourceLineCount(), Math.max(1, element.scrollTop / editorLineHeight() + 1));
+  return Math.min(sourceLineCount(), Math.max(1, editorScrollTop() / editorLineHeight() + 1));
 }
 
 function lineFromEditorSelection(): number {
@@ -772,14 +1111,13 @@ function lineFromEditorSelection(): number {
 }
 
 function syncEditorToLine(line: number): void {
-  const element = editorElement();
-  if (!element) {
+  if (!editor.value) {
     return;
   }
 
   const anchors = editorAnchors();
   const targetTop = anchors.length > 0 ? interpolateTopFromAnchors(line, anchors) : (line - 1) * editorLineHeight();
-  setEditorScrollTop(Math.min(maxScrollTop(element), Math.max(0, targetTop)));
+  setEditorScrollTop(Math.min(editor.value.getMaxScrollTop(), Math.max(0, targetTop)));
 }
 
 function previewNodeScrollTop(node: HTMLElement, container: HTMLElement): number {
@@ -923,6 +1261,7 @@ function onEditorScroll(event: Event): void {
 function onEditorFocusLineChange(): void {
   void nextTick(() => {
     const line = lineFromEditorSelection();
+    rememberCursorPosition();
     syncPreviewToLine(line);
     updateActiveHeadingFromSourceLine(line);
     rememberScroll(preview.value?.scrollTop ?? editorScrollTop());
@@ -1075,7 +1414,7 @@ async function closeTab(tabId: string, event?: MouseEvent): Promise<void> {
     return;
   }
 
-  if (openTabs.value.length === 1 && openTabs.value[index].source !== openTabs.value[index].lastSavedContent) {
+  if (openTabs.value.length === 1 && unsavedTabs().some((tab) => tab.id === tabId)) {
     closeConfirmationVisible.value = true;
     return;
   }
@@ -1141,6 +1480,22 @@ function closeTabContextMenu(): void {
   tabContextMenu.value = null;
 }
 
+function closeFloatingMenus(event?: MouseEvent): void {
+  closeTabContextMenu();
+  if (event?.target instanceof HTMLElement && event.target.closest('.recent-files-menu')) {
+    return;
+  }
+  recentFilesOpen.value = false;
+  if (event?.target instanceof HTMLElement && event.target.closest('.help-menu')) {
+    return;
+  }
+  helpPopoverPinned.value = false;
+}
+
+function toggleHelpPopover(): void {
+  helpPopoverPinned.value = !helpPopoverPinned.value;
+}
+
 function duplicateTab(tabId: string): void {
   const tab = openTabs.value.find((item) => item.id === tabId);
   if (!tab) {
@@ -1178,6 +1533,20 @@ async function copyTabContent(tabId: string): Promise<void> {
 
   syncActiveTabState();
   await copyTextToClipboard(tab.source, '已复制 Markdown 内容');
+  closeTabContextMenu();
+}
+
+async function revealTabInFolder(tabId: string): Promise<void> {
+  const tab = openTabs.value.find((item) => item.id === tabId);
+  const path = tab ? tabPath(tab) : null;
+  if (!tab || !path || !bridge?.revealInFolder) {
+    status.value = '当前标签页还没有文件路径';
+    closeTabContextMenu();
+    return;
+  }
+
+  await bridge.revealInFolder(path);
+  status.value = `已在 Finder 中定位 ${tab.file.name}`;
   closeTabContextMenu();
 }
 
@@ -1297,7 +1666,7 @@ async function openFilePath(filePath: string): Promise<void> {
   } catch {
     status.value = `无法打开 ${filePath}`;
     persistSession({
-      recentFiles: session.value.recentFiles.filter((recent) => recent !== filePath),
+      recentFiles: removeRecentFile(session.value.recentFiles, filePath),
     });
   }
 }
@@ -1383,11 +1752,26 @@ function isMarkdownPath(filePath: string): boolean {
   return /\.(md|markdown|mdown)$/i.test(filePath);
 }
 
-async function openRecentFile(event: Event): Promise<void> {
-  const filePath = (event.target as HTMLSelectElement).value;
-  if (filePath) {
-    await openFilePath(filePath);
+function toggleRecentFiles(): void {
+  if (recentFileOptions.value.length === 0) {
+    return;
   }
+  recentFilesOpen.value = !recentFilesOpen.value;
+}
+
+async function openRecentFilePath(filePath: string): Promise<void> {
+  recentFilesOpen.value = false;
+  await openFilePath(filePath);
+}
+
+function deleteRecentFile(filePath: string): void {
+  persistSession({
+    recentFiles: removeRecentFile(session.value.recentFiles, filePath),
+  });
+  if (recentFileOptions.value.length <= 1) {
+    recentFilesOpen.value = false;
+  }
+  status.value = `已从最近文件移除 ${recentFileName(filePath)}`;
 }
 
 async function onDropFile(event: DragEvent): Promise<void> {
@@ -1409,15 +1793,19 @@ async function onDropFile(event: DragEvent): Promise<void> {
 }
 
 async function saveCurrentFile(): Promise<void> {
+  await saveCurrentFileAndReport();
+}
+
+async function saveCurrentFileAndReport(): Promise<boolean> {
   if (!currentFile.value || !bridge) {
-    return;
+    return false;
   }
   if (!currentFile.value.path) {
     await saveTabAs(activeTabId.value);
-    return;
+    return source.value === lastSavedContent.value && Boolean(currentFile.value?.path);
   }
   if (!hasUnsavedChanges.value) {
-    return;
+    return true;
   }
 
   currentFile.value = await bridge.saveMarkdownFile(currentFile.value.path, source.value);
@@ -1429,6 +1817,7 @@ async function saveCurrentFile(): Promise<void> {
   }
   status.value = `已保存 ${currentFile.value.path}`;
   scheduleSessionSave();
+  return true;
 }
 
 async function saveTabAs(tabId: string | null): Promise<void> {
@@ -1982,6 +2371,64 @@ function onVimStatus(message: string): void {
   status.value = message;
 }
 
+function undoEditor(): void {
+  editor.value?.undo();
+}
+
+function redoEditor(): void {
+  editor.value?.redo();
+}
+
+async function closeActiveCleanTab(): Promise<void> {
+  if (!activeTabId.value) {
+    return;
+  }
+  if (hasUnsavedChanges.value) {
+    status.value = '当前有未保存修改，使用 :q! 强制关闭';
+    return;
+  }
+  await closeTab(activeTabId.value);
+}
+
+async function forceCloseActiveTab(): Promise<void> {
+  const tab = activeTab.value;
+  if (!tab || !activeTabId.value) {
+    return;
+  }
+
+  tab.source = tab.lastSavedContent;
+  tab.file = {
+    ...tab.file,
+    content: tab.lastSavedContent,
+  };
+  if (tab.id === activeTabId.value) {
+    currentFile.value = tab.file;
+    source.value = tab.source;
+    lastSavedContent.value = tab.lastSavedContent;
+  }
+  await closeTab(tab.id);
+}
+
+async function onVimCommand(command: VimCommand): Promise<void> {
+  if (command === 'write') {
+    if (await saveCurrentFileAndReport()) {
+      status.value = 'Vim :w 已保存';
+    }
+    return;
+  }
+  if (command === 'write-quit') {
+    if (await saveCurrentFileAndReport()) {
+      await closeActiveCleanTab();
+    }
+    return;
+  }
+  if (command === 'quit') {
+    await closeActiveCleanTab();
+    return;
+  }
+  await forceCloseActiveTab();
+}
+
 function toggleEditor(): void {
   const willShowEditor = !isEditorVisible.value;
   persistSession({
@@ -2004,7 +2451,14 @@ function togglePreview(): void {
   }
 }
 
+function toggleTocPanel(): void {
+  isTocPanelCollapsed.value = !isTocPanelCollapsed.value;
+}
+
 function startResize(target: 'toc' | 'editor', event: PointerEvent): void {
+  if (target === 'toc' && isTocPanelCollapsed.value) {
+    return;
+  }
   activeResize.value = target;
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
 }
@@ -2020,7 +2474,7 @@ function onResizeMove(event: PointerEvent): void {
   }
 
   persistSession({
-    editorWidth: Math.max(320, Math.min(1200, event.clientX - session.value.tocWidth - 6)),
+    editorWidth: Math.max(320, Math.min(1200, event.clientX - tocColumnWidth.value - 6)),
   }, { deferred: true });
 }
 
@@ -2040,6 +2494,177 @@ function resetPreviewZoom(): void {
   setPreviewZoom(1);
 }
 
+function executeAppMenuCommand(command: AppMenuCommand): void {
+  if (command === 'new-file') {
+    createNewMarkdownTab();
+    return;
+  }
+  if (command === 'open-file') {
+    void openFile();
+    return;
+  }
+  if (command === 'refresh-file') {
+    void refreshCurrentFile();
+    return;
+  }
+  if (command === 'save-file') {
+    void saveCurrentFile();
+    return;
+  }
+  if (command === 'save-as') {
+    void saveTabAs(activeTabId.value);
+    return;
+  }
+  if (command === 'save-all') {
+    void saveAllUnsavedTabs();
+    return;
+  }
+  if (command === 'export-html') {
+    void exportDocument('html');
+    return;
+  }
+  if (command === 'export-pdf') {
+    void exportDocument('pdf');
+    return;
+  }
+  if (command === 'close-tab' && activeTabId.value) {
+    void closeTab(activeTabId.value);
+    return;
+  }
+  if (command === 'duplicate-tab' && activeTabId.value) {
+    duplicateTab(activeTabId.value);
+    return;
+  }
+  if (command === 'copy-tab-path' && activeTabId.value) {
+    void copyTabPath(activeTabId.value);
+    return;
+  }
+  if (command === 'copy-tab-content' && activeTabId.value) {
+    void copyTabContent(activeTabId.value);
+    return;
+  }
+  if (command === 'undo') {
+    undoEditor();
+    return;
+  }
+  if (command === 'redo') {
+    redoEditor();
+    return;
+  }
+  if (command === 'show-search') {
+    showEditorSearch();
+    return;
+  }
+  if (command === 'find-next') {
+    findNext();
+    return;
+  }
+  if (command === 'replace-current') {
+    replaceCurrent();
+    return;
+  }
+  if (command === 'replace-all') {
+    replaceAll();
+    return;
+  }
+  if (command === 'insert-table') {
+    insertTable();
+    return;
+  }
+  if (command === 'insert-link') {
+    insertLink();
+    return;
+  }
+  if (command === 'insert-code') {
+    insertCodeBlock();
+    return;
+  }
+  if (command === 'import-image') {
+    void importImageAsset();
+    return;
+  }
+  if (command === 'image-upload-local') {
+    setImageUploadMode('local');
+    status.value = '粘贴图片将保存到本地资源目录';
+    return;
+  }
+  if (command === 'image-upload-cloud') {
+    showCloudUploadPlaceholder();
+    return;
+  }
+  if (command === 'refresh-assets') {
+    void refreshImageAssets();
+    return;
+  }
+  if (command === 'insert-selected-asset') {
+    insertSelectedAsset();
+    return;
+  }
+  if (command === 'delete-selected-asset') {
+    void deleteSelectedAsset();
+    return;
+  }
+  if (command === 'toggle-editor') {
+    toggleEditor();
+    return;
+  }
+  if (command === 'toggle-toc-panel') {
+    toggleTocPanel();
+    return;
+  }
+  if (command === 'toggle-preview') {
+    togglePreview();
+    return;
+  }
+  if (command === 'toggle-fullscreen-preview') {
+    isPreviewFullscreen.value = !isPreviewFullscreen.value;
+    return;
+  }
+  if (command === 'preview-zoom-in') {
+    zoomPreview(previewZoomStep);
+    return;
+  }
+  if (command === 'preview-zoom-out') {
+    zoomPreview(-previewZoomStep);
+    return;
+  }
+  if (command === 'preview-zoom-reset') {
+    resetPreviewZoom();
+    return;
+  }
+  if (command === 'theme-light') {
+    setTheme('light');
+    return;
+  }
+  if (command === 'theme-dark') {
+    setTheme('dark');
+    return;
+  }
+  if (command === 'theme-eye') {
+    setTheme('eye');
+    return;
+  }
+  if (command === 'expand-toc') {
+    expandAllHeadings();
+    return;
+  }
+  if (command === 'collapse-toc') {
+    collapseAllHeadings();
+    return;
+  }
+  if (command === 'toggle-vim') {
+    toggleVimMode();
+    return;
+  }
+  if (command === 'open-editor-config') {
+    openEditorConfigDialog();
+    return;
+  }
+  if (command === 'show-help') {
+    helpPopoverPinned.value = true;
+  }
+}
+
 function onKeyDown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && activeMermaidDiagram.value) {
     activeMermaidDiagram.value = null;
@@ -2056,6 +2681,16 @@ function onKeyDown(event: KeyboardEvent): void {
     event.preventDefault();
     return;
   }
+  if (event.key === 'Escape' && helpPopoverPinned.value) {
+    helpPopoverPinned.value = false;
+    event.preventDefault();
+    return;
+  }
+  if (event.key === 'Escape' && recentFilesOpen.value) {
+    recentFilesOpen.value = false;
+    event.preventDefault();
+    return;
+  }
 
   const command = event.metaKey || event.ctrlKey;
   if (!command) {
@@ -2063,6 +2698,21 @@ function onKeyDown(event: KeyboardEvent): void {
   }
 
   const key = event.key.toLowerCase();
+  if (event.ctrlKey && !event.altKey && !event.shiftKey && (key === '[' || key === ']')) {
+    event.preventDefault();
+    void jumpToCursorHistory(key === '[' ? -1 : 1);
+    return;
+  }
+  if (key === 'z' && !event.altKey && !event.shiftKey && eventTargetIsEditor(event.target)) {
+    undoEditor();
+    event.preventDefault();
+    return;
+  }
+  if ((key === 'z' && event.shiftKey || key === 'y') && !event.altKey && eventTargetIsEditor(event.target)) {
+    redoEditor();
+    event.preventDefault();
+    return;
+  }
   if (key === '+' || key === '=') {
     event.preventDefault();
     zoomPreview(previewZoomStep);
@@ -2803,6 +3453,7 @@ onMounted(async () => {
   removeMarkdownFileChangedListener = bridge?.onMarkdownFileChanged(onMarkdownFileChanged);
   removeToggleEditorShortcutListener = bridge?.onToggleEditorShortcut(toggleEditor);
   removeCloseRequestListener = bridge?.onCloseRequest(requestApplicationClose);
+  removeAppMenuCommandListener = bridge?.onAppMenuCommand?.(executeAppMenuCommand);
   const launchRequest = await bridge?.takeLaunchMarkdownFile();
   if (launchRequest) {
     queuedOpenRequests.push(launchRequest);
@@ -2820,7 +3471,7 @@ onMounted(async () => {
   await bridge?.notifyReadyForExternalOpen?.();
   await renderMermaid();
   window.addEventListener('keydown', onKeyDown, true);
-  window.addEventListener('click', closeTabContextMenu);
+  window.addEventListener('click', closeFloatingMenus);
   window.addEventListener('beforeunload', saveSessionBeforeUnload);
   window.addEventListener('pointermove', onResizeMove);
   window.addEventListener('pointerup', stopResize);
@@ -2837,8 +3488,9 @@ onBeforeUnmount(() => {
   removeMarkdownFileChangedListener?.();
   removeToggleEditorShortcutListener?.();
   removeCloseRequestListener?.();
+  removeAppMenuCommandListener?.();
   window.removeEventListener('keydown', onKeyDown, true);
-  window.removeEventListener('click', closeTabContextMenu);
+  window.removeEventListener('click', closeFloatingMenus);
   window.removeEventListener('beforeunload', saveSessionBeforeUnload);
   window.removeEventListener('pointermove', onResizeMove);
   window.removeEventListener('pointerup', stopResize);
@@ -2854,6 +3506,7 @@ onBeforeUnmount(() => {
         'preview-fullscreen': isPreviewFullscreen,
         'preview-hidden': session.previewHidden,
         'reader-mode': !isEditorVisible,
+        'toc-collapsed': isTocPanelCollapsed,
       },
     ]"
     @dragover.prevent
@@ -2920,18 +3573,56 @@ onBeforeUnmount(() => {
         >
           <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.open" /></svg>
         </button>
-        <select
-          data-testid="recent-files"
-          :disabled="session.recentFiles.length === 0"
-          :title="`最近打开文件（最多 20 个）`"
-          :value="currentFile?.path ?? ''"
-          @change="openRecentFile"
-        >
-          <option value="">最近文件</option>
-          <option v-for="filePath in session.recentFiles" :key="filePath" :value="filePath">
-            {{ recentFileName(filePath) }}
-          </option>
-        </select>
+        <div class="recent-files-menu" :class="{ 'is-open': recentFilesOpen }">
+          <button
+            data-testid="recent-files"
+            class="recent-files-trigger"
+            type="button"
+            :disabled="recentFileOptions.length === 0"
+            :title="`最近打开文件（最多 20 个）`"
+            :aria-expanded="recentFilesOpen"
+            aria-haspopup="menu"
+            @click.stop="toggleRecentFiles"
+          >
+            <span>{{ recentFileTriggerLabel() }}</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.chevronDown" /></svg>
+          </button>
+          <div
+            v-if="recentFilesOpen"
+            class="recent-files-popover"
+            data-testid="recent-files-popover"
+            role="menu"
+            @click.stop
+          >
+            <div
+              v-for="file in recentFileOptions"
+              :key="file.path"
+              class="recent-file-row"
+              role="none"
+              :data-testid="`recent-file-${file.label}`"
+              :title="file.path"
+            >
+              <button
+                class="recent-file-open"
+                type="button"
+                role="menuitem"
+                @click="openRecentFilePath(file.path)"
+              >
+                <span>{{ file.label }}</span>
+              </button>
+              <button
+                class="recent-file-delete"
+                type="button"
+                :data-testid="`delete-recent-file-${file.label}`"
+                :aria-label="`从最近文件移除 ${file.label}`"
+                :title="`从最近文件移除 ${file.path}`"
+                @click.stop="deleteRecentFile(file.path)"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.trash" /></svg>
+              </button>
+            </div>
+          </div>
+        </div>
         <button
           data-testid="save-file"
           class="icon-button"
@@ -3039,30 +3730,34 @@ onBeforeUnmount(() => {
         >
           <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.plus" /></svg>
         </button>
-        <div class="help-menu">
+        <div class="help-menu" :class="{ 'is-open': helpPopoverPinned }">
           <button
             data-testid="help-button"
             class="icon-button"
             type="button"
             aria-label="帮助"
             title="帮助"
+            @click.stop="toggleHelpPopover"
           >
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.info" /></svg>
           </button>
-          <div class="help-popover" data-testid="help-popover" role="tooltip">
+          <div class="help-popover" data-testid="help-popover" role="tooltip" @click.stop>
             <div class="help-popover-header">
               <strong>Markdown 纪 <span>v{{ appVersion }}</span></strong>
-              <span>工具说明与快捷键</span>
+              <span>菜单分组、功能说明与快捷键</span>
             </div>
-            <dl>
-              <template v-for="item in helpItems" :key="item.label">
-                <dt>
-                  <span>{{ item.label }}</span>
-                  <kbd v-if="item.shortcut">{{ item.shortcut }}</kbd>
-                </dt>
-                <dd>{{ item.detail }}</dd>
-              </template>
-            </dl>
+            <section v-for="group in helpGroups" :key="group.title" class="help-group">
+              <h3>{{ group.title }}</h3>
+              <dl>
+                <template v-for="item in group.items" :key="item.label">
+                  <dt>
+                    <span>{{ item.label }}</span>
+                    <kbd v-if="item.shortcut">{{ item.shortcut }}</kbd>
+                  </dt>
+                  <dd>{{ item.detail }}</dd>
+                </template>
+              </dl>
+            </section>
           </div>
         </div>
       </div>
@@ -3123,6 +3818,9 @@ onBeforeUnmount(() => {
       <button type="button" role="menuitem" data-testid="tab-save-as" @click="saveContextTabAs(tabContextMenu.tabId)">
         另存为
       </button>
+      <button type="button" role="menuitem" data-testid="tab-reveal-in-folder" @click="revealTabInFolder(tabContextMenu.tabId)">
+        在 Finder 中显示
+      </button>
     </div>
 
     <section class="workspace" :style="gridStyle">
@@ -3131,6 +3829,16 @@ onBeforeUnmount(() => {
           <div class="toc-toolbar-row">
             <h2>目录</h2>
             <div class="toc-actions">
+              <button
+                data-testid="toggle-toc-panel"
+                class="icon-button toc-panel-toggle"
+                type="button"
+                :aria-label="isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'"
+                :title="isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'"
+                @click="toggleTocPanel"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="isTocPanelCollapsed ? icons.chevronRight : icons.chevronDown" /></svg>
+              </button>
               <button data-testid="expand-toc" class="icon-button" type="button" aria-label="全部展开" title="全部展开" @click="expandAllHeadings">
                 <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.chevronDown" /></svg>
               </button>
@@ -3268,6 +3976,7 @@ onBeforeUnmount(() => {
             @focus-line-change="onEditorFocusLineChange"
             @scroll="onEditorScroll"
             @paste="onEditorPaste"
+            @vim-command="onVimCommand"
             @vim-status="onVimStatus"
           />
         </div>

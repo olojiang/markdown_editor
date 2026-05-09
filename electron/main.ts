@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFileSync } from 'node:child_process';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
@@ -71,6 +71,50 @@ interface CloudImageUploadResult {
   localPath: string;
 }
 
+type AppMenuCommand =
+  | 'new-file'
+  | 'open-file'
+  | 'refresh-file'
+  | 'save-file'
+  | 'save-as'
+  | 'save-all'
+  | 'export-html'
+  | 'export-pdf'
+  | 'close-tab'
+  | 'duplicate-tab'
+  | 'copy-tab-path'
+  | 'copy-tab-content'
+  | 'undo'
+  | 'redo'
+  | 'show-search'
+  | 'find-next'
+  | 'replace-current'
+  | 'replace-all'
+  | 'insert-table'
+  | 'insert-link'
+  | 'insert-code'
+  | 'import-image'
+  | 'image-upload-local'
+  | 'image-upload-cloud'
+  | 'refresh-assets'
+  | 'insert-selected-asset'
+  | 'delete-selected-asset'
+  | 'toggle-editor'
+  | 'toggle-toc-panel'
+  | 'toggle-preview'
+  | 'toggle-fullscreen-preview'
+  | 'preview-zoom-in'
+  | 'preview-zoom-out'
+  | 'preview-zoom-reset'
+  | 'theme-light'
+  | 'theme-dark'
+  | 'theme-eye'
+  | 'expand-toc'
+  | 'collapse-toc'
+  | 'toggle-vim'
+  | 'open-editor-config'
+  | 'show-help';
+
 const isDev = !app.isPackaged && process.env.MARKDOWN_EDITOR_FORCE_PROD !== '1';
 const devServerUrl = 'http://127.0.0.1:26543';
 const appTitle = 'Markdown 纪';
@@ -94,8 +138,194 @@ let pendingExternalMarkdownPath: string | null = null;
 let rendererReadyForExternalOpen = false;
 let launchMarkdownPathConsumed = false;
 let closeConfirmed = false;
+let lastRecentFilesMainDiagnosticSignature = '';
 const watchedMarkdownFiles = new Map<string, fsSync.FSWatcher>();
 const markdownChangeTimers = new Map<string, NodeJS.Timeout>();
+
+function mainLog(event: string, payload: Record<string, unknown> = {}): void {
+  const record = {
+    event,
+    payload,
+    timestamp: new Date().toISOString(),
+  };
+  console.info('[markdown-editor:main]', record);
+  try {
+    fsSync.mkdirSync(app.getPath('userData'), { recursive: true });
+    fsSync.appendFileSync(
+      path.join(app.getPath('userData'), 'markdown-editor-debug.log'),
+      `${JSON.stringify(record)}\n`,
+      'utf8',
+    );
+  } catch {
+    // Debug logging must never block app behavior.
+  }
+}
+
+function sendAppMenuCommand(command: AppMenuCommand): void {
+  const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  window?.webContents.send('app:menu-command', command);
+}
+
+function commandMenuItem(
+  label: string,
+  command: AppMenuCommand,
+  accelerator?: string,
+): MenuItemConstructorOptions {
+  return {
+    label,
+    accelerator,
+    click: () => sendAppMenuCommand(command),
+  };
+}
+
+function buildApplicationMenu(): void {
+  const template: MenuItemConstructorOptions[] = [
+    {
+      label: '文件',
+      submenu: [
+        commandMenuItem('新建 Markdown', 'new-file', 'CmdOrCtrl+T'),
+        commandMenuItem('打开 Markdown...', 'open-file', 'CmdOrCtrl+O'),
+        commandMenuItem('从磁盘刷新', 'refresh-file', 'CmdOrCtrl+R'),
+        { type: 'separator' },
+        commandMenuItem('保存', 'save-file', 'CmdOrCtrl+S'),
+        commandMenuItem('另存为...', 'save-as', 'CmdOrCtrl+Shift+S'),
+        commandMenuItem('全部保存', 'save-all', 'CmdOrCtrl+Alt+S'),
+        { type: 'separator' },
+        commandMenuItem('导出 HTML...', 'export-html', 'CmdOrCtrl+Shift+H'),
+        commandMenuItem('导出 PDF...', 'export-pdf', 'CmdOrCtrl+Shift+P'),
+        { type: 'separator' },
+        commandMenuItem('关闭当前标签页', 'close-tab', 'CmdOrCtrl+W'),
+        process.platform === 'darwin' ? { role: 'close' } : { role: 'quit', label: '退出' },
+      ],
+    },
+    {
+      label: '编辑',
+      submenu: [
+        commandMenuItem('撤销', 'undo', 'CmdOrCtrl+Z'),
+        commandMenuItem('重做', 'redo', process.platform === 'darwin' ? 'CmdOrCtrl+Shift+Z' : 'CmdOrCtrl+Y'),
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' },
+        { type: 'separator' },
+        commandMenuItem('查找...', 'show-search', 'CmdOrCtrl+F'),
+        commandMenuItem('查找下一个', 'find-next', 'CmdOrCtrl+G'),
+        commandMenuItem('替换当前匹配', 'replace-current'),
+        commandMenuItem('全部替换', 'replace-all'),
+      ],
+    },
+    {
+      label: '标签页',
+      submenu: [
+        commandMenuItem('复制当前标签页', 'duplicate-tab', 'CmdOrCtrl+Shift+D'),
+        commandMenuItem('复制文件路径', 'copy-tab-path', 'CmdOrCtrl+Shift+C'),
+        commandMenuItem('复制 Markdown 内容', 'copy-tab-content'),
+      ],
+    },
+    {
+      label: '插入',
+      submenu: [
+        commandMenuItem('表格', 'insert-table', 'CmdOrCtrl+Alt+T'),
+        commandMenuItem('链接', 'insert-link', 'CmdOrCtrl+K'),
+        commandMenuItem('代码块', 'insert-code', 'CmdOrCtrl+Alt+C'),
+        { type: 'separator' },
+        commandMenuItem('导入本地图片...', 'import-image', 'Alt+Shift+I'),
+        {
+          label: '粘贴图片上传方式',
+          submenu: [
+            commandMenuItem('保存到本地资源目录', 'image-upload-local'),
+            commandMenuItem('上传到云端', 'image-upload-cloud'),
+          ],
+        },
+      ],
+    },
+    {
+      label: '资源',
+      submenu: [
+        commandMenuItem('刷新图片资源', 'refresh-assets'),
+        commandMenuItem('插入选中图片', 'insert-selected-asset'),
+        commandMenuItem('删除选中图片资源', 'delete-selected-asset'),
+      ],
+    },
+    {
+      label: '视图',
+      submenu: [
+        commandMenuItem('阅读/编辑模式', 'toggle-editor', 'CmdOrCtrl+E'),
+        commandMenuItem('展开/收起目录侧栏', 'toggle-toc-panel', 'CmdOrCtrl+Alt+B'),
+        commandMenuItem('显示/隐藏预览', 'toggle-preview', 'CmdOrCtrl+P'),
+        commandMenuItem('全屏预览', 'toggle-fullscreen-preview', 'F11'),
+        { type: 'separator' },
+        commandMenuItem('放大预览', 'preview-zoom-in', 'CmdOrCtrl+='),
+        commandMenuItem('缩小预览', 'preview-zoom-out', 'CmdOrCtrl+-'),
+        commandMenuItem('还原预览缩放', 'preview-zoom-reset', 'CmdOrCtrl+0'),
+        { type: 'separator' },
+        {
+          label: '主题',
+          submenu: [
+            commandMenuItem('浅色', 'theme-light'),
+            commandMenuItem('深色', 'theme-dark'),
+            commandMenuItem('护眼', 'theme-eye'),
+          ],
+        },
+        {
+          label: '目录',
+          submenu: [
+            commandMenuItem('全部展开', 'expand-toc'),
+            commandMenuItem('全部收起', 'collapse-toc'),
+          ],
+        },
+      ],
+    },
+    {
+      label: '工具',
+      submenu: [
+        commandMenuItem('开启/关闭 Vim 模式', 'toggle-vim'),
+        commandMenuItem('Monaco / Vim 配置...', 'open-editor-config'),
+        { type: 'separator' },
+        { role: 'toggleDevTools', label: '开发者工具', accelerator: 'CmdOrCtrl+Alt+I' },
+      ],
+    },
+    {
+      label: '窗口',
+      submenu: [
+        { role: 'minimize', label: '最小化' },
+        { role: 'zoom', label: '缩放' },
+        ...(process.platform === 'darwin' ? [
+          { type: 'separator' } as MenuItemConstructorOptions,
+          { role: 'front', label: '前置全部窗口' } as MenuItemConstructorOptions,
+        ] : []),
+      ],
+    },
+    {
+      label: '帮助',
+      submenu: [
+        commandMenuItem('功能与快捷键说明', 'show-help', 'CmdOrCtrl+/'),
+        { type: 'separator' },
+        { role: 'about', label: `关于 ${appTitle}` },
+      ],
+    },
+  ];
+
+  if (process.platform === 'darwin') {
+    template.unshift({
+      label: appTitle,
+      submenu: [
+        { role: 'about', label: `关于 ${appTitle}` },
+        { type: 'separator' },
+        { role: 'services', label: '服务' },
+        { type: 'separator' },
+        { role: 'hide', label: `隐藏 ${appTitle}` },
+        { role: 'hideOthers', label: '隐藏其他' },
+        { role: 'unhide', label: '全部显示' },
+        { type: 'separator' },
+        { role: 'quit', label: `退出 ${appTitle}` },
+      ],
+    });
+  }
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
 
 function normalizeTheme(theme: unknown): MarkdownSession['theme'] {
   return theme === 'dark' || theme === 'eye' ? theme : 'light';
@@ -121,8 +351,77 @@ function normalizeRecentFiles(recentFiles: unknown): string[] {
     return [];
   }
 
-  return Array.from(new Set(recentFiles.filter((filePath): filePath is string => typeof filePath === 'string')))
-    .slice(0, 20);
+  const seen = new Set<string>();
+  return recentFiles.flatMap((filePath): string[] => {
+    if (typeof filePath !== 'string') {
+      return [];
+    }
+    const normalized = normalizeRecentFilePath(filePath);
+    const key = recentFileKey(normalized);
+    if (!normalized || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [normalized];
+  }).slice(0, 20);
+}
+
+function recentFileKey(filePath: string): string {
+  return normalizeRecentFilePath(filePath).toLocaleLowerCase();
+}
+
+function normalizeRecentFilePath(filePath: string): string {
+  let normalized = filePath.trim();
+  if (!normalized) {
+    return '';
+  }
+  if (normalized.startsWith('file://')) {
+    try {
+      normalized = fileURLToPath(normalized);
+    } catch {
+      // Keep the original value when it is not a valid file URL.
+    }
+  }
+
+  return path.resolve(normalized);
+}
+
+function recentFileDuplicateBasenameGroups(recentFiles: string[]): { name: string; paths: string[] }[] {
+  const groups = new Map<string, { name: string; paths: string[] }>();
+  recentFiles.forEach((filePath) => {
+    const name = path.basename(filePath);
+    const key = name.toLocaleLowerCase();
+    const group = groups.get(key) ?? { name, paths: [] };
+    group.paths.push(filePath);
+    groups.set(key, group);
+  });
+  return Array.from(groups.values()).filter((group) => group.paths.length > 1);
+}
+
+function logRecentFilesDiagnostics(source: string, originalRecentFiles: unknown, normalizedRecentFiles: string[]): void {
+  const originalStringRecentFiles = Array.isArray(originalRecentFiles)
+    ? originalRecentFiles.filter((filePath): filePath is string => typeof filePath === 'string')
+    : [];
+  const duplicateBasenameGroups = recentFileDuplicateBasenameGroups(normalizedRecentFiles);
+  const normalizedChanged = JSON.stringify(originalStringRecentFiles) !== JSON.stringify(normalizedRecentFiles);
+  if (!normalizedChanged && duplicateBasenameGroups.length === 0) {
+    lastRecentFilesMainDiagnosticSignature = '';
+    return;
+  }
+
+  const signature = JSON.stringify({ originalStringRecentFiles, normalizedRecentFiles, duplicateBasenameGroups });
+  if (signature === lastRecentFilesMainDiagnosticSignature) {
+    return;
+  }
+  lastRecentFilesMainDiagnosticSignature = signature;
+  mainLog('recent-files.diagnostics', {
+    source,
+    originalCount: Array.isArray(originalRecentFiles) ? originalRecentFiles.length : 0,
+    originalStringCount: originalStringRecentFiles.length,
+    normalizedCount: normalizedRecentFiles.length,
+    normalizedChanged,
+    duplicateBasenameGroups,
+  });
 }
 
 function tabIdForPath(filePath: string): string {
@@ -171,13 +470,15 @@ async function readSession(): Promise<MarkdownSession> {
     const raw = await fs.readFile(sessionFilePath(), 'utf8');
     const parsed = JSON.parse(raw) as Partial<MarkdownSession>;
     const tabs = normalizeSessionTabs(parsed.tabs);
+    const recentFiles = normalizeRecentFiles(parsed.recentFiles);
+    logRecentFilesDiagnostics('read-session', parsed.recentFiles, recentFiles);
     return {
       filePath: typeof parsed.filePath === 'string' ? parsed.filePath : null,
       tabs,
       activeTabId: typeof parsed.activeTabId === 'string' && tabs.some((tab) => tab.id === parsed.activeTabId)
         ? parsed.activeTabId
         : tabs[0]?.id ?? null,
-      recentFiles: normalizeRecentFiles(parsed.recentFiles),
+      recentFiles,
       scrollTop: typeof parsed.scrollTop === 'number' ? parsed.scrollTop : 0,
       tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
       editorWidth: typeof parsed.editorWidth === 'number' ? parsed.editorWidth : 560,
@@ -192,12 +493,22 @@ async function readSession(): Promise<MarkdownSession> {
 
 async function saveSession(session: MarkdownSession): Promise<void> {
   await fs.mkdir(path.dirname(sessionFilePath()), { recursive: true });
-  await fs.writeFile(sessionFilePath(), JSON.stringify(session, null, 2), 'utf8');
+  const recentFiles = normalizeRecentFiles(session.recentFiles);
+  logRecentFilesDiagnostics('save-session', session.recentFiles, recentFiles);
+  await fs.writeFile(sessionFilePath(), JSON.stringify({
+    ...session,
+    recentFiles,
+  }, null, 2), 'utf8');
 }
 
 function saveSessionSync(session: MarkdownSession): void {
   fsSync.mkdirSync(path.dirname(sessionFilePath()), { recursive: true });
-  fsSync.writeFileSync(sessionFilePath(), JSON.stringify(session, null, 2), 'utf8');
+  const recentFiles = normalizeRecentFiles(session.recentFiles);
+  logRecentFilesDiagnostics('save-session-sync', session.recentFiles, recentFiles);
+  fsSync.writeFileSync(sessionFilePath(), JSON.stringify({
+    ...session,
+    recentFiles,
+  }, null, 2), 'utf8');
 }
 
 function isMarkdownFilePath(filePath: string): boolean {
@@ -296,17 +607,19 @@ function assetPathFromRelative(markdownPath: string, relativePath: string): stri
 }
 
 async function readMarkdownFile(filePath: string): Promise<MarkdownFile> {
-  if (!isMarkdownFilePath(filePath)) {
+  const resolvedPath = path.resolve(filePath);
+  if (!isMarkdownFilePath(resolvedPath)) {
     throw new Error('Only Markdown files can be opened.');
   }
 
-  const content = await fs.readFile(filePath, 'utf8');
+  const canonicalPath = await fs.realpath(resolvedPath).catch(() => resolvedPath);
+  const content = await fs.readFile(canonicalPath, 'utf8');
   const file = {
-    path: filePath,
-    name: path.basename(filePath),
+    path: canonicalPath,
+    name: path.basename(canonicalPath),
     content,
   };
-  watchMarkdownFile(filePath);
+  watchMarkdownFile(canonicalPath);
   return file;
 }
 
@@ -773,19 +1086,40 @@ async function createWindow(): Promise<void> {
   mainWindow = window;
   rendererReadyForExternalOpen = false;
   window.on('closed', () => {
+    mainLog('window.closed');
     if (mainWindow === window) {
       mainWindow = null;
     }
   });
   window.on('close', (event) => {
+    mainLog('window.close-requested', {
+      closeConfirmed,
+      isDestroyed: window.isDestroyed(),
+    });
     if (closeConfirmed) {
       return;
     }
 
     event.preventDefault();
+    mainLog('window.close-forward-to-renderer');
     window.webContents.send('app:close-request');
   });
   window.webContents.on('before-input-event', (event, input) => {
+    if (
+      input.type === 'keyDown'
+      && input.key.toLowerCase() === 'i'
+      && (input.meta || input.control)
+      && input.alt
+      && !input.shift
+    ) {
+      mainLog('devtools.shortcut-toggle', {
+        isDev,
+        isDevToolsOpened: window.webContents.isDevToolsOpened(),
+      });
+      event.preventDefault();
+      window.webContents.toggleDevTools();
+      return;
+    }
     if (
       input.type === 'keyDown'
       && input.key.toLowerCase() === 'e'
@@ -865,6 +1199,10 @@ ipcMain.handle('markdown:save-as', async (_event, content: string, defaultName: 
   return saveMarkdownFileAs(content, defaultName);
 });
 
+ipcMain.handle('markdown:reveal-in-folder', async (_event, filePath: string) => {
+  shell.showItemInFolder(path.resolve(filePath));
+});
+
 ipcMain.handle('markdown:export-html', async (_event, payload: ExportDocumentPayload) => {
   return exportHtmlFile(payload);
 });
@@ -918,12 +1256,38 @@ ipcMain.on('session:save-sync', (event, session: MarkdownSession) => {
 });
 
 ipcMain.handle('app:quit', () => {
+  mainLog('app.quit-requested');
   app.quit();
 });
 
-ipcMain.handle('app:confirm-close', () => {
+function confirmApplicationClose(): void {
+  mainLog('app.confirm-close', {
+    hasMainWindow: Boolean(mainWindow),
+    closeConfirmed,
+  });
   closeConfirmed = true;
-  mainWindow?.close();
+  setImmediate(() => {
+    mainLog('app.confirm-close.execute', {
+      hasMainWindow: Boolean(mainWindow),
+      closeConfirmed,
+    });
+    mainWindow?.close();
+  });
+}
+
+ipcMain.handle('app:confirm-close', () => {
+  mainLog('ipc.app.confirm-close');
+  confirmApplicationClose();
+});
+
+ipcMain.on('app:confirm-close-sync', (event) => {
+  mainLog('ipc.app.confirm-close-sync');
+  confirmApplicationClose();
+  event.returnValue = true;
+});
+
+ipcMain.handle('app:debug-log', (_event, eventName: string, payload: Record<string, unknown> = {}) => {
+  mainLog(`renderer.${eventName}`, payload);
 });
 
 app.on('open-file', (event, filePath) => {
@@ -955,6 +1319,7 @@ if (!singleInstanceLock) {
 }
 
 app.whenReady().then(async () => {
+  buildApplicationMenu();
   registerMarkdownAssetProtocol();
   pendingExternalMarkdownPath = pendingExternalMarkdownPath ?? markdownPathFromArgv(process.argv);
   await createWindow();
