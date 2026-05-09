@@ -16,6 +16,8 @@ interface MarkdownSession {
     lastSavedContent?: string;
   }[];
   activeTabId: string | null;
+  bookmarks: MarkdownBookmark[];
+  bookmarkViewMode: 'all' | 'current';
   recentFiles: string[];
   scrollTop: number;
   tocWidth: number;
@@ -23,6 +25,18 @@ interface MarkdownSession {
   previewHidden: boolean;
   editorVisible: boolean;
   theme: 'light' | 'dark' | 'eye';
+}
+
+interface MarkdownBookmark {
+  id: string;
+  tabId: string;
+  filePath: string | null;
+  fileName: string;
+  lineNumber: number;
+  column: number;
+  excerpt: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 interface MarkdownFile {
@@ -336,6 +350,8 @@ function createDefaultSession(): MarkdownSession {
     filePath: null,
     tabs: [],
     activeTabId: null,
+    bookmarks: [],
+    bookmarkViewMode: 'all',
     recentFiles: [],
     scrollTop: 0,
     tocWidth: 260,
@@ -368,6 +384,60 @@ function normalizeRecentFiles(recentFiles: unknown): string[] {
 
 function recentFileKey(filePath: string): string {
   return normalizeRecentFilePath(filePath).toLocaleLowerCase();
+}
+
+function normalizeBookmarkViewMode(viewMode: unknown): MarkdownSession['bookmarkViewMode'] {
+  return viewMode === 'current' ? 'current' : 'all';
+}
+
+function bookmarkTargetKey(bookmark: Pick<MarkdownBookmark, 'column' | 'filePath' | 'lineNumber' | 'tabId'>): string {
+  const target = bookmark.filePath ? normalizeRecentFilePath(bookmark.filePath) : bookmark.tabId;
+  return `${target.toLocaleLowerCase()}:${bookmark.lineNumber}:${bookmark.column}`;
+}
+
+function normalizeBookmarks(bookmarks: unknown): MarkdownBookmark[] {
+  if (!Array.isArray(bookmarks)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return bookmarks.flatMap((bookmark): MarkdownBookmark[] => {
+    if (!bookmark || typeof bookmark !== 'object') {
+      return [];
+    }
+    const candidate = bookmark as Partial<MarkdownBookmark>;
+    if (candidate.filePath !== null && typeof candidate.filePath !== 'string') {
+      return [];
+    }
+    if (typeof candidate.tabId !== 'string' || candidate.tabId.trim() === '') {
+      return [];
+    }
+    const lineNumber = Number.isFinite(candidate.lineNumber) ? Math.max(1, Math.floor(candidate.lineNumber ?? 1)) : 1;
+    const column = Number.isFinite(candidate.column) ? Math.max(1, Math.floor(candidate.column ?? 1)) : 1;
+    const filePath = typeof candidate.filePath === 'string' ? normalizeRecentFilePath(candidate.filePath) : null;
+    const fileName = typeof candidate.fileName === 'string' && candidate.fileName.trim()
+      ? candidate.fileName.trim()
+      : filePath ? path.basename(filePath) : '未命名.md';
+    const normalized: MarkdownBookmark = {
+      id: typeof candidate.id === 'string' && candidate.id.trim()
+        ? candidate.id
+        : `bookmark:${candidate.tabId}:${lineNumber}:${column}`,
+      tabId: candidate.tabId,
+      filePath,
+      fileName,
+      lineNumber,
+      column,
+      excerpt: typeof candidate.excerpt === 'string' ? candidate.excerpt : '',
+      createdAt: typeof candidate.createdAt === 'number' ? candidate.createdAt : Date.now(),
+      updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
+    };
+    const key = bookmarkTargetKey(normalized);
+    if (seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [normalized];
+  }).slice(0, 500);
 }
 
 function normalizeRecentFilePath(filePath: string): string {
@@ -478,6 +548,8 @@ async function readSession(): Promise<MarkdownSession> {
       activeTabId: typeof parsed.activeTabId === 'string' && tabs.some((tab) => tab.id === parsed.activeTabId)
         ? parsed.activeTabId
         : tabs[0]?.id ?? null,
+      bookmarks: normalizeBookmarks(parsed.bookmarks),
+      bookmarkViewMode: normalizeBookmarkViewMode(parsed.bookmarkViewMode),
       recentFiles,
       scrollTop: typeof parsed.scrollTop === 'number' ? parsed.scrollTop : 0,
       tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
@@ -494,9 +566,12 @@ async function readSession(): Promise<MarkdownSession> {
 async function saveSession(session: MarkdownSession): Promise<void> {
   await fs.mkdir(path.dirname(sessionFilePath()), { recursive: true });
   const recentFiles = normalizeRecentFiles(session.recentFiles);
+  const bookmarks = normalizeBookmarks(session.bookmarks);
   logRecentFilesDiagnostics('save-session', session.recentFiles, recentFiles);
   await fs.writeFile(sessionFilePath(), JSON.stringify({
     ...session,
+    bookmarks,
+    bookmarkViewMode: normalizeBookmarkViewMode(session.bookmarkViewMode),
     recentFiles,
   }, null, 2), 'utf8');
 }
@@ -504,9 +579,12 @@ async function saveSession(session: MarkdownSession): Promise<void> {
 function saveSessionSync(session: MarkdownSession): void {
   fsSync.mkdirSync(path.dirname(sessionFilePath()), { recursive: true });
   const recentFiles = normalizeRecentFiles(session.recentFiles);
+  const bookmarks = normalizeBookmarks(session.bookmarks);
   logRecentFilesDiagnostics('save-session-sync', session.recentFiles, recentFiles);
   fsSync.writeFileSync(sessionFilePath(), JSON.stringify({
     ...session,
+    bookmarks,
+    bookmarkViewMode: normalizeBookmarkViewMode(session.bookmarkViewMode),
     recentFiles,
   }, null, 2), 'utf8');
 }

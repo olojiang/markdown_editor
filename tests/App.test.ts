@@ -1622,6 +1622,8 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe(`保存 Markdown 文件 (${expectedShortcut('S')})`);
     expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe(`显示/隐藏预览 (${expectedShortcut('P')})`);
     expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe(`切换阅读/编辑模式 (${expectedShortcut('E')})`);
+    expect(wrapper.get('[data-testid="bookmark-manager-button"]').attributes('title')).toBe(`显示书签列表 (${expectedShortcut('B')})`);
+    expect(wrapper.get('[data-testid="add-bookmark"]').attributes('title')).toBe(`添加当前位置到书签 (${expectedShortcut('Shift+B')})`);
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('v0.1.4');
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('文件');
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('插入与资源');
@@ -1640,6 +1642,78 @@ describe('App', () => {
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ previewHidden: true }),
     );
+  });
+
+  it('adds, searches, filters, and deletes bookmarks from the manager', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const betaOffset = offsetForLineColumn(openFile.content, 9, 4);
+    editor.setSelectionRange(betaOffset, betaOffset);
+
+    await wrapper.find('[data-testid="add-bookmark"]').trigger('click');
+    await nextTick();
+    await wrapper.find('[data-testid="bookmark-manager-button"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="bookmark-modal"]').exists()).toBe(true);
+    expect(wrapper.find('.bookmark-row').text()).toContain('readme.md');
+    expect(wrapper.find('.bookmark-row').text()).toContain('hello beta');
+
+    await wrapper.find('[data-testid="bookmark-search"]').setValue('beta');
+    expect(wrapper.findAll('.bookmark-row')).toHaveLength(1);
+
+    await wrapper.find('[data-testid="bookmark-view-current"]').trigger('click');
+    await nextTick();
+    const savedSession = vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0];
+    expect(savedSession?.bookmarkViewMode).toBe('current');
+
+    await wrapper.find('.bookmark-delete').trigger('click');
+    await nextTick();
+    expect(wrapper.find('[data-testid="bookmark-empty"]').exists()).toBe(true);
+    expect(vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0].bookmarks).toEqual([]);
+  });
+
+  it('opens a saved bookmark with keyboard selection and jumps to its file position', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [],
+      activeTabId: null,
+      bookmarks: [
+        {
+          id: 'bookmark-second',
+          tabId: `file:${secondFile.path}`,
+          filePath: secondFile.path,
+          fileName: secondFile.name,
+          lineNumber: 1,
+          column: 3,
+          excerpt: '# Second',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      bookmarkViewMode: 'all',
+      recentFiles: [recentFile.path],
+      scrollTop: 12,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true }));
+    await nextTick();
+    expect(wrapper.find('[data-testid="bookmark-modal"]').exists()).toBe(true);
+
+    await wrapper.find('[data-testid="bookmark-modal"]').trigger('keydown', { key: 'Enter' });
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(secondFile.path);
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toBe(secondFile.content);
+    expect(wrapper.find('[data-testid="bookmark-modal"]').exists()).toBe(false);
   });
 
   it('toggles editor mode from the Electron command shortcut event', async () => {

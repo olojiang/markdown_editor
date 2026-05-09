@@ -5,7 +5,21 @@ import {
 } from '@/renderer/lib/editorConfig';
 
 export type ThemeMode = 'light' | 'dark' | 'eye';
+export type BookmarkViewMode = 'all' | 'current';
 export const maxRecentFiles = 20;
+export const maxBookmarks = 500;
+
+export interface MarkdownBookmark {
+  id: string;
+  tabId: string;
+  filePath: string | null;
+  fileName: string;
+  lineNumber: number;
+  column: number;
+  excerpt: string;
+  createdAt: number;
+  updatedAt: number;
+}
 
 export interface MarkdownSessionTab {
   id: string;
@@ -20,6 +34,8 @@ export interface MarkdownSession {
   filePath: string | null;
   tabs: MarkdownSessionTab[];
   activeTabId: string | null;
+  bookmarks: MarkdownBookmark[];
+  bookmarkViewMode: BookmarkViewMode;
   recentFiles: string[];
   scrollTop: number;
   tocWidth: number;
@@ -35,6 +51,8 @@ export function createDefaultSession(): MarkdownSession {
     filePath: null,
     tabs: [],
     activeTabId: null,
+    bookmarks: [],
+    bookmarkViewMode: 'all',
     recentFiles: [],
     scrollTop: 0,
     tocWidth: 260,
@@ -48,6 +66,10 @@ export function createDefaultSession(): MarkdownSession {
 
 function normalizeTheme(theme: unknown): ThemeMode {
   return theme === 'dark' || theme === 'eye' ? theme : 'light';
+}
+
+function normalizeBookmarkViewMode(viewMode: unknown): BookmarkViewMode {
+  return viewMode === 'current' ? 'current' : 'all';
 }
 
 export function normalizeRecentFiles(recentFiles: unknown): string[] {
@@ -101,6 +123,56 @@ function recentFileKey(filePath: string): string {
   return normalizeRecentFilePath(filePath).toLocaleLowerCase();
 }
 
+function bookmarkTargetKey(bookmark: Pick<MarkdownBookmark, 'column' | 'filePath' | 'lineNumber' | 'tabId'>): string {
+  const target = bookmark.filePath ? normalizeRecentFilePath(bookmark.filePath) : bookmark.tabId;
+  return `${target.toLocaleLowerCase()}:${bookmark.lineNumber}:${bookmark.column}`;
+}
+
+export function normalizeBookmarks(bookmarks: unknown): MarkdownBookmark[] {
+  if (!Array.isArray(bookmarks)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return bookmarks.flatMap((bookmark): MarkdownBookmark[] => {
+    if (!bookmark || typeof bookmark !== 'object') {
+      return [];
+    }
+    const candidate = bookmark as Partial<MarkdownBookmark>;
+    if (candidate.filePath !== null && typeof candidate.filePath !== 'string') {
+      return [];
+    }
+    if (typeof candidate.tabId !== 'string' || candidate.tabId.trim() === '') {
+      return [];
+    }
+    const lineNumber = Number.isFinite(candidate.lineNumber) ? Math.max(1, Math.floor(candidate.lineNumber ?? 1)) : 1;
+    const column = Number.isFinite(candidate.column) ? Math.max(1, Math.floor(candidate.column ?? 1)) : 1;
+    const filePath = typeof candidate.filePath === 'string' ? normalizeRecentFilePath(candidate.filePath) : null;
+    const fileName = typeof candidate.fileName === 'string' && candidate.fileName.trim()
+      ? candidate.fileName.trim()
+      : filePath?.split(/[\\/]/).pop() ?? '未命名.md';
+    const normalized: MarkdownBookmark = {
+      id: typeof candidate.id === 'string' && candidate.id.trim()
+        ? candidate.id
+        : `bookmark:${candidate.tabId}:${lineNumber}:${column}`,
+      tabId: candidate.tabId,
+      filePath,
+      fileName,
+      lineNumber,
+      column,
+      excerpt: typeof candidate.excerpt === 'string' ? candidate.excerpt : '',
+      createdAt: typeof candidate.createdAt === 'number' ? candidate.createdAt : Date.now(),
+      updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
+    };
+    const key = bookmarkTargetKey(normalized);
+    if (seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [normalized];
+  }).slice(0, maxBookmarks);
+}
+
 export function tabIdForPath(filePath: string): string {
   return `file:${filePath}`;
 }
@@ -150,6 +222,8 @@ export function normalizeSession(session: Partial<MarkdownSession> | null | unde
     filePath: typeof session?.filePath === 'string' ? session.filePath : null,
     tabs,
     activeTabId,
+    bookmarks: normalizeBookmarks(session?.bookmarks),
+    bookmarkViewMode: normalizeBookmarkViewMode(session?.bookmarkViewMode),
     recentFiles: normalizeRecentFiles(session?.recentFiles),
     scrollTop: typeof session?.scrollTop === 'number' ? session.scrollTop : 0,
     tocWidth: Math.max(180, Math.min(520, typeof session?.tocWidth === 'number' ? session.tocWidth : 260)),
@@ -172,6 +246,10 @@ export function mergeSession(
     filePath: patch.filePath === undefined ? normalized.filePath : patch.filePath,
     tabs: patch.tabs === undefined ? normalized.tabs : normalizeSessionTabs(patch.tabs),
     activeTabId: patch.activeTabId === undefined ? normalized.activeTabId : patch.activeTabId,
+    bookmarks: patch.bookmarks === undefined ? normalized.bookmarks : normalizeBookmarks(patch.bookmarks),
+    bookmarkViewMode: patch.bookmarkViewMode === undefined
+      ? normalized.bookmarkViewMode
+      : normalizeBookmarkViewMode(patch.bookmarkViewMode),
     recentFiles: patch.recentFiles === undefined ? normalized.recentFiles : normalizeRecentFiles(patch.recentFiles),
     scrollTop: patch.scrollTop === undefined ? normalized.scrollTop : patch.scrollTop,
     editorPreferences: patch.editorPreferences === undefined

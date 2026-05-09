@@ -14,10 +14,13 @@ import {
   addRecentFile,
   createDefaultSession,
   mergeSession,
+  normalizeBookmarks,
   normalizeRecentFiles,
   normalizeSession,
   removeRecentFile,
   tabIdForPath,
+  type BookmarkViewMode,
+  type MarkdownBookmark,
   type MarkdownSession,
   type ThemeMode,
 } from '@/renderer/lib/session';
@@ -90,6 +93,10 @@ interface CursorHistoryEntry extends CursorPosition {
   tabId: string;
 }
 
+interface BookmarkListItem extends MarkdownBookmark {
+  searchableText: string;
+}
+
 interface EditorSurface {
   focus(): void;
   getCursorPosition(): CursorPosition;
@@ -135,6 +142,7 @@ type ImageUploadMode = 'local' | 'cloud';
 
 const icons = {
   archive: 'M21 8v13H3V8 M1 3h22v5H1z M10 12h4',
+  bookmark: 'M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
   bookOpen: 'M2 4.5A3 3 0 0 1 5 3h5v18H5a3 3 0 0 0-3 3V4.5z M22 4.5A3 3 0 0 0 19 3h-5v18h5a3 3 0 0 1 3 3V4.5z',
   chevronDown: 'm6 9 6 6 6-6',
   chevronRight: 'm9 18 6-6-6-6',
@@ -188,6 +196,11 @@ const editorSearchVisible = ref(false);
 const editorSearch = ref('');
 const editorReplace = ref('');
 const editorSearchInput = ref<HTMLInputElement | null>(null);
+const bookmarkManagerOpen = ref(false);
+const bookmarkSearch = ref('');
+const bookmarkList = ref<HTMLElement | null>(null);
+const bookmarkSearchInput = ref<HTMLInputElement | null>(null);
+const selectedBookmarkId = ref<string | null>(null);
 const imageAssets = ref<ImageAsset[]>([]);
 const selectedAssetPath = ref('');
 const imageUploadMode = ref<ImageUploadMode>(loadImageUploadMode());
@@ -269,15 +282,47 @@ const saveShortcutHint = computed(() => `保存 Markdown 文件 (${shortcutModif
 const refreshShortcutHint = computed(() => `从磁盘重新读取当前 Markdown 文件 (${shortcutModifier.value}+R)`);
 const previewShortcutHint = computed(() => `显示/隐藏预览 (${shortcutModifier.value}+P)`);
 const editorShortcutHint = computed(() => `切换阅读/编辑模式 (${shortcutModifier.value}+E)`);
+const addBookmarkShortcutHint = computed(() => `添加当前位置到书签 (${shortcutModifier.value}+Shift+B)`);
+const bookmarkManagerShortcutHint = computed(() => `显示书签列表 (${shortcutModifier.value}+B)`);
 const previewZoomPercent = computed(() => Math.round(previewZoom.value * 100));
 const previewZoomStyle = computed(() => ({
   '--preview-zoom': previewZoom.value,
 }));
 const isPreviewZoomResettable = computed(() => Math.abs(previewZoom.value - 1) > 0.001);
 const tocColumnWidth = computed(() => (isTocPanelCollapsed.value ? 44 : session.value.tocWidth));
+const normalizedBookmarks = computed(() => normalizeBookmarks(session.value.bookmarks));
+const visibleBookmarks = computed<BookmarkListItem[]>(() => {
+  const query = bookmarkSearch.value.trim().toLocaleLowerCase();
+  const currentKey = currentBookmarkFileKey();
+  const bookmarks = normalizedBookmarks.value
+    .filter((bookmark) => session.value.bookmarkViewMode === 'all' || bookmarkFileKey(bookmark) === currentKey)
+    .map((bookmark) => ({
+      ...bookmark,
+      searchableText: [
+        bookmark.fileName,
+        bookmark.filePath ?? '',
+        `${bookmark.lineNumber}:${bookmark.column}`,
+        bookmark.excerpt,
+      ].join(' ').toLocaleLowerCase(),
+    }));
+
+  if (!query) {
+    return bookmarks;
+  }
+  return bookmarks.filter((bookmark) => bookmark.searchableText.includes(query));
+});
+const selectedBookmark = computed(() => visibleBookmarks.value.find((bookmark) => bookmark.id === selectedBookmarkId.value) ?? null);
 watch(recentFilePaths, (filePaths) => {
   logRecentFileDiagnostics(filePaths);
 }, { immediate: true });
+watch(visibleBookmarks, (bookmarks) => {
+  if (bookmarks.some((bookmark) => bookmark.id === selectedBookmarkId.value)) {
+    revealSelectedBookmark();
+    return;
+  }
+  selectedBookmarkId.value = bookmarks[0]?.id ?? null;
+  revealSelectedBookmark();
+});
 const helpGroups = computed<HelpGroup[]>(() => [
   {
     title: '文件',
@@ -294,6 +339,8 @@ const helpGroups = computed<HelpGroup[]>(() => [
     title: '编辑',
     items: [
       { label: '搜索 / 替换', shortcut: `${shortcutModifier.value}+F`, detail: '打开源码搜索栏，支持查找、替换和全部替换' },
+      { label: '添加书签', shortcut: `${shortcutModifier.value}+Shift+B`, detail: '把当前文件的光标行列保存为可跳转位置' },
+      { label: '书签列表', shortcut: `${shortcutModifier.value}+B`, detail: '搜索、按文件筛选、键盘选择、跳转或删除书签' },
       { label: '光标历史', shortcut: 'Ctrl+[ / Ctrl+]', detail: '在跨行或跨文件的光标位置之间后退和前进' },
       { label: '阅读/编辑', shortcut: `${shortcutModifier.value}+E`, detail: '阅读模式只显示预览，需要时切回源码编辑' },
       { label: 'Vim 与编辑器配置', shortcut: '', detail: '开启 Vim 模式，或配置 Monaco / Vim JSON 选项' },
@@ -444,6 +491,175 @@ function currentFilePath(): string | null {
 
 function tabPath(tab: OpenTab): string | null {
   return tab.file.path;
+}
+
+function bookmarkFileKey(bookmark: Pick<MarkdownBookmark, 'filePath' | 'tabId'>): string {
+  return (bookmark.filePath ?? bookmark.tabId).replace(/\\/g, '/').trim().toLocaleLowerCase();
+}
+
+function currentBookmarkFileKey(): string {
+  return bookmarkFileKey({
+    filePath: currentFile.value?.path ?? null,
+    tabId: activeTabId.value ?? '',
+  });
+}
+
+function bookmarkTargetKey(bookmark: Pick<MarkdownBookmark, 'column' | 'filePath' | 'lineNumber' | 'tabId'>): string {
+  return `${bookmarkFileKey(bookmark)}:${bookmark.lineNumber}:${bookmark.column}`;
+}
+
+function bookmarkExcerpt(lineNumber: number): string {
+  return source.value.split('\n')[lineNumber - 1]?.trim().slice(0, 160) ?? '';
+}
+
+function formatBookmarkPath(bookmark: MarkdownBookmark): string {
+  return bookmark.filePath ?? '未保存标签页';
+}
+
+function setBookmarkViewMode(viewMode: BookmarkViewMode): void {
+  persistSession({ bookmarkViewMode: viewMode });
+  selectFirstVisibleBookmark();
+}
+
+function selectFirstVisibleBookmark(): void {
+  selectedBookmarkId.value = visibleBookmarks.value[0]?.id ?? null;
+}
+
+function addBookmarkAtCursor(): void {
+  const tab = activeTab.value;
+  const position = editor.value?.getCursorPosition();
+  if (!tab || !position) {
+    status.value = '没有可添加书签的编辑位置';
+    return;
+  }
+
+  const now = Date.now();
+  const candidate: MarkdownBookmark = {
+    id: `bookmark:${now}:${Math.random().toString(36).slice(2, 8)}`,
+    tabId: tab.id,
+    filePath: tab.file.path,
+    fileName: tab.file.name,
+    lineNumber: position.lineNumber,
+    column: position.column,
+    excerpt: bookmarkExcerpt(position.lineNumber),
+    createdAt: now,
+    updatedAt: now,
+  };
+  const targetKey = bookmarkTargetKey(candidate);
+  const nextBookmarks = normalizedBookmarks.value.filter((bookmark) => bookmarkTargetKey(bookmark) !== targetKey);
+  nextBookmarks.unshift(candidate);
+  persistSession({ bookmarks: nextBookmarks });
+  selectedBookmarkId.value = candidate.id;
+  status.value = `已添加书签 ${candidate.fileName}:${candidate.lineNumber}:${candidate.column}`;
+}
+
+function openBookmarkManager(): void {
+  bookmarkManagerOpen.value = true;
+  if (!selectedBookmark.value) {
+    selectFirstVisibleBookmark();
+  }
+  void nextTick(() => bookmarkSearchInput.value?.focus());
+}
+
+function closeBookmarkManager(): void {
+  bookmarkManagerOpen.value = false;
+  bookmarkSearch.value = '';
+  void nextTick(() => editor.value?.focus());
+}
+
+function moveBookmarkSelection(delta: number): void {
+  const bookmarks = visibleBookmarks.value;
+  if (bookmarks.length === 0) {
+    selectedBookmarkId.value = null;
+    return;
+  }
+  const currentIndex = Math.max(0, bookmarks.findIndex((bookmark) => bookmark.id === selectedBookmarkId.value));
+  const nextIndex = Math.min(bookmarks.length - 1, Math.max(0, currentIndex + delta));
+  selectedBookmarkId.value = bookmarks[nextIndex].id;
+  revealSelectedBookmark();
+}
+
+function revealSelectedBookmark(): void {
+  const bookmarkId = selectedBookmarkId.value;
+  if (!bookmarkId) {
+    return;
+  }
+  void nextTick(() => {
+    const row = bookmarkList.value?.querySelector<HTMLElement>(`[data-bookmark-id="${escapeCssIdentifier(bookmarkId)}"]`);
+    row?.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function deleteBookmark(bookmarkId: string, event?: Event): void {
+  event?.stopPropagation();
+  const removed = normalizedBookmarks.value.find((bookmark) => bookmark.id === bookmarkId);
+  if (!removed) {
+    return;
+  }
+
+  persistSession({ bookmarks: normalizedBookmarks.value.filter((bookmark) => bookmark.id !== bookmarkId) });
+  if (selectedBookmarkId.value === bookmarkId) {
+    selectedBookmarkId.value = visibleBookmarks.value[0]?.id ?? null;
+  }
+  status.value = `已删除书签 ${removed.fileName}:${removed.lineNumber}:${removed.column}`;
+}
+
+async function activateBookmark(bookmark: MarkdownBookmark | null = selectedBookmark.value): Promise<void> {
+  if (!bookmark) {
+    status.value = '没有可跳转的书签';
+    return;
+  }
+
+  const openedTab = openTabs.value.find((tab) => tab.id === bookmark.tabId)
+    ?? openTabs.value.find((tab) => bookmark.filePath !== null && tab.file.path === bookmark.filePath);
+  if (openedTab) {
+    activateTab(openedTab.id);
+  } else if (bookmark.filePath) {
+    await openFilePath(bookmark.filePath);
+  } else {
+    status.value = `无法跳转到未打开的书签 ${bookmark.fileName}`;
+    return;
+  }
+
+  await nextTick();
+  if (!isEditorVisible.value) {
+    persistSession({ editorVisible: true, previewHidden: false });
+    await nextTick();
+  }
+  editor.value?.setCursorPosition(bookmark);
+  syncPreviewToLine(bookmark.lineNumber);
+  updateActiveHeadingFromSourceLine(bookmark.lineNumber);
+  status.value = `已跳转到书签 ${bookmark.fileName}:${bookmark.lineNumber}:${bookmark.column}`;
+  bookmarkManagerOpen.value = false;
+}
+
+function onBookmarkManagerKeyDown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    closeBookmarkManager();
+    event.preventDefault();
+    return;
+  }
+  if (event.key === 'ArrowDown') {
+    moveBookmarkSelection(event.ctrlKey ? 7 : 1);
+    event.preventDefault();
+    return;
+  }
+  if (event.key === 'ArrowUp') {
+    moveBookmarkSelection(event.ctrlKey ? -7 : -1);
+    event.preventDefault();
+    return;
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void activateBookmark();
+    return;
+  }
+  const target = event.target;
+  const isEditingSearch = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+  if ((event.key === 'Delete' || event.key === 'Backspace') && !isEditingSearch && selectedBookmarkId.value) {
+    deleteBookmark(selectedBookmarkId.value, event);
+    event.preventDefault();
+  }
 }
 
 function currentCursorHistoryEntry(): CursorHistoryEntry | null {
@@ -615,6 +831,8 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
       lastSavedContent: tab.lastSavedContent,
     })),
     activeTabId: normalized.activeTabId,
+    bookmarks: normalized.bookmarks.map((bookmark) => ({ ...bookmark })),
+    bookmarkViewMode: normalized.bookmarkViewMode,
     recentFiles: [...normalized.recentFiles],
     scrollTop: normalized.scrollTop,
     tocWidth: normalized.tocWidth,
@@ -2681,6 +2899,11 @@ function onKeyDown(event: KeyboardEvent): void {
     event.preventDefault();
     return;
   }
+  if (event.key === 'Escape' && bookmarkManagerOpen.value) {
+    closeBookmarkManager();
+    event.preventDefault();
+    return;
+  }
   if (event.key === 'Escape' && helpPopoverPinned.value) {
     helpPopoverPinned.value = false;
     event.preventDefault();
@@ -2701,6 +2924,15 @@ function onKeyDown(event: KeyboardEvent): void {
   if (event.ctrlKey && !event.altKey && !event.shiftKey && (key === '[' || key === ']')) {
     event.preventDefault();
     void jumpToCursorHistory(key === '[' ? -1 : 1);
+    return;
+  }
+  if (key === 'b' && !event.altKey) {
+    event.preventDefault();
+    if (event.shiftKey) {
+      addBookmarkAtCursor();
+    } else {
+      openBookmarkManager();
+    }
     return;
   }
   if (key === 'z' && !event.altKey && !event.shiftKey && eventTargetIsEditor(event.target)) {
@@ -3624,6 +3856,16 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <button
+          data-testid="bookmark-manager-button"
+          class="icon-button"
+          type="button"
+          aria-label="书签"
+          :title="bookmarkManagerShortcutHint"
+          @click="openBookmarkManager"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.bookmark" /></svg>
+        </button>
+        <button
           data-testid="save-file"
           class="icon-button"
           type="button"
@@ -3879,6 +4121,17 @@ onBeforeUnmount(() => {
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.code" /></svg>
             </button>
             <button
+              data-testid="add-bookmark"
+              class="icon-button"
+              type="button"
+              aria-label="添加书签"
+              :disabled="!activeTab"
+              :title="addBookmarkShortcutHint"
+              @click="addBookmarkAtCursor"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.bookmark" /></svg>
+            </button>
+            <button
               data-testid="toggle-vim-mode"
               class="icon-button"
               type="button"
@@ -4002,6 +4255,97 @@ onBeforeUnmount(() => {
         v-html="previewHtml"
       />
     </section>
+
+    <div
+      v-if="bookmarkManagerOpen"
+      class="bookmark-modal"
+      data-testid="bookmark-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="书签管理"
+      @click.self="closeBookmarkManager"
+      @keydown.capture="onBookmarkManagerKeyDown"
+    >
+      <section class="bookmark-dialog">
+        <div class="bookmark-dialog-bar">
+          <strong>书签</strong>
+          <button class="icon-button" type="button" aria-label="关闭" title="关闭" @click="closeBookmarkManager">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.x" /></svg>
+          </button>
+        </div>
+        <div class="bookmark-tools">
+          <input
+            ref="bookmarkSearchInput"
+            v-model="bookmarkSearch"
+            data-testid="bookmark-search"
+            type="search"
+            placeholder="搜索文件、路径或正文片段"
+          />
+          <div class="bookmark-view-switch" role="group" aria-label="书签范围">
+            <button
+              data-testid="bookmark-view-all"
+              class="mode-button"
+              type="button"
+              :class="{ active: session.bookmarkViewMode === 'all' }"
+              @click="setBookmarkViewMode('all')"
+            >
+              所有文件
+            </button>
+            <button
+              data-testid="bookmark-view-current"
+              class="mode-button"
+              type="button"
+              :class="{ active: session.bookmarkViewMode === 'current' }"
+              @click="setBookmarkViewMode('current')"
+            >
+              当前文件
+            </button>
+          </div>
+        </div>
+        <div ref="bookmarkList" class="bookmark-list" role="listbox" aria-label="书签列表" tabindex="0">
+          <div
+            v-for="bookmark in visibleBookmarks"
+            :key="bookmark.id"
+            class="bookmark-row"
+            role="option"
+            tabindex="-1"
+            :data-bookmark-id="bookmark.id"
+            :aria-selected="bookmark.id === selectedBookmarkId"
+            :class="{ active: bookmark.id === selectedBookmarkId }"
+            :title="formatBookmarkPath(bookmark)"
+            :data-testid="`bookmark-${bookmark.fileName}-${bookmark.lineNumber}-${bookmark.column}`"
+            @click="selectedBookmarkId = bookmark.id"
+            @dblclick="activateBookmark(bookmark)"
+          >
+            <span class="bookmark-main">
+              <strong>{{ bookmark.fileName }}</strong>
+              <span>{{ bookmark.excerpt || '空行' }}</span>
+            </span>
+            <span class="bookmark-meta">
+              <span>{{ bookmark.lineNumber }}:{{ bookmark.column }}</span>
+              <button
+                class="bookmark-delete"
+                type="button"
+                :aria-label="`删除 ${bookmark.fileName} ${bookmark.lineNumber}:${bookmark.column}`"
+                title="删除书签"
+                @click="deleteBookmark(bookmark.id, $event)"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.trash" /></svg>
+              </button>
+            </span>
+          </div>
+          <p v-if="visibleBookmarks.length === 0" class="bookmark-empty" data-testid="bookmark-empty">
+            没有匹配的书签
+          </p>
+        </div>
+        <div class="bookmark-dialog-actions">
+          <span>↑/↓ 选择 · Ctrl+↑/↓ 翻页 · Enter 跳转 · Delete 删除</span>
+          <button type="button" class="primary-button" data-testid="bookmark-jump" :disabled="!selectedBookmark" @click="activateBookmark()">
+            跳转
+          </button>
+        </div>
+      </section>
+    </div>
 
     <div
       v-if="closeConfirmationVisible"

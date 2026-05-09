@@ -4,6 +4,7 @@ import {
   createDefaultSession,
   maxRecentFiles,
   mergeSession,
+  normalizeBookmarks,
   removeRecentFile,
 } from '@/renderer/lib/session';
 
@@ -13,6 +14,8 @@ describe('session helpers', () => {
       filePath: null,
       tabs: [],
       activeTabId: null,
+      bookmarks: [],
+      bookmarkViewMode: 'all',
       recentFiles: [],
       scrollTop: 0,
       tocWidth: 260,
@@ -34,6 +37,8 @@ describe('session helpers', () => {
       filePath: '/tmp/a.md',
       tabs: [],
       activeTabId: null,
+      bookmarks: [],
+      bookmarkViewMode: 'all',
       recentFiles: [],
       scrollTop: 42,
       tocWidth: 260,
@@ -58,6 +63,49 @@ describe('session helpers', () => {
     expect(mergeSession({ theme: 'unknown' } as never, {})).toEqual(
       expect.objectContaining({ theme: 'light' }),
     );
+  });
+
+  it('normalizes bookmarks and remembers the bookmark view mode', () => {
+    expect(mergeSession({
+      bookmarkViewMode: 'current',
+      bookmarks: [
+        {
+          id: 'first',
+          tabId: 'file:/docs/a.md',
+          filePath: 'file:///docs/a.md',
+          fileName: 'a.md',
+          lineNumber: 4.8,
+          column: 2,
+          excerpt: 'Alpha',
+          createdAt: 10,
+          updatedAt: 11,
+        },
+        {
+          id: 'duplicate',
+          tabId: 'file:/docs/a.md',
+          filePath: '/docs/a.md',
+          fileName: 'a.md',
+          lineNumber: 4,
+          column: 2,
+          excerpt: 'Duplicate',
+          createdAt: 12,
+          updatedAt: 13,
+        },
+      ],
+    }, {})).toEqual(expect.objectContaining({
+      bookmarkViewMode: 'current',
+      bookmarks: [
+        expect.objectContaining({
+          id: 'first',
+          filePath: '/docs/a.md',
+          lineNumber: 4,
+          column: 2,
+          excerpt: 'Alpha',
+        }),
+      ],
+    }));
+
+    expect(normalizeBookmarks([{ filePath: '/docs/missing-tab.md' }])).toEqual([]);
   });
 
   it('normalizes persisted Monaco and Vim editor preferences', () => {
