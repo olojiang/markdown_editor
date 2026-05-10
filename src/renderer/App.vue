@@ -189,6 +189,7 @@ const activeImagePreview = shallowRef<ActiveImagePreview | null>(null);
 const preview = ref<HTMLElement | null>(null);
 const editor = ref<EditorSurface | null>(null);
 const status = ref('请选择或打开一个 Markdown 文件');
+const activeEditorLine = ref(1);
 const tocSearch = ref('');
 const collapsedHeadingIds = ref(new Set<string>());
 const activeHeadingId = ref('');
@@ -282,8 +283,11 @@ const saveShortcutHint = computed(() => `保存 Markdown 文件 (${shortcutModif
 const refreshShortcutHint = computed(() => `从磁盘重新读取当前 Markdown 文件 (${shortcutModifier.value}+R)`);
 const previewShortcutHint = computed(() => `显示/隐藏预览 (${shortcutModifier.value}+P)`);
 const editorShortcutHint = computed(() => `切换阅读/编辑模式 (${shortcutModifier.value}+E)`);
-const addBookmarkShortcutHint = computed(() => `添加当前位置到书签 (${shortcutModifier.value}+Shift+B)`);
-const bookmarkManagerShortcutHint = computed(() => `显示书签列表 (${shortcutModifier.value}+B)`);
+const addBookmarkShortcutHint = computed(() => {
+  const suffix = currentLineHasBookmark.value ? `，当前行已有 ${currentLineBookmarkCount.value} 个书签` : '';
+  return `添加当前位置到书签 (${shortcutModifier.value}+Shift+B)${suffix}`;
+});
+const bookmarkManagerShortcutHint = computed(() => `显示书签列表 (${shortcutModifier.value}+B)，共 ${bookmarkTotalCount.value} 个书签`);
 const previewZoomPercent = computed(() => Math.round(previewZoom.value * 100));
 const previewZoomStyle = computed(() => ({
   '--preview-zoom': previewZoom.value,
@@ -291,6 +295,25 @@ const previewZoomStyle = computed(() => ({
 const isPreviewZoomResettable = computed(() => Math.abs(previewZoom.value - 1) > 0.001);
 const tocColumnWidth = computed(() => (isTocPanelCollapsed.value ? 44 : session.value.tocWidth));
 const normalizedBookmarks = computed(() => normalizeBookmarks(session.value.bookmarks));
+const bookmarkTotalCount = computed(() => normalizedBookmarks.value.length);
+const currentFileBookmarks = computed(() => {
+  const currentKey = currentBookmarkFileKey();
+  if (!currentKey) {
+    return [];
+  }
+  return normalizedBookmarks.value.filter((bookmark) => bookmarkFileKey(bookmark) === currentKey);
+});
+const currentFileBookmarkCount = computed(() => currentFileBookmarks.value.length);
+const currentFileBookmarkLines = computed(() => currentFileBookmarks.value.map((bookmark) => bookmark.lineNumber));
+const currentLineBookmarkCount = computed(() => (
+  currentFileBookmarks.value.filter((bookmark) => bookmark.lineNumber === activeEditorLine.value).length
+));
+const currentLineHasBookmark = computed(() => currentLineBookmarkCount.value > 0);
+const bookmarkManagerTitle = computed(() => {
+  const scopeCount = session.value.bookmarkViewMode === 'current' ? currentFileBookmarkCount.value : bookmarkTotalCount.value;
+  const scopeLabel = session.value.bookmarkViewMode === 'current' ? '当前文件' : '所有文件';
+  return `书签 · ${scopeLabel} ${scopeCount}`;
+});
 const visibleBookmarks = computed<BookmarkListItem[]>(() => {
   const query = bookmarkSearch.value.trim().toLocaleLowerCase();
   const currentKey = currentBookmarkFileKey();
@@ -548,9 +571,11 @@ function addBookmarkAtCursor(): void {
   const targetKey = bookmarkTargetKey(candidate);
   const nextBookmarks = normalizedBookmarks.value.filter((bookmark) => bookmarkTargetKey(bookmark) !== targetKey);
   nextBookmarks.unshift(candidate);
+  const nextCurrentFileBookmarkCount = nextBookmarks.filter((bookmark) => bookmarkFileKey(bookmark) === bookmarkFileKey(candidate)).length;
   persistSession({ bookmarks: nextBookmarks });
+  activeEditorLine.value = candidate.lineNumber;
   selectedBookmarkId.value = candidate.id;
-  status.value = `已添加书签 ${candidate.fileName}:${candidate.lineNumber}:${candidate.column}`;
+  status.value = `已添加书签 ${candidate.fileName}:${candidate.lineNumber}:${candidate.column} · 当前文件 ${nextCurrentFileBookmarkCount} 个`;
 }
 
 function openBookmarkManager(): void {
@@ -1479,6 +1504,7 @@ function onEditorScroll(event: Event): void {
 function onEditorFocusLineChange(): void {
   void nextTick(() => {
     const line = lineFromEditorSelection();
+    activeEditorLine.value = line;
     rememberCursorPosition();
     syncPreviewToLine(line);
     updateActiveHeadingFromSourceLine(line);
@@ -3859,11 +3885,13 @@ onBeforeUnmount(() => {
           data-testid="bookmark-manager-button"
           class="icon-button"
           type="button"
+          :class="{ active: bookmarkTotalCount > 0 }"
           aria-label="书签"
           :title="bookmarkManagerShortcutHint"
           @click="openBookmarkManager"
         >
           <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.bookmark" /></svg>
+          <span v-if="bookmarkTotalCount > 0" class="action-badge" aria-hidden="true">{{ bookmarkTotalCount }}</span>
         </button>
         <button
           data-testid="save-file"
@@ -4124,7 +4152,8 @@ onBeforeUnmount(() => {
               data-testid="add-bookmark"
               class="icon-button"
               type="button"
-              aria-label="添加书签"
+              :aria-label="currentLineHasBookmark ? '当前行已有书签，添加当前位置到书签' : '添加书签'"
+              :class="{ active: currentLineHasBookmark }"
               :disabled="!activeTab"
               :title="addBookmarkShortcutHint"
               @click="addBookmarkAtCursor"
@@ -4223,6 +4252,7 @@ onBeforeUnmount(() => {
           <MarkdownMonacoEditor
             ref="editor"
             v-model="source"
+            :bookmark-line-numbers="currentFileBookmarkLines"
             :config-text="session.editorPreferences.configText"
             :theme="session.theme"
             :vim-enabled="session.editorPreferences.vimEnabled"
@@ -4268,7 +4298,7 @@ onBeforeUnmount(() => {
     >
       <section class="bookmark-dialog">
         <div class="bookmark-dialog-bar">
-          <strong>书签</strong>
+          <strong>{{ bookmarkManagerTitle }}</strong>
           <button class="icon-button" type="button" aria-label="关闭" title="关闭" @click="closeBookmarkManager">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.x" /></svg>
           </button>
@@ -4322,7 +4352,10 @@ onBeforeUnmount(() => {
               <span>{{ bookmark.excerpt || '空行' }}</span>
             </span>
             <span class="bookmark-meta">
-              <span>{{ bookmark.lineNumber }}:{{ bookmark.column }}</span>
+              <span class="bookmark-position">
+                <span>行 {{ bookmark.lineNumber }}</span>
+                <span>列 {{ bookmark.column }}</span>
+              </span>
               <button
                 class="bookmark-delete"
                 type="button"

@@ -20,6 +20,7 @@
   --code-bg: #f4f7f9;
   --editor-bg: #fbfdff;
   --editor-guide: rgba(11, 122, 117, 0.08);
+  --bookmark-line-bg: rgba(190, 24, 93, 0.08);
   --syntax-heading: #075e59;
   --syntax-heading-marker: #0f8f87;
   --syntax-quote: #52606d;
@@ -105,6 +106,30 @@ button:disabled:hover {
   }
 }
 
+.icon-button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.action-badge {
+  align-items: center;
+  background: #be185d;
+  border: 1px solid var(--surface);
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 700;
+  height: 16px;
+  justify-content: center;
+  line-height: 1;
+  min-width: 16px;
+  padding: 0 4px;
+  position: absolute;
+  right: -4px;
+  top: -4px;
+}
+
 .icon-button:hover::after,
 .icon-button:focus-visible::after {
   background: var(--text);
@@ -138,6 +163,32 @@ button:disabled:hover {
 
 .icon-button:disabled:hover::after {
   display: none;
+}
+
+.monaco-editor .bookmark-glyph {
+  position: relative;
+}
+
+.monaco-editor .bookmark-glyph::before {
+  background: #be185d;
+  border-radius: 2px;
+  content: "";
+  display: block;
+  height: 8px;
+  left: 50%;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  width: 8px;
+}
+
+.monaco-editor .bookmark-line-decoration {
+  border-left: 3px solid #be185d;
+  margin-left: 3px;
+}
+
+.monaco-editor .bookmark-line-highlight {
+  background: var(--bookmark-line-bg) !important;
 }
 
 input,
@@ -311,6 +362,7 @@ select:disabled {
   --code-bg: #111827;
   --editor-bg: #0f1724;
   --editor-guide: rgba(94, 234, 212, 0.12);
+  --bookmark-line-bg: rgba(244, 114, 182, 0.12);
   --syntax-heading: #8cf3df;
   --syntax-heading-marker: #45d8c7;
   --syntax-quote: #b6c7d8;
@@ -349,6 +401,7 @@ select:disabled {
   --code-bg: #eef3df;
   --editor-bg: #fffef2;
   --editor-guide: rgba(85, 122, 53, 0.1);
+  --bookmark-line-bg: rgba(159, 106, 19, 0.1);
   --syntax-heading: #456a2f;
   --syntax-heading-marker: #6f8f2e;
   --syntax-quote: #65755d;
@@ -1400,6 +1453,7 @@ button.markdown-code-copy.is-copied:hover {
 }
 
 .bookmark-list {
+  align-content: start;
   display: grid;
   gap: 4px;
   min-height: 220px;
@@ -1454,8 +1508,23 @@ button.markdown-code-copy.is-copied:hover {
   color: var(--text-muted);
   display: inline-flex;
   flex: 0 0 auto;
-  font: 12px "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   gap: 8px;
+}
+
+.bookmark-position {
+  align-items: center;
+  display: inline-flex;
+  font: 12px "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  gap: 6px;
+  white-space: nowrap;
+
+  span {
+    background: var(--surface-soft);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    line-height: 1;
+    padding: 4px 6px;
+  }
 }
 
 .bookmark-delete {

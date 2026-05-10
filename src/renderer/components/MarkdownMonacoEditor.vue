@@ -19,6 +19,7 @@ interface CursorPosition {
 }
 
 const props = defineProps<{
+  bookmarkLineNumbers: number[];
   configText: string;
   modelValue: string;
   theme: 'light' | 'dark' | 'eye';
@@ -54,6 +55,7 @@ let monacoEditor: Monaco.editor.IStandaloneCodeEditor | null = null;
 let vimMode: { dispose(): void } | null = null;
 let ignoreModelChange = false;
 let disposables: Array<{ dispose(): void }> = [];
+let bookmarkDecorationIds: string[] = [];
 
 function editorTheme(): string {
   return props.theme === 'dark' ? 'markdown-dark' : props.theme === 'eye' ? 'markdown-eye' : 'markdown-light';
@@ -67,6 +69,7 @@ function monacoOptions(config: ParsedEditorConfig): Monaco.editor.IStandaloneEdi
     fontSize: config.fontSize,
     insertSpaces: config.insertSpaces,
     language: 'markdown',
+    glyphMargin: true,
     lineNumbers: config.lineNumbers,
     minimap: { enabled: config.minimap },
     padding: { bottom: 18, top: 18 },
@@ -78,6 +81,37 @@ function monacoOptions(config: ParsedEditorConfig): Monaco.editor.IStandaloneEdi
     wordWrap: config.wordWrap,
     wrappingIndent: 'same',
   };
+}
+
+function normalizedBookmarkLineNumbers(model: Monaco.editor.ITextModel): number[] {
+  const lineCount = model.getLineCount();
+  const lineNumbers = props.bookmarkLineNumbers
+    .filter((lineNumber) => Number.isFinite(lineNumber))
+    .map((lineNumber) => Math.trunc(lineNumber))
+    .filter((lineNumber) => lineNumber >= 1 && lineNumber <= lineCount);
+
+  return Array.from(new Set(lineNumbers)).sort((a, b) => a - b);
+}
+
+function syncBookmarkDecorations(): void {
+  const monaco = monacoModule;
+  const model = getModel();
+  if (!monacoEditor || !monaco || !model) {
+    return;
+  }
+
+  const decorations: Monaco.editor.IModelDeltaDecoration[] = normalizedBookmarkLineNumbers(model).map((lineNumber) => ({
+    range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+    options: {
+      className: 'bookmark-line-highlight',
+      glyphMarginClassName: 'bookmark-glyph',
+      glyphMarginHoverMessage: { value: '书签' },
+      isWholeLine: true,
+      linesDecorationsClassName: 'bookmark-line-decoration',
+    },
+  }));
+
+  bookmarkDecorationIds = monacoEditor.deltaDecorations(bookmarkDecorationIds, decorations);
 }
 
 function defineMonacoThemes(monaco: typeof Monaco): void {
@@ -202,6 +236,7 @@ async function createMonacoEditor(): Promise<void> {
   monacoModule = await import('monaco-editor/esm/vs/editor/editor.api.js');
   defineMonacoThemes(monacoModule);
   monacoEditor = monacoModule.editor.create(container.value, monacoOptions(parsedConfig.value));
+  syncBookmarkDecorations();
   disposables = [
     monacoEditor.onDidChangeModelContent(() => {
       if (ignoreModelChange) {
@@ -209,6 +244,7 @@ async function createMonacoEditor(): Promise<void> {
       }
       emit('update:modelValue', monacoEditor?.getValue() ?? '');
       emitFocusLineChange();
+      syncBookmarkDecorations();
     }),
     monacoEditor.onDidScrollChange(emitScroll),
     monacoEditor.onDidChangeCursorPosition(emitFocusLineChange),
@@ -408,6 +444,7 @@ watch(() => props.modelValue, (value) => {
   ignoreModelChange = true;
   monacoEditor.setValue(value);
   ignoreModelChange = false;
+  syncBookmarkDecorations();
 });
 
 watch(() => props.theme, () => {
@@ -425,6 +462,10 @@ watch(() => props.configText, () => {
 watch(() => props.vimEnabled, () => {
   void syncVimMode();
 });
+
+watch(() => props.bookmarkLineNumbers, () => {
+  syncBookmarkDecorations();
+}, { deep: true });
 
 defineExpose({
   focus,

@@ -1622,7 +1622,7 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe(`保存 Markdown 文件 (${expectedShortcut('S')})`);
     expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe(`显示/隐藏预览 (${expectedShortcut('P')})`);
     expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe(`切换阅读/编辑模式 (${expectedShortcut('E')})`);
-    expect(wrapper.get('[data-testid="bookmark-manager-button"]').attributes('title')).toBe(`显示书签列表 (${expectedShortcut('B')})`);
+    expect(wrapper.get('[data-testid="bookmark-manager-button"]').attributes('title')).toBe(`显示书签列表 (${expectedShortcut('B')})，共 0 个书签`);
     expect(wrapper.get('[data-testid="add-bookmark"]').attributes('title')).toBe(`添加当前位置到书签 (${expectedShortcut('Shift+B')})`);
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('v0.1.4');
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('文件');
@@ -1653,12 +1653,18 @@ describe('App', () => {
 
     await wrapper.find('[data-testid="add-bookmark"]').trigger('click');
     await nextTick();
+    expect(wrapper.find('[data-testid="bookmark-manager-button"] .action-badge').text()).toBe('1');
+    expect(wrapper.find('[data-testid="add-bookmark"]').classes()).toContain('active');
+    expect(wrapper.find('[data-testid="add-bookmark"]').attributes('title')).toContain('当前行已有 1 个书签');
     await wrapper.find('[data-testid="bookmark-manager-button"]').trigger('click');
     await nextTick();
 
     expect(wrapper.find('[data-testid="bookmark-modal"]').exists()).toBe(true);
+    expect(wrapper.find('.bookmark-dialog-bar').text()).toContain('书签 · 所有文件 1');
     expect(wrapper.find('.bookmark-row').text()).toContain('readme.md');
     expect(wrapper.find('.bookmark-row').text()).toContain('hello beta');
+    expect(wrapper.find('.bookmark-position').text()).toContain('行 9');
+    expect(wrapper.find('.bookmark-position').text()).toContain('列 4');
 
     await wrapper.find('[data-testid="bookmark-search"]').setValue('beta');
     expect(wrapper.findAll('.bookmark-row')).toHaveLength(1);
