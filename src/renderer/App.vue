@@ -4134,7 +4134,7 @@ onBeforeUnmount(() => {
       </aside>
 
       <div
-        class="resize-handle"
+        class="resize-handle toc-resize-handle"
         data-testid="toc-resizer"
         role="separator"
         @pointerdown="startResize('toc', $event)"
@@ -4270,7 +4270,7 @@ onBeforeUnmount(() => {
       </section>
 
       <div
-        class="resize-handle"
+        class="resize-handle editor-resize-handle"
         data-testid="editor-resizer"
         role="separator"
         @pointerdown="startResize('editor', $event)"

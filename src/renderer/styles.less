@@ -701,6 +701,7 @@ select:disabled {
 .toc-panel {
   background: var(--surface-muted);
   border-right: 1px solid var(--border);
+  grid-column: 1;
   min-width: 0;
   overflow: auto;
   padding: 14px 10px;
@@ -765,12 +766,21 @@ select:disabled {
   min-width: 6px;
 }
 
+.toc-resize-handle {
+  grid-column: 2;
+}
+
+.editor-resize-handle {
+  grid-column: 4;
+}
+
 .resize-handle:hover {
   background: var(--accent-soft);
 }
 
 .editor-panel {
   display: grid;
+  grid-column: 3;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
 }
@@ -954,9 +964,17 @@ select:disabled {
   }
 
   .toc-tree,
-  .empty,
-  .workspace > .resize-handle:first-of-type {
+  .empty {
     display: none;
+  }
+
+  .toc-resize-handle {
+    border: 0;
+    cursor: default;
+    min-width: 0;
+    overflow: hidden;
+    pointer-events: none;
+    visibility: hidden;
   }
 }
 
@@ -1040,6 +1058,7 @@ select:disabled {
 .preview {
   background: var(--surface);
   color: var(--text);
+  grid-column: 5;
   min-width: 0;
   overflow-x: hidden;
   overflow-y: auto;
@@ -1786,7 +1805,7 @@ button.markdown-code-copy.is-copied:hover {
 
 .reader-mode {
   .editor-panel,
-  .workspace > .resize-handle:nth-of-type(2) {
+  .editor-resize-handle {
     border: 0;
     overflow: hidden;
     padding: 0;

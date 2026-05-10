@@ -65,6 +65,49 @@ test('opens a markdown file supplied as a launch argument', async () => {
   }
 });
 
+test('keeps the preview pane aligned after collapsing the table of contents', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-collapsed-toc-'));
+  const markdownPath = path.join(tempDir, 'collapsed toc.md');
+  await fs.writeFile(markdownPath, '# Collapsed Toc\n\nOnly the preview should fill this row.', 'utf8');
+
+  const launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
+
+  try {
+    const page = await launched.app.firstWindow();
+    await page.setViewportSize({ width: 1388, height: 768 });
+
+    await page.getByTestId('toggle-toc-panel').click();
+
+    const metrics = await page.evaluate(() => {
+      const workspace = document.querySelector<HTMLElement>('.workspace');
+      const preview = document.querySelector<HTMLElement>('[data-testid="preview"]');
+      const tocResizer = document.querySelector<HTMLElement>('[data-testid="toc-resizer"]');
+      if (!workspace || !preview || !tocResizer) {
+        throw new Error('Missing workspace, preview, or toc resizer');
+      }
+
+      const workspaceRect = workspace.getBoundingClientRect();
+      const previewRect = preview.getBoundingClientRect();
+      const tocResizerStyle = getComputedStyle(tocResizer);
+      return {
+        previewLeft: previewRect.left - workspaceRect.left,
+        previewWidth: previewRect.width,
+        tocResizerDisplay: tocResizerStyle.display,
+        tocResizerVisibility: tocResizerStyle.visibility,
+        workspaceWidth: workspaceRect.width,
+      };
+    });
+
+    expect(metrics.previewLeft).toBeLessThanOrEqual(50);
+    expect(metrics.previewWidth).toBeGreaterThan(metrics.workspaceWidth - 60);
+    expect(metrics.tocResizerDisplay).not.toBe('none');
+    expect(metrics.tocResizerVisibility).toBe('hidden');
+  } finally {
+    await closeEditor(launched);
+    await fs.rm(tempDir, { force: true, recursive: true });
+  }
+});
+
 test('loads remote images in markdown preview', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-remote-image-'));
   const markdownPath = path.join(tempDir, 'remote image.md');
