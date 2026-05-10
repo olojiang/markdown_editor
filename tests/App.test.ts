@@ -1282,6 +1282,9 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
+    expect(wrapper.find('[data-testid="expand-toc"]').attributes('aria-label')).toBe('展开全部标题');
+    expect(wrapper.find('[data-testid="collapse-toc"]').attributes('aria-label')).toBe('收起全部标题');
+
     await wrapper.find('[data-testid="collapse-toc"]').trigger('click');
     expect(wrapper.find('[data-testid="toc"]').text()).toContain('Title');
     expect(wrapper.find('[data-testid="toc"]').text()).not.toContain('Alpha');
@@ -1296,10 +1299,13 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
+    expect(wrapper.find('[data-testid="toggle-toc-panel"]').attributes('aria-label')).toBe('收起目录侧栏');
+
     await wrapper.find('[data-testid="toggle-toc-panel"]').trigger('click');
     await nextTick();
 
     expect(wrapper.classes()).toContain('toc-collapsed');
+    expect(wrapper.find('[data-testid="toggle-toc-panel"]').attributes('aria-label')).toBe('展开目录侧栏');
     expect(wrapper.find('.workspace').attributes('style')).toContain('44px 0px');
 
     await wrapper.find('[data-testid="toggle-toc-panel"]').trigger('click');

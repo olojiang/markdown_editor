@@ -167,7 +167,11 @@ const icons = {
   save: 'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z M17 21v-8H7v8 M7 3v5h8',
   search: 'M21 21l-4.35-4.35 M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z',
   settings: 'M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 0-.33 1.82V22a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8.6 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-.6-1 1.65 1.65 0 0 0-1.82-.33H2a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 8.6a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-.6 1.65 1.65 0 0 0 .33-1.82V2a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15.4 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.37.37.7.6 1 .45.58 1.14.73 1.82.5H22a2 2 0 1 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15z',
+  sidebarHide: 'M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z M9 5v14 M15 8l-4 4 4 4',
+  sidebarShow: 'M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z M9 5v14 M12 8l4 4-4 4',
   sun: 'M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42 M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z',
+  tocCollapseAll: 'M4 6h7 M4 12h10 M4 18h13 M17 9h5',
+  tocExpandAll: 'M4 6h7 M4 12h10 M4 18h13 M19.5 6v6 M16.5 9h6',
   trash: 'M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6 M10 11v6 M14 11v6',
   upload: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12',
   x: 'M18 6 6 18 M6 6l12 12',
@@ -4107,13 +4111,13 @@ onBeforeUnmount(() => {
                 :title="isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'"
                 @click="toggleTocPanel"
               >
-                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="isTocPanelCollapsed ? icons.chevronRight : icons.chevronDown" /></svg>
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="isTocPanelCollapsed ? icons.sidebarShow : icons.sidebarHide" /></svg>
               </button>
-              <button data-testid="expand-toc" class="icon-button" type="button" aria-label="全部展开" title="全部展开" @click="expandAllHeadings">
-                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.chevronDown" /></svg>
+              <button data-testid="expand-toc" class="icon-button" type="button" aria-label="展开全部标题" title="展开全部标题" @click="expandAllHeadings">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocExpandAll" /></svg>
               </button>
-              <button data-testid="collapse-toc" class="icon-button" type="button" aria-label="全部收起" title="全部收起" @click="collapseAllHeadings">
-                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.chevronRight" /></svg>
+              <button data-testid="collapse-toc" class="icon-button" type="button" aria-label="收起全部标题" title="收起全部标题" @click="collapseAllHeadings">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocCollapseAll" /></svg>
               </button>
             </div>
           </div>
