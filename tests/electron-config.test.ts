@@ -6,6 +6,7 @@ describe('Electron build configuration', () => {
     const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8')) as {
       type?: string;
       main?: string;
+      dependencies?: Record<string, string>;
       scripts?: {
         'build:icon'?: string;
         'build:mac'?: string;
@@ -47,6 +48,8 @@ describe('Electron build configuration', () => {
     expect(packageJson.scripts?.['build:mac']).toContain('pnpm build:icon');
     expect(packageJson.scripts?.['build:mac']).toContain('--arm64');
     expect(packageJson.scripts?.['build:mac']).not.toContain('--x64');
+    expect(packageJson.dependencies?.['iconv-lite']).toBe('0.6.3');
+    expect(packageJson.dependencies?.['safer-buffer']).toBe('2.1.2');
     expect(packageJson.build?.productName).toBe('Markdown 纪');
     expect(packageJson.build?.mac?.icon).toBe('build/icon.icns');
     expect(packageJson.build?.mac?.identity).toBeNull();
