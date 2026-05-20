@@ -2,12 +2,20 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import MarkdownMonacoEditor from '@/renderer/components/MarkdownMonacoEditor.vue';
 import TocTree from '@/renderer/components/TocTree.vue';
+import {
+  buildDocumentHeadingTree,
+  documentKindFromFileName,
+  documentLabel,
+  formatJsonDocument,
+  monacoLanguageForDocument,
+  renderDocumentPreview,
+  supportedDocumentExtensions,
+  type DocumentKind,
+} from '@/renderer/lib/document';
 import { parseEditorConfig } from '@/renderer/lib/editorConfig';
 import { rendererLog } from '@/renderer/lib/logger';
 import {
-  buildHeadingTree,
   filterHeadingTree,
-  renderMarkdown,
   type HeadingNode,
 } from '@/renderer/lib/markdown';
 import {
@@ -29,6 +37,7 @@ interface MarkdownFile {
   path: string | null;
   name: string;
   content: string;
+  encoding?: string;
 }
 
 interface ScrollAnchor {
@@ -97,6 +106,12 @@ interface BookmarkListItem extends MarkdownBookmark {
   searchableText: string;
 }
 
+interface SearchMatchRange {
+  end: number;
+  start: number;
+  term: string;
+}
+
 interface EditorSurface {
   focus(): void;
   getCursorPosition(): CursorPosition;
@@ -139,6 +154,29 @@ interface ActiveImagePreview {
 
 type MermaidExportFormat = 'svg' | 'png' | 'webp';
 type ImageUploadMode = 'local' | 'cloud';
+type TextEncoding =
+  | 'utf8'
+  | 'utf16-le'
+  | 'utf16-be'
+  | 'gb18030'
+  | 'gbk'
+  | 'big5'
+  | 'shift_jis'
+  | 'windows1252'
+  | 'latin1';
+
+const defaultTextEncoding: TextEncoding = 'utf8';
+const textEncodingOptions: { label: string; value: TextEncoding }[] = [
+  { label: 'UTF-8', value: 'utf8' },
+  { label: 'UTF-16 LE', value: 'utf16-le' },
+  { label: 'UTF-16 BE', value: 'utf16-be' },
+  { label: 'GB18030', value: 'gb18030' },
+  { label: 'GBK', value: 'gbk' },
+  { label: 'Big5', value: 'big5' },
+  { label: 'Shift_JIS', value: 'shift_jis' },
+  { label: 'Windows-1252', value: 'windows1252' },
+  { label: 'Latin-1', value: 'latin1' },
+];
 
 const icons = {
   archive: 'M21 8v13H3V8 M1 3h22v5H1z M10 12h4',
@@ -192,7 +230,7 @@ const activeMermaidDiagram = shallowRef<ActiveMermaidDiagram | null>(null);
 const activeImagePreview = shallowRef<ActiveImagePreview | null>(null);
 const preview = ref<HTMLElement | null>(null);
 const editor = ref<EditorSurface | null>(null);
-const status = ref('请选择或打开一个 Markdown 文件');
+const status = ref('请选择或打开一个支持的文档');
 const activeEditorLine = ref(1);
 const tocSearch = ref('');
 const collapsedHeadingIds = ref(new Set<string>());
@@ -201,6 +239,7 @@ const editorSearchVisible = ref(false);
 const editorSearch = ref('');
 const editorReplace = ref('');
 const editorSearchInput = ref<HTMLInputElement | null>(null);
+const previewSearchRange = ref<SearchMatchRange | null>(null);
 const bookmarkManagerOpen = ref(false);
 const bookmarkSearch = ref('');
 const bookmarkList = ref<HTMLElement | null>(null);
@@ -217,6 +256,7 @@ const editorConfigError = ref('');
 const closeConfirmationVisible = ref(false);
 const closeConfirmationBusy = ref(false);
 const helpPopoverPinned = ref(false);
+const htmlPreviewSrc = ref('');
 const recentFilesOpen = ref(false);
 const isTocPanelCollapsed = ref(false);
 const draggedTabId = ref<string | null>(null);
@@ -238,6 +278,7 @@ let imageModalDragged = false;
 let isRestoringStartup = false;
 let isFlushingOpenQueue = false;
 let lastRecentFilesDiagnosticSignature = '';
+let htmlPreviewTimer: number | undefined;
 const queuedOpenRequests: MarkdownOpenRequest[] = [];
 const previewScrollOffset = -50;
 const sessionSaveDelay = 200;
@@ -250,8 +291,17 @@ const codeCopyResetTimers = new WeakMap<HTMLButtonElement, number>();
 const codeCopyIconSvg = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 8h10v12H8z M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>';
 const codeCopySuccessSvg = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>';
 
-const previewHtml = computed(() => rewriteLocalImageSources(`${renderMarkdown(source.value)}<!-- theme:${session.value.theme} -->`));
-const headingTree = computed(() => applyCollapsedState(buildHeadingTree(source.value)));
+const currentDocumentKind = computed<DocumentKind>(() => documentKindFromFileName(currentFile.value?.path ?? currentFile.value?.name));
+const currentDocumentLabel = computed(() => documentLabel(currentDocumentKind.value));
+const currentEditorLanguage = computed(() => monacoLanguageForDocument(currentDocumentKind.value));
+const isMarkdownDocument = computed(() => currentDocumentKind.value === 'markdown');
+const isHtmlDocument = computed(() => currentDocumentKind.value === 'html');
+const isJsonDocument = computed(() => currentDocumentKind.value === 'json');
+const currentEncoding = computed(() => normalizeTextEncoding(currentFile.value?.encoding));
+const currentEncodingLabel = computed(() => textEncodingLabel(currentEncoding.value));
+const hasPreviewPane = computed(() => isMarkdownDocument.value || isHtmlDocument.value || isJsonDocument.value);
+const previewHtml = computed(() => rewriteLocalImageSources(`${renderDocumentPreview(source.value, currentDocumentKind.value)}<!-- theme:${session.value.theme} -->`));
+const headingTree = computed(() => applyCollapsedState(buildDocumentHeadingTree(source.value, currentDocumentKind.value)));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
 const title = computed(() => currentFile.value?.name ?? 'Markdown 纪');
 const activeTab = computed(() => openTabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
@@ -274,7 +324,14 @@ const activeImageStyle = computed(() => {
     transform: `translate(${image.x}px, ${image.y}px) scale(${image.scale})`,
   };
 });
-const isEditorVisible = computed(() => session.value.editorVisible || !currentFile.value);
+const isEditorForcedVisible = computed(() => currentFile.value !== null && currentDocumentKind.value !== 'markdown');
+const isEditorVisible = computed(() => isEditorForcedVisible.value || session.value.editorVisible || !currentFile.value);
+const isPreviewSearchMode = computed(() => (
+  editorSearchVisible.value
+  && hasPreviewPane.value
+  && !session.value.previewHidden
+  && (!isEditorVisible.value || isPreviewFullscreen.value)
+));
 const hasUnsavedChanges = computed(() => currentFile.value !== null && source.value !== lastSavedContent.value);
 const unsavedTabCount = computed(() => openTabs.value.filter((tab) => tab.source !== tab.lastSavedContent).length);
 const displayTitle = computed(() => (hasUnsavedChanges.value ? `${title.value} *` : title.value));
@@ -282,14 +339,15 @@ const statusText = computed(() => (hasUnsavedChanges.value ? `${status.value} ·
 const recentFilePaths = computed(() => normalizeRecentFiles(session.value.recentFiles));
 const recentFileOptions = computed(() => buildRecentFileOptions(recentFilePaths.value));
 const shortcutModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'));
-const openShortcutHint = computed(() => `打开 Markdown 文件 (${shortcutModifier.value}+O)`);
-const saveShortcutHint = computed(() => `保存 Markdown 文件 (${shortcutModifier.value}+S)`);
-const refreshShortcutHint = computed(() => `从磁盘重新读取当前 Markdown 文件 (${shortcutModifier.value}+R)`);
+const openShortcutHint = computed(() => `打开文档 (${shortcutModifier.value}+O)`);
+const saveShortcutHint = computed(() => `保存 ${currentDocumentLabel.value} 文件 (${shortcutModifier.value}+S)`);
+const refreshShortcutHint = computed(() => `从磁盘重新读取当前 ${currentDocumentLabel.value} 文件 (${shortcutModifier.value}+R)`);
 const previewShortcutHint = computed(() => `显示/隐藏预览 (${shortcutModifier.value}+P)`);
 const editorShortcutHint = computed(() => `切换阅读/编辑模式 (${shortcutModifier.value}+E)`);
 const addBookmarkShortcutHint = computed(() => {
+  const action = currentLineHasBookmark.value ? '取消当前行书签' : '添加当前位置到书签';
   const suffix = currentLineHasBookmark.value ? `，当前行已有 ${currentLineBookmarkCount.value} 个书签` : '';
-  return `添加当前位置到书签 (${shortcutModifier.value}+Shift+B)${suffix}`;
+  return `${action} (${shortcutModifier.value}+Shift+B)${suffix}`;
 });
 const bookmarkManagerShortcutHint = computed(() => `显示书签列表 (${shortcutModifier.value}+B)，共 ${bookmarkTotalCount.value} 个书签`);
 const previewZoomPercent = computed(() => Math.round(previewZoom.value * 100));
@@ -350,15 +408,19 @@ watch(visibleBookmarks, (bookmarks) => {
   selectedBookmarkId.value = bookmarks[0]?.id ?? null;
   revealSelectedBookmark();
 });
+watch(editorSearch, () => {
+  previewSearchRange.value = null;
+  clearPreviewSearchHighlight();
+});
 const helpGroups = computed<HelpGroup[]>(() => [
   {
     title: '文件',
     items: [
       { label: '新建 Markdown', shortcut: `${shortcutModifier.value}+T`, detail: '创建一个未保存的空白 Markdown 标签页' },
-      { label: '打开 Markdown', shortcut: `${shortcutModifier.value}+O`, detail: '选择本地 .md、.markdown、.mdown 文件' },
+      { label: '打开文档', shortcut: `${shortcutModifier.value}+O`, detail: '选择 Markdown、HTML、TXT/Text 或 JSON 文件' },
       { label: '保存 / 另存为', shortcut: `${shortcutModifier.value}+S`, detail: '保存当前文件；菜单栏里也提供另存为和全部保存' },
       { label: '刷新当前文件', shortcut: `${shortcutModifier.value}+R`, detail: '从磁盘重新读取；有未保存修改时不会覆盖' },
-      { label: '最近文件', shortcut: '', detail: '快速打开最近访问过的 Markdown 文件' },
+      { label: '最近文件', shortcut: '', detail: '快速打开最近访问过的支持文档' },
       { label: '导出 HTML/PDF', shortcut: '', detail: '把当前渲染结果导出为独立文件' },
     ],
   },
@@ -366,11 +428,12 @@ const helpGroups = computed<HelpGroup[]>(() => [
     title: '编辑',
     items: [
       { label: '搜索 / 替换', shortcut: `${shortcutModifier.value}+F`, detail: '打开源码搜索栏，支持查找、替换和全部替换' },
-      { label: '添加书签', shortcut: `${shortcutModifier.value}+Shift+B`, detail: '把当前文件的光标行列保存为可跳转位置' },
+      { label: '切换书签', shortcut: `${shortcutModifier.value}+Shift+B`, detail: '当前行无书签时添加，有书签时取消' },
       { label: '书签列表', shortcut: `${shortcutModifier.value}+B`, detail: '搜索、按文件筛选、键盘选择、跳转或删除书签' },
       { label: '光标历史', shortcut: 'Ctrl+[ / Ctrl+]', detail: '在跨行或跨文件的光标位置之间后退和前进' },
       { label: '阅读/编辑', shortcut: `${shortcutModifier.value}+E`, detail: '阅读模式只显示预览，需要时切回源码编辑' },
       { label: 'Vim 与编辑器配置', shortcut: '', detail: '开启 Vim 模式，或配置 Monaco / Vim JSON 选项' },
+      { label: 'JSON 格式化', shortcut: '', detail: 'JSON 文件可格式化为 2 空格缩进，或压缩为单行' },
     ],
   },
   {
@@ -395,6 +458,12 @@ const helpGroups = computed<HelpGroup[]>(() => [
   },
 ]);
 const gridStyle = computed(() => {
+  if (!hasPreviewPane.value) {
+    return {
+      gridTemplateColumns: `${tocColumnWidth.value}px ${isTocPanelCollapsed.value ? 0 : 6}px minmax(0, 1fr) 0 0`,
+    };
+  }
+
   if (isPreviewFullscreen.value) {
     return {
       gridTemplateColumns: `${tocColumnWidth.value}px ${isTocPanelCollapsed.value ? 0 : 6}px minmax(0, 1fr) 6px 0`,
@@ -482,7 +551,7 @@ function enhanceMarkdownImage(image: HTMLImageElement): void {
 
   image.loading = image.loading || 'lazy';
   image.dataset.imageSrc = image.getAttribute('src') ?? '';
-  image.dataset.imageTitle = image.getAttribute('alt') || 'Markdown 图片';
+  image.dataset.imageTitle = image.getAttribute('alt') || '文档图片';
   image.classList.add('markdown-image');
 
   const frame = document.createElement('span');
@@ -514,6 +583,64 @@ function nextDraftId(): string {
 
 function currentFilePath(): string | null {
   return currentFile.value?.path ?? null;
+}
+
+function normalizeTextEncoding(encoding: unknown): TextEncoding {
+  if (typeof encoding !== 'string') {
+    return defaultTextEncoding;
+  }
+  const normalized = encoding.trim().toLowerCase().replace(/_/g, '-');
+  if (normalized === 'utf-8' || normalized === 'utf8') {
+    return 'utf8';
+  }
+  if (normalized === 'utf-16le' || normalized === 'utf16le' || normalized === 'utf16-le') {
+    return 'utf16-le';
+  }
+  if (normalized === 'utf-16be' || normalized === 'utf16be' || normalized === 'utf16-be') {
+    return 'utf16-be';
+  }
+  if (normalized === 'windows-1252' || normalized === 'win1252' || normalized === 'cp1252') {
+    return 'windows1252';
+  }
+  return textEncodingOptions.some((option) => option.value === normalized) ? normalized as TextEncoding : defaultTextEncoding;
+}
+
+function textEncodingLabel(encoding: unknown): string {
+  const normalized = normalizeTextEncoding(encoding);
+  return textEncodingOptions.find((option) => option.value === normalized)?.label ?? 'UTF-8';
+}
+
+function encodingIpcArgument(encoding: unknown): string | undefined {
+  const normalized = normalizeTextEncoding(encoding);
+  return normalized === defaultTextEncoding ? undefined : normalized;
+}
+
+function readMarkdownFileWithEncoding(filePath: string, encoding?: unknown): Promise<MarkdownFile> {
+  const normalized = encodingIpcArgument(encoding);
+  return normalized === undefined
+    ? bridge!.readMarkdownFile(filePath)
+    : bridge!.readMarkdownFile(filePath, normalized);
+}
+
+function saveMarkdownFileWithEncoding(filePath: string, content: string, encoding?: unknown): Promise<MarkdownFile> {
+  const normalized = encodingIpcArgument(encoding);
+  return normalized === undefined
+    ? bridge!.saveMarkdownFile(filePath, content)
+    : bridge!.saveMarkdownFile(filePath, content, normalized);
+}
+
+function saveMarkdownFileAsWithEncoding(content: string, defaultName: string, encoding?: unknown): Promise<MarkdownFile | null> {
+  const normalized = encodingIpcArgument(encoding);
+  return normalized === undefined
+    ? bridge!.saveMarkdownFileAs(content, defaultName)
+    : bridge!.saveMarkdownFileAs(content, defaultName, normalized);
+}
+
+function setFileEncoding(file: MarkdownFile, encoding: unknown): MarkdownFile {
+  return {
+    ...file,
+    encoding: normalizeTextEncoding(encoding),
+  };
 }
 
 function tabPath(tab: OpenTab): string | null {
@@ -552,11 +679,31 @@ function selectFirstVisibleBookmark(): void {
   selectedBookmarkId.value = visibleBookmarks.value[0]?.id ?? null;
 }
 
-function addBookmarkAtCursor(): void {
+function toggleBookmarkAtCursor(): void {
   const tab = activeTab.value;
   const position = editor.value?.getCursorPosition();
   if (!tab || !position) {
-    status.value = '没有可添加书签的编辑位置';
+    status.value = '没有可切换书签的编辑位置';
+    return;
+  }
+
+  const currentKey = bookmarkFileKey({
+    filePath: tab.file.path,
+    tabId: tab.id,
+  });
+  const bookmarksOnLine = normalizedBookmarks.value.filter((bookmark) => (
+    bookmarkFileKey(bookmark) === currentKey && bookmark.lineNumber === position.lineNumber
+  ));
+  if (bookmarksOnLine.length > 0) {
+    const removedIds = new Set(bookmarksOnLine.map((bookmark) => bookmark.id));
+    const nextBookmarks = normalizedBookmarks.value.filter((bookmark) => !removedIds.has(bookmark.id));
+    const nextCurrentFileBookmarkCount = nextBookmarks.filter((bookmark) => bookmarkFileKey(bookmark) === currentKey).length;
+    persistSession({ bookmarks: nextBookmarks });
+    activeEditorLine.value = position.lineNumber;
+    if (selectedBookmarkId.value && removedIds.has(selectedBookmarkId.value)) {
+      selectedBookmarkId.value = visibleBookmarks.value[0]?.id ?? null;
+    }
+    status.value = `已取消当前行 ${bookmarksOnLine.length} 个书签 · 当前文件 ${nextCurrentFileBookmarkCount} 个`;
     return;
   }
 
@@ -826,6 +973,7 @@ function serializedOpenTabs(): MarkdownSession['tabs'] {
     scrollTop: tab.scrollTop,
     content: tab.file.path ? undefined : tab.source,
     lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
+    encoding: normalizeTextEncoding(tab.file.encoding),
   }));
 }
 
@@ -837,6 +985,14 @@ function tabSessionPatch(patch: Partial<MarkdownSession> = {}): Partial<Markdown
     scrollTop: activeScrollTop(),
     ...patch,
   };
+}
+
+function documentKindForFile(file: MarkdownFile): DocumentKind {
+  return documentKindFromFileName(file.path ?? file.name);
+}
+
+function forcedEditorPatchForFile(file: MarkdownFile): Partial<MarkdownSession> {
+  return documentKindForFile(file) === 'markdown' ? {} : { editorVisible: true };
 }
 
 function persistableSession(): MarkdownSession {
@@ -858,6 +1014,7 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
       scrollTop: tab.scrollTop,
       content: tab.content,
       lastSavedContent: tab.lastSavedContent,
+      encoding: tab.encoding,
     })),
     activeTabId: normalized.activeTabId,
     bookmarks: normalized.bookmarks.map((bookmark) => ({ ...bookmark })),
@@ -927,6 +1084,43 @@ function saveSessionBeforeUnload(): void {
   }
 }
 
+async function updateHtmlPreview(): Promise<void> {
+  if (!isHtmlDocument.value || !bridge?.htmlPreviewUrl) {
+    htmlPreviewSrc.value = '';
+    return;
+  }
+
+  try {
+    htmlPreviewSrc.value = await bridge.htmlPreviewUrl({
+      filePath: currentFile.value?.path ?? null,
+      content: source.value,
+    });
+  } catch (error) {
+    htmlPreviewSrc.value = '';
+    status.value = 'HTML 预览服务不可用';
+    debugLog('html-preview.url.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function scheduleHtmlPreviewReload(): void {
+  if (htmlPreviewTimer !== undefined) {
+    window.clearTimeout(htmlPreviewTimer);
+    htmlPreviewTimer = undefined;
+  }
+
+  if (!isHtmlDocument.value) {
+    htmlPreviewSrc.value = '';
+    return;
+  }
+
+  htmlPreviewTimer = window.setTimeout(() => {
+    htmlPreviewTimer = undefined;
+    void updateHtmlPreview();
+  }, 180);
+}
+
 function debugLog(event: string, payload: Record<string, unknown> = {}): void {
   rendererLog.info(event, payload);
   void bridge?.debugLog?.(event, payload);
@@ -969,7 +1163,7 @@ async function saveAllUnsavedTabs(): Promise<boolean> {
       continue;
     }
 
-    const saved = await bridge.saveMarkdownFile(tab.file.path, tab.source);
+    const saved = await saveMarkdownFileWithEncoding(tab.file.path, tab.source, tab.file.encoding);
     tab.file = saved;
     tab.source = saved.content;
     tab.lastSavedContent = saved.content;
@@ -977,7 +1171,7 @@ async function saveAllUnsavedTabs(): Promise<boolean> {
       currentFile.value = saved;
       source.value = saved.content;
       lastSavedContent.value = saved.content;
-      status.value = `已保存 ${saved.path}`;
+      status.value = `已保存 ${saved.path}（${textEncodingLabel(saved.encoding)}）`;
     }
   }
 
@@ -1010,7 +1204,7 @@ function discardUnsavedChangesBeforeClose(): void {
   currentFile.value = active?.file ?? null;
   source.value = active?.source ?? '';
   lastSavedContent.value = active?.lastSavedContent ?? '';
-  status.value = active?.file.path ?? (active ? '未保存的新 Markdown 文件' : '请选择或打开一个 Markdown 文件');
+  status.value = active?.file.path ?? (active ? '未保存的新文档' : '请选择或打开一个支持的文档');
   saveSessionNow();
 }
 
@@ -1592,12 +1786,13 @@ function activateTab(tabId: string): void {
   currentFile.value = tab.file;
   source.value = tab.source;
   lastSavedContent.value = tab.lastSavedContent;
-  status.value = tab.file.path ?? '未保存的新 Markdown 文件';
+  status.value = tab.file.path ?? '未保存的新文档';
   selectedAssetPath.value = '';
   persistTabSession({
     filePath: tab.file.path,
     activeTabId: tab.id,
     scrollTop: tab.scrollTop,
+    ...forcedEditorPatchForFile(tab.file),
   }, { syncActive: false });
   void refreshImageAssets(tab.file.path ?? undefined);
   void nextTick(() => {
@@ -1611,6 +1806,7 @@ function activateTab(tabId: string): void {
 }
 
 function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolean; persist?: boolean } = {}): void {
+  const normalizedFile = setFileEncoding(file, file.encoding);
   const nextScrollTop = options.external ? 0 : scrollTop;
   if (options.external) {
     session.value = mergeSession(session.value, {
@@ -1619,32 +1815,33 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
       scrollTop: 0,
     });
   }
+  session.value = mergeSession(session.value, forcedEditorPatchForFile(normalizedFile));
   syncActiveTabState();
-  const tabId = file.path ? tabIdForPath(file.path) : nextDraftId();
+  const tabId = normalizedFile.path ? tabIdForPath(normalizedFile.path) : nextDraftId();
   const existing = openTabs.value.find((tab) => tab.id === tabId);
   if (existing) {
-    existing.file = file;
-    existing.source = file.content;
-    existing.lastSavedContent = file.content;
+    existing.file = normalizedFile;
+    existing.source = normalizedFile.content;
+    existing.lastSavedContent = normalizedFile.content;
     existing.scrollTop = nextScrollTop;
   } else {
     openTabs.value.push({
       id: tabId,
-      file,
-      source: file.content,
-      lastSavedContent: file.content,
+      file: normalizedFile,
+      source: normalizedFile.content,
+      lastSavedContent: normalizedFile.content,
       scrollTop: nextScrollTop,
     });
   }
   activeTabId.value = tabId;
-  currentFile.value = file;
-  source.value = file.content;
-  lastSavedContent.value = file.content;
+  currentFile.value = normalizedFile;
+  source.value = normalizedFile.content;
+  lastSavedContent.value = normalizedFile.content;
   if (options.persist !== false) {
-    persistOpenedFile(file, nextScrollTop, tabId);
+    persistOpenedFile(normalizedFile, nextScrollTop, tabId);
   }
-  status.value = file.path ?? '未保存的新 Markdown 文件';
-  void refreshImageAssets(file.path ?? undefined);
+  status.value = normalizedFile.path ?? '未保存的新文档';
+  void refreshImageAssets(normalizedFile.path ?? undefined);
   void nextTick(() => {
     if (preview.value) {
       preview.value.scrollTop = nextScrollTop;
@@ -1673,7 +1870,7 @@ async function closeTab(tabId: string, event?: MouseEvent): Promise<void> {
     currentFile.value = null;
     source.value = '';
     lastSavedContent.value = '';
-    status.value = '请选择或打开一个 Markdown 文件';
+    status.value = '请选择或打开一个支持的文档';
     persistTabSession({ filePath: null, activeTabId: null, scrollTop: 0 });
     await closeApplication();
     return;
@@ -1780,7 +1977,7 @@ async function copyTabContent(tabId: string): Promise<void> {
   }
 
   syncActiveTabState();
-  await copyTextToClipboard(tab.source, '已复制 Markdown 内容');
+  await copyTextToClipboard(tab.source, '已复制文档内容');
   closeTabContextMenu();
 }
 
@@ -1794,7 +1991,7 @@ async function revealTabInFolder(tabId: string): Promise<void> {
   }
 
   await bridge.revealInFolder(path);
-  status.value = `已在 Finder 中定位 ${tab.file.name}`;
+  status.value = `已在文件夹中定位 ${tab.file.name}`;
   closeTabContextMenu();
 }
 
@@ -1876,6 +2073,7 @@ function createNewMarkdownTab(content = '', name?: string): void {
       path: null,
       name: tabName,
       content,
+      encoding: defaultTextEncoding,
     },
     source: content,
     lastSavedContent: '',
@@ -1904,13 +2102,13 @@ async function openFile(): Promise<void> {
   }
 }
 
-async function openFilePath(filePath: string): Promise<void> {
+async function openFilePath(filePath: string, encoding?: TextEncoding): Promise<void> {
   if (!bridge) {
     return;
   }
 
   try {
-    setFile(await bridge.readMarkdownFile(filePath), 0);
+    setFile(await readMarkdownFileWithEncoding(filePath, encoding), 0);
   } catch {
     status.value = `无法打开 ${filePath}`;
     persistSession({
@@ -1923,24 +2121,25 @@ function applyFreshFileContent(file: MarkdownFile, message: string): void {
   if (!file.path) {
     return;
   }
+  const freshFile = setFileEncoding(file, file.encoding);
   const tab = openTabs.value.find((item) => item.file.path === file.path);
   if (!tab) {
     return;
   }
 
   const scrollTop = tab.scrollTop;
-  tab.file = file;
-  tab.lastSavedContent = file.content;
-  tab.source = file.content;
+  tab.file = freshFile;
+  tab.lastSavedContent = freshFile.content;
+  tab.source = freshFile.content;
 
   if (tab.id !== activeTabId.value) {
     persistTabSession(undefined, { syncActive: false, deferred: true });
     return;
   }
 
-  currentFile.value = file;
-  lastSavedContent.value = file.content;
-  source.value = file.content;
+  currentFile.value = freshFile;
+  lastSavedContent.value = freshFile.content;
+  source.value = freshFile.content;
   status.value = message;
   persistTabSession({
     filePath: file.path,
@@ -1990,14 +2189,55 @@ async function refreshCurrentFile(): Promise<void> {
   }
 
   try {
-    applyFreshFileContent(await bridge.readMarkdownFile(filePath), `已刷新 ${filePath}`);
+    applyFreshFileContent(await readMarkdownFileWithEncoding(filePath, currentEncoding.value), `已刷新 ${filePath}`);
   } catch {
     status.value = `无法刷新 ${filePath}`;
   }
 }
 
-function isMarkdownPath(filePath: string): boolean {
-  return /\.(md|markdown|mdown)$/i.test(filePath);
+function setCurrentFileEncoding(encoding: unknown): void {
+  const normalized = normalizeTextEncoding(encoding);
+  const tab = activeTab.value;
+  if (!tab || !currentFile.value) {
+    return;
+  }
+
+  const nextFile = setFileEncoding(currentFile.value, normalized);
+  currentFile.value = nextFile;
+  tab.file = nextFile;
+  persistTabSession({ tabs: serializedOpenTabs() }, { syncActive: false, deferred: true });
+  status.value = `当前编码 ${textEncodingLabel(normalized)}；保存时将使用该编码`;
+}
+
+function onEncodingChange(event: Event): void {
+  const value = (event.target as HTMLSelectElement).value;
+  setCurrentFileEncoding(value);
+}
+
+async function reopenCurrentFileWithEncoding(): Promise<void> {
+  const filePath = currentFile.value?.path;
+  if (!filePath || !bridge) {
+    status.value = `新文件保存时将使用 ${currentEncodingLabel.value}`;
+    return;
+  }
+  if (hasUnsavedChanges.value) {
+    status.value = '当前有未保存修改，未重新读取磁盘';
+    return;
+  }
+
+  try {
+    applyFreshFileContent(
+      await readMarkdownFileWithEncoding(filePath, currentEncoding.value),
+      `已用 ${currentEncodingLabel.value} 重新打开 ${filePath}`,
+    );
+  } catch {
+    status.value = `无法用 ${currentEncodingLabel.value} 重新打开 ${filePath}`;
+  }
+}
+
+function isSupportedDocumentPath(filePath: string): boolean {
+  const extension = filePath.split('.').pop()?.toLowerCase() ?? '';
+  return supportedDocumentExtensions.includes(extension as (typeof supportedDocumentExtensions)[number]);
 }
 
 function toggleRecentFiles(): void {
@@ -2024,16 +2264,16 @@ function deleteRecentFile(filePath: string): void {
 
 async function onDropFile(event: DragEvent): Promise<void> {
   const files = Array.from(event.dataTransfer?.files ?? []);
-  const markdownFile = files.find((file) => {
+  const documentFile = files.find((file) => {
     const filePath = bridge?.getPathForFile(file) || (file as File & { path?: string }).path || file.name;
-    return isMarkdownPath(filePath);
+    return isSupportedDocumentPath(filePath);
   });
-  const filePath = markdownFile
-    ? bridge?.getPathForFile(markdownFile) || (markdownFile as File & { path?: string }).path
+  const filePath = documentFile
+    ? bridge?.getPathForFile(documentFile) || (documentFile as File & { path?: string }).path
     : undefined;
 
   if (!filePath) {
-    status.value = '请拖入 Markdown 文件';
+    status.value = '请拖入 Markdown、HTML、Text 或 JSON 文件';
     return;
   }
 
@@ -2056,14 +2296,14 @@ async function saveCurrentFileAndReport(): Promise<boolean> {
     return true;
   }
 
-  currentFile.value = await bridge.saveMarkdownFile(currentFile.value.path, source.value);
+  currentFile.value = await saveMarkdownFileWithEncoding(currentFile.value.path, source.value, currentEncoding.value);
   lastSavedContent.value = currentFile.value.content;
   if (activeTab.value) {
     activeTab.value.file = currentFile.value;
     activeTab.value.source = source.value;
     activeTab.value.lastSavedContent = lastSavedContent.value;
   }
-  status.value = `已保存 ${currentFile.value.path}`;
+  status.value = `已保存 ${currentFile.value.path}（${currentEncodingLabel.value}）`;
   scheduleSessionSave();
   return true;
 }
@@ -2075,7 +2315,7 @@ async function saveTabAs(tabId: string | null): Promise<void> {
   }
 
   syncActiveTabState();
-  const saved = await bridge.saveMarkdownFileAs(tab.source, tab.file.name);
+  const saved = await saveMarkdownFileAsWithEncoding(tab.source, tab.file.name, tab.file.encoding);
   if (!saved?.path) {
     status.value = '已取消另存为';
     return;
@@ -2094,7 +2334,7 @@ async function saveTabAs(tabId: string | null): Promise<void> {
   currentFile.value = saved;
   source.value = saved.content;
   lastSavedContent.value = saved.content;
-  status.value = `已另存为 ${saved.path}`;
+  status.value = `已另存为 ${saved.path}（${textEncodingLabel(saved.encoding)}）`;
   session.value = mergeSession(session.value, {
     filePath: saved.path,
     activeTabId: nextId,
@@ -2107,7 +2347,7 @@ async function saveTabAs(tabId: string | null): Promise<void> {
 function currentExportPayload(options: { relativeImages: boolean }): ExportDocumentPayload | null {
   const markdownPath = currentFilePath();
   if (!currentFile.value || !markdownPath || !preview.value) {
-    status.value = '请先保存 Markdown 文件';
+    status.value = '请先保存当前文档';
     return null;
   }
 
@@ -2488,25 +2728,158 @@ function scheduleSave(): void {
   scheduleSessionSave();
 }
 
-function findNext(): void {
+function refocusEditorSearchInput(): void {
+  void nextTick(() => {
+    editorSearchInput.value?.focus();
+  });
+}
+
+function sourceLineFromOffset(offset: number): number {
+  const safeOffset = Math.min(Math.max(0, offset), source.value.length);
+  return source.value.slice(0, safeOffset).split('\n').length;
+}
+
+function clearPreviewSearchHighlight(): void {
+  preview.value?.querySelectorAll<HTMLElement>('.preview-search-match').forEach((node) => {
+    node.classList.remove('preview-search-match');
+  });
+}
+
+function previewNodeForSourceLine(line: number): HTMLElement | null {
+  const container = preview.value;
+  if (!container) {
+    return null;
+  }
+
+  const nodes = Array.from(container.querySelectorAll<HTMLElement>('[data-source-line]'))
+    .map((node) => ({ line: Number(node.dataset.sourceLine), node }))
+    .filter((item) => Number.isFinite(item.line))
+    .sort((first, second) => first.line - second.line);
+
+  return nodes.find((item) => item.line === line)?.node
+    ?? nodes.filter((item) => item.line <= line).at(-1)?.node
+    ?? nodes[0]?.node
+    ?? null;
+}
+
+function revealPreviewSearchMatch(match: SearchMatchRange): void {
+  void nextTick(() => {
+    const container = preview.value;
+    if (!container) {
+      return;
+    }
+
+    clearPreviewSearchHighlight();
+    const line = sourceLineFromOffset(match.start);
+    const node = previewNodeForSourceLine(line);
+    if (node) {
+      node.classList.add('preview-search-match');
+    }
+
+    const targetTop = interpolatePreviewScrollFromLine(line)
+      ?? (node ? previewNodeScrollTop(node, container) : null);
+    if (targetTop !== null) {
+      container.scrollTop = Math.min(maxScrollTop(container), Math.max(0, targetTop - 16));
+    }
+  });
+}
+
+function nextSourceMatch(term: string, start: number): SearchMatchRange | null {
+  let index = source.value.indexOf(term, start);
+  if (index === -1 && start > 0) {
+    index = source.value.indexOf(term, 0);
+  }
+  return index === -1 ? null : { end: index + term.length, start: index, term };
+}
+
+function previousSourceMatch(term: string, start: number): SearchMatchRange | null {
+  let index = source.value.lastIndexOf(term, start - 1);
+  if (index === -1 && start < source.value.length) {
+    index = source.value.lastIndexOf(term);
+  }
+  return index === -1 ? null : { end: index + term.length, start: index, term };
+}
+
+function findPreviewMatch(direction: 'next' | 'previous'): void {
+  const term = editorSearch.value;
+  if (!term) {
+    return;
+  }
+
+  const previous = previewSearchRange.value?.term === term ? previewSearchRange.value : null;
+  const match = direction === 'next'
+    ? nextSourceMatch(term, previous?.end ?? 0)
+    : previousSourceMatch(term, previous?.start ?? source.value.length);
+  if (!match) {
+    status.value = '没有找到匹配内容';
+    return;
+  }
+
+  previewSearchRange.value = match;
+  status.value = `预览匹配：第 ${sourceLineFromOffset(match.start)} 行`;
+  revealPreviewSearchMatch(match);
+}
+
+function findNext(focusEditor = true): void {
+  if (isPreviewSearchMode.value) {
+    findPreviewMatch('next');
+    return;
+  }
+
   const term = editorSearch.value;
   const selection = editorSelectionRange();
   if (!term || !selection || !editor.value) {
     return;
   }
 
-  const start = selection.end;
-  let index = source.value.indexOf(term, start);
-  if (index === -1 && start > 0) {
-    index = source.value.indexOf(term, 0);
-  }
-  if (index === -1) {
+  const match = nextSourceMatch(term, selection.end);
+  if (!match) {
     status.value = '没有找到匹配内容';
     return;
   }
 
-  editor.value.focus();
-  editor.value.setSelectionRange(index, index + term.length);
+  if (focusEditor) {
+    editor.value.focus();
+  }
+  editor.value.setSelectionRange(match.start, match.end);
+}
+
+function findPrevious(focusEditor = true): void {
+  if (isPreviewSearchMode.value) {
+    findPreviewMatch('previous');
+    return;
+  }
+
+  const term = editorSearch.value;
+  const selection = editorSelectionRange();
+  if (!term || !selection || !editor.value) {
+    return;
+  }
+
+  const match = previousSourceMatch(term, selection.start);
+  if (!match) {
+    status.value = '没有找到匹配内容';
+    return;
+  }
+
+  if (focusEditor) {
+    editor.value.focus();
+  }
+  editor.value.setSelectionRange(match.start, match.end);
+}
+
+function onEditorSearchKeyDown(event: KeyboardEvent): void {
+  if (event.key !== 'Enter') {
+    return;
+  }
+
+  event.preventDefault();
+  if (event.shiftKey) {
+    findPrevious(false);
+  } else {
+    findNext(false);
+  }
+  refocusEditorSearchInput();
 }
 
 function replaceCurrent(): void {
@@ -2543,9 +2916,27 @@ function replaceAll(): void {
   status.value = `已替换 ${count} 处`;
 }
 
+function transformJsonSource(compact: boolean): void {
+  if (!isJsonDocument.value) {
+    status.value = '当前文件不是 JSON';
+    return;
+  }
+
+  try {
+    source.value = formatJsonDocument(source.value, compact);
+    status.value = compact ? '已将 JSON 转换为单行' : '已格式化 JSON（2 空格缩进）';
+    void nextTick(() => editor.value?.focus());
+  } catch (error) {
+    status.value = 'JSON 格式不合法，无法处理';
+    rendererLog.warn('json.format.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 function showEditorSearch(): void {
   editorSearchVisible.value = true;
-  if (!isEditorVisible.value) {
+  if (!isEditorVisible.value && session.value.previewHidden) {
     persistSession({
       editorVisible: true,
       previewHidden: false,
@@ -2558,8 +2949,13 @@ function showEditorSearch(): void {
 }
 
 function hideEditorSearch(): void {
+  const wasPreviewSearchMode = isPreviewSearchMode.value;
   editorSearchVisible.value = false;
-  void nextTick(() => editor.value?.focus());
+  previewSearchRange.value = null;
+  clearPreviewSearchHighlight();
+  if (!wasPreviewSearchMode) {
+    void nextTick(() => editor.value?.focus());
+  }
 }
 
 function setTheme(theme: ThemeMode): void {
@@ -2678,6 +3074,12 @@ async function onVimCommand(command: VimCommand): Promise<void> {
 }
 
 function toggleEditor(): void {
+  if (isEditorForcedVisible.value) {
+    persistSession({ editorVisible: true });
+    status.value = `${currentDocumentLabel.value} 文件始终使用编辑器模式`;
+    return;
+  }
+
   const willShowEditor = !isEditorVisible.value;
   persistSession({
     editorVisible: willShowEditor,
@@ -2689,6 +3091,11 @@ function toggleEditor(): void {
 }
 
 function togglePreview(): void {
+  if (!hasPreviewPane.value) {
+    status.value = `${currentDocumentLabel.value} 文件没有预览视图`;
+    return;
+  }
+
   const willShowPreview = session.value.previewHidden;
   persistSession({
     previewHidden: !session.value.previewHidden,
@@ -2765,6 +3172,14 @@ function executeAppMenuCommand(command: AppMenuCommand): void {
   }
   if (command === 'save-all') {
     void saveAllUnsavedTabs();
+    return;
+  }
+  if (command === 'format-json') {
+    transformJsonSource(false);
+    return;
+  }
+  if (command === 'compact-json') {
+    transformJsonSource(true);
     return;
   }
   if (command === 'export-html') {
@@ -2959,7 +3374,7 @@ function onKeyDown(event: KeyboardEvent): void {
   if (key === 'b' && !event.altKey) {
     event.preventDefault();
     if (event.shiftKey) {
-      addBookmarkAtCursor();
+      toggleBookmarkAtCursor();
     } else {
       openBookmarkManager();
     }
@@ -3299,6 +3714,12 @@ async function downloadActiveImage(): Promise<void> {
   await downloadImage(image.src, image.filename);
 }
 
+async function openPreviewLink(link: HTMLAnchorElement): Promise<void> {
+  const href = link.getAttribute('href') ?? '';
+  const opened = await bridge?.openExternalLink(href, currentFile.value?.path ?? null);
+  status.value = opened ? '已在系统浏览器中打开链接' : '无法打开此链接';
+}
+
 function openMermaidFullscreen(container: HTMLElement): void {
   const prepared = preparedMermaidSvg(container);
   if (!prepared) {
@@ -3539,6 +3960,19 @@ function onPreviewClick(event: MouseEvent): void {
     }
   }
 
+  const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+  if (link && preview.value?.contains(link)) {
+    const href = link.getAttribute('href')?.trim() ?? '';
+    if (!href || href.startsWith('#')) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    void openPreviewLink(link);
+    return;
+  }
+
   const actionButton = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-mermaid-action]');
   if (!actionButton) {
     return;
@@ -3609,11 +4043,26 @@ function onPreviewPointerMove(event: PointerEvent): void {
 }
 
 watch(source, () => {
+  previewSearchRange.value = null;
+  clearPreviewSearchHighlight();
   if (activeTab.value) {
     activeTab.value.source = source.value;
   }
   scheduleSave();
-  void renderMermaid();
+  if (isHtmlDocument.value) {
+    scheduleHtmlPreviewReload();
+  } else {
+    void renderMermaid();
+  }
+});
+
+watch(() => [currentDocumentKind.value, currentFile.value?.path ?? null] as const, () => {
+  if (!hasPreviewPane.value) {
+    isPreviewFullscreen.value = false;
+    htmlPreviewSrc.value = '';
+    return;
+  }
+  scheduleHtmlPreviewReload();
 });
 
 watch(() => session.value.theme, () => {
@@ -3649,6 +4098,7 @@ async function restoreSessionTabs(): Promise<boolean> {
           path: null,
           name: tab.name,
           content,
+          encoding: normalizeTextEncoding(tab.encoding),
         },
         source: content,
         lastSavedContent: tab.lastSavedContent ?? '',
@@ -3656,7 +4106,7 @@ async function restoreSessionTabs(): Promise<boolean> {
       } satisfies OpenTab;
     }
     try {
-      const file = await bridge.readMarkdownFile(tab.filePath);
+      const file = await readMarkdownFileWithEncoding(tab.filePath, tab.encoding);
       return {
         id: file.path ? tabIdForPath(file.path) : tab.id,
         file,
@@ -3682,7 +4132,7 @@ async function restoreSessionTabs(): Promise<boolean> {
   currentFile.value = active.file;
   source.value = active.source;
   lastSavedContent.value = active.lastSavedContent;
-  status.value = active.file.path ?? '未保存的新 Markdown 文件';
+  status.value = active.file.path ?? '未保存的新文档';
   session.value = mergeSession(session.value, {
     filePath: active.file.path,
     tabs: restoredTabs.map((tab) => ({
@@ -3692,9 +4142,11 @@ async function restoreSessionTabs(): Promise<boolean> {
       scrollTop: tab.scrollTop,
       content: tab.file.path ? undefined : tab.source,
       lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
+      encoding: normalizeTextEncoding(tab.file.encoding),
     })),
     activeTabId: active.id,
     scrollTop: active.scrollTop,
+    ...forcedEditorPatchForFile(active.file),
   });
   void refreshImageAssets(active.file.path ?? undefined);
   void nextTick(() => {
@@ -3746,6 +4198,10 @@ onBeforeUnmount(() => {
   if (sessionSaveTimer !== undefined) {
     saveSessionNow();
   }
+  if (htmlPreviewTimer !== undefined) {
+    window.clearTimeout(htmlPreviewTimer);
+    htmlPreviewTimer = undefined;
+  }
   removeExternalOpenListener?.();
   removeMarkdownFileChangedListener?.();
   removeToggleEditorShortcutListener?.();
@@ -3765,9 +4221,10 @@ onBeforeUnmount(() => {
       'app-shell',
       `theme-${session.theme}`,
       {
-        'preview-fullscreen': isPreviewFullscreen,
+        'preview-fullscreen': isPreviewFullscreen && hasPreviewPane,
         'preview-hidden': session.previewHidden,
         'reader-mode': !isEditorVisible,
+        'no-preview-pane': !hasPreviewPane,
         'toc-collapsed': isTocPanelCollapsed,
       },
     ]"
@@ -3942,6 +4399,7 @@ onBeforeUnmount(() => {
           <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.fileText" /></svg>
         </button>
         <button
+          v-if="hasPreviewPane"
           data-testid="toggle-preview"
           class="icon-button"
           type="button"
@@ -3960,49 +4418,6 @@ onBeforeUnmount(() => {
           @click="toggleEditor"
         >
           <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="isEditorVisible ? icons.bookOpen : icons.edit" /></svg>
-        </button>
-        <button
-          data-testid="fullscreen-preview"
-          class="icon-button"
-          type="button"
-          :aria-label="isPreviewFullscreen ? '退出预览' : '全屏预览'"
-          :title="isPreviewFullscreen ? '退出预览' : '全屏预览'"
-          @click="isPreviewFullscreen = !isPreviewFullscreen"
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.expand" /></svg>
-        </button>
-        <button
-          data-testid="preview-zoom-out"
-          class="icon-button"
-          type="button"
-          :disabled="previewZoom <= previewZoomMin"
-          aria-label="缩小预览"
-          :title="`缩小预览 (${shortcutModifier}+-)，当前 ${previewZoomPercent}%`"
-          @click="zoomPreview(-previewZoomStep)"
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.minus" /></svg>
-        </button>
-        <button
-          v-if="isPreviewZoomResettable"
-          data-testid="preview-zoom-reset"
-          class="icon-button"
-          type="button"
-          aria-label="还原预览缩放"
-          :title="`还原预览缩放 (${shortcutModifier}+0)，当前 ${previewZoomPercent}%`"
-          @click="resetPreviewZoom"
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
-        </button>
-        <button
-          data-testid="preview-zoom-in"
-          class="icon-button"
-          type="button"
-          :disabled="previewZoom >= previewZoomMax"
-          aria-label="放大预览"
-          :title="`放大预览 (${shortcutModifier}++)，当前 ${previewZoomPercent}%`"
-          @click="zoomPreview(previewZoomStep)"
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.plus" /></svg>
         </button>
         <div class="help-menu" :class="{ 'is-open': helpPopoverPinned }">
           <button
@@ -4045,7 +4460,7 @@ onBeforeUnmount(() => {
         role="button"
         tabindex="0"
         :class="{ active: tab.id === activeTabId, dirty: tab.source !== tab.lastSavedContent }"
-        :title="tab.file.path ?? '未保存的新 Markdown 文件'"
+        :title="tab.file.path ?? '未保存的新文档'"
         :data-testid="`tab-${tab.file.name}`"
         draggable="true"
         @click="activateTab(tab.id)"
@@ -4093,7 +4508,7 @@ onBeforeUnmount(() => {
         另存为
       </button>
       <button type="button" role="menuitem" data-testid="tab-reveal-in-folder" @click="revealTabInFolder(tabContextMenu.tabId)">
-        在 Finder 中显示
+        在文件夹中显示
       </button>
     </div>
 
@@ -4140,27 +4555,33 @@ onBeforeUnmount(() => {
         @pointerdown="startResize('toc', $event)"
       />
 
-      <section class="editor-panel" :class="{ 'search-visible': editorSearchVisible }">
-        <div class="format-toolbar" aria-label="Markdown 快捷工具栏">
+      <section class="editor-panel" :class="{ 'search-visible': editorSearchVisible && !isPreviewSearchMode }">
+        <div class="format-toolbar" :aria-label="`${currentDocumentLabel} 快捷工具栏`">
           <div class="format-actions">
-            <button data-testid="insert-table" class="icon-button" type="button" aria-label="插入表格" title="插入表格" @click="insertTable">
+            <button v-if="isMarkdownDocument" data-testid="insert-table" class="icon-button" type="button" aria-label="插入表格" title="插入表格" @click="insertTable">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.columns" /></svg>
             </button>
-            <button data-testid="insert-link" class="icon-button" type="button" aria-label="插入链接" title="插入链接" @click="insertLink">
+            <button v-if="isMarkdownDocument" data-testid="insert-link" class="icon-button" type="button" aria-label="插入链接" title="插入链接" @click="insertLink">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.link" /></svg>
             </button>
-            <button data-testid="insert-code" class="icon-button" type="button" aria-label="插入代码块" title="插入代码块" @click="insertCodeBlock">
+            <button v-if="isMarkdownDocument" data-testid="insert-code" class="icon-button" type="button" aria-label="插入代码块" title="插入代码块" @click="insertCodeBlock">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.code" /></svg>
+            </button>
+            <button v-if="isJsonDocument" data-testid="format-json" class="icon-button" type="button" aria-label="格式化 JSON" title="格式化 JSON（2 空格缩进）" @click="transformJsonSource(false)">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.code" /></svg>
+            </button>
+            <button v-if="isJsonDocument" data-testid="compact-json" class="icon-button" type="button" aria-label="JSON 转单行" title="JSON 转换为单行" @click="transformJsonSource(true)">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.columns" /></svg>
             </button>
             <button
               data-testid="add-bookmark"
               class="icon-button"
               type="button"
-              :aria-label="currentLineHasBookmark ? '当前行已有书签，添加当前位置到书签' : '添加书签'"
+              :aria-label="currentLineHasBookmark ? '取消当前行书签' : '添加书签'"
               :class="{ active: currentLineHasBookmark }"
               :disabled="!activeTab"
               :title="addBookmarkShortcutHint"
-              @click="addBookmarkAtCursor"
+              @click="toggleBookmarkAtCursor"
             >
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.bookmark" /></svg>
             </button>
@@ -4216,6 +4637,30 @@ onBeforeUnmount(() => {
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.cloudUpload" /></svg>
             </button>
           </div>
+          <div class="encoding-tools" role="group" aria-label="文档编码">
+            <select
+              :value="currentEncoding"
+              data-testid="encoding-select"
+              :disabled="!activeTab"
+              :title="`当前编码 ${currentEncodingLabel}；保存时使用该编码`"
+              @change="onEncodingChange"
+            >
+              <option v-for="option in textEncodingOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <button
+              data-testid="reopen-with-encoding"
+              class="icon-button"
+              type="button"
+              :disabled="!currentFilePath() || hasUnsavedChanges"
+              aria-label="用当前编码重新打开"
+              :title="`用 ${currentEncodingLabel} 重新打开当前文件`"
+              @click="reopenCurrentFileWithEncoding"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
+            </button>
+          </div>
           <div class="asset-tools">
             <select
               v-model="selectedAssetPath"
@@ -4239,10 +4684,17 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
-        <div v-if="editorSearchVisible" class="editor-tools">
-          <input ref="editorSearchInput" v-model="editorSearch" data-testid="editor-search" type="search" placeholder="搜索源码" />
+        <div v-if="editorSearchVisible && !isPreviewSearchMode" class="editor-tools">
+          <input
+            ref="editorSearchInput"
+            v-model="editorSearch"
+            data-testid="editor-search"
+            type="search"
+            placeholder="搜索源码"
+            @keydown="onEditorSearchKeyDown"
+          />
           <input v-model="editorReplace" data-testid="editor-replace" type="text" placeholder="替换为" />
-          <button class="icon-button" type="button" aria-label="查找" title="查找" @click="findNext">
+          <button class="icon-button" type="button" aria-label="查找" title="查找" @click="findNext()">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.search" /></svg>
           </button>
           <button class="icon-button" type="button" aria-label="替换" title="替换" @click="replaceCurrent">
@@ -4258,6 +4710,7 @@ onBeforeUnmount(() => {
             v-model="source"
             :bookmark-line-numbers="currentFileBookmarkLines"
             :config-text="session.editorPreferences.configText"
+            :language="currentEditorLanguage"
             :theme="session.theme"
             :vim-enabled="session.editorPreferences.vimEnabled"
             @focus-line-change="onEditorFocusLineChange"
@@ -4276,18 +4729,88 @@ onBeforeUnmount(() => {
         @pointerdown="startResize('editor', $event)"
       />
 
-      <article
-        ref="preview"
-        class="preview"
-        data-testid="preview"
-        :style="previewZoomStyle"
-        @scroll="onPreviewScroll"
-        @wheel="onPreviewWheel"
-        @click="onPreviewClick"
-        @pointerdown="onPreviewPointerDown"
-        @pointermove="onPreviewPointerMove"
-        v-html="previewHtml"
-      />
+      <section v-if="hasPreviewPane" class="preview-panel" data-testid="preview-panel" :aria-label="`${currentDocumentLabel} 预览`">
+        <div class="preview-controls" role="group" aria-label="预览控制">
+          <div v-if="isPreviewSearchMode" class="preview-search-tools">
+            <input
+              ref="editorSearchInput"
+              v-model="editorSearch"
+              data-testid="editor-search"
+              type="search"
+              placeholder="搜索预览"
+              @keydown="onEditorSearchKeyDown"
+            />
+            <button class="icon-button" type="button" aria-label="查找" title="查找" @click="findNext()">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.search" /></svg>
+            </button>
+          </div>
+          <button
+            data-testid="fullscreen-preview"
+            class="icon-button"
+            type="button"
+            :aria-label="isPreviewFullscreen ? '退出预览' : '全屏预览'"
+            :title="isPreviewFullscreen ? '退出预览' : '全屏预览'"
+            @click="isPreviewFullscreen = !isPreviewFullscreen"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.expand" /></svg>
+          </button>
+          <button
+            data-testid="preview-zoom-out"
+            class="icon-button"
+            type="button"
+            :disabled="previewZoom <= previewZoomMin"
+            aria-label="缩小预览"
+            :title="`缩小预览 (${shortcutModifier}+-)，当前 ${previewZoomPercent}%`"
+            @click="zoomPreview(-previewZoomStep)"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.minus" /></svg>
+          </button>
+          <button
+            v-if="isPreviewZoomResettable"
+            data-testid="preview-zoom-reset"
+            class="icon-button"
+            type="button"
+            aria-label="还原预览缩放"
+            :title="`还原预览缩放 (${shortcutModifier}+0)，当前 ${previewZoomPercent}%`"
+            @click="resetPreviewZoom"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
+          </button>
+          <button
+            data-testid="preview-zoom-in"
+            class="icon-button"
+            type="button"
+            :disabled="previewZoom >= previewZoomMax"
+            aria-label="放大预览"
+            :title="`放大预览 (${shortcutModifier}++)，当前 ${previewZoomPercent}%`"
+            @click="zoomPreview(previewZoomStep)"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.plus" /></svg>
+          </button>
+        </div>
+        <iframe
+          v-if="isHtmlDocument"
+          class="preview html-preview-frame"
+          data-testid="html-preview-frame"
+          :src="htmlPreviewSrc"
+          title="HTML 预览"
+          scrolling="auto"
+          sandbox="allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+        />
+        <article
+          v-else
+          ref="preview"
+          class="preview"
+          data-testid="preview"
+          :style="previewZoomStyle"
+          @scroll="onPreviewScroll"
+          @wheel="onPreviewWheel"
+          @click="onPreviewClick"
+          @pointerdown="onPreviewPointerDown"
+          @pointermove="onPreviewPointerMove"
+          v-html="previewHtml"
+        />
+      </section>
     </section>
 
     <div

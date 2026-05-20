@@ -2,8 +2,16 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell, type MenuIt
 import { execFileSync } from 'node:child_process';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  decodeTextBuffer,
+  defaultTextEncoding,
+  encodeTextBuffer,
+  normalizeTextEncoding,
+  type TextEncoding,
+} from './text-encoding';
 
 interface MarkdownSession {
   filePath: string | null;
@@ -14,6 +22,7 @@ interface MarkdownSession {
     scrollTop: number;
     content?: string;
     lastSavedContent?: string;
+    encoding?: TextEncoding;
   }[];
   activeTabId: string | null;
   bookmarks: MarkdownBookmark[];
@@ -43,6 +52,7 @@ interface MarkdownFile {
   path: string;
   name: string;
   content: string;
+  encoding: TextEncoding;
 }
 
 interface MarkdownOpenRequest {
@@ -55,6 +65,17 @@ interface ExportDocumentPayload {
   title: string;
   bodyHtml: string;
   theme: MarkdownSession['theme'];
+}
+
+interface HtmlPreviewPayload {
+  filePath: string | null;
+  content: string;
+}
+
+interface HtmlPreviewEntry {
+  baseDir: string | null;
+  content: string;
+  createdAt: number;
 }
 
 interface ImageAsset {
@@ -92,6 +113,8 @@ type AppMenuCommand =
   | 'save-file'
   | 'save-as'
   | 'save-all'
+  | 'format-json'
+  | 'compact-json'
   | 'export-html'
   | 'export-pdf'
   | 'close-tab'
@@ -137,6 +160,7 @@ if (process.env.MARKDOWN_EDITOR_USER_DATA_DIR) {
   app.setPath('userData', process.env.MARKDOWN_EDITOR_USER_DATA_DIR);
 }
 const imageAssetExtensions = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
+const supportedDocumentExtensions = ['md', 'markdown', 'mdown', 'html', 'htm', 'txt', 'text', 'json'];
 const imageMimeTypes = new Map([
   ['.avif', 'image/avif'],
   ['.gif', 'image/gif'],
@@ -147,6 +171,23 @@ const imageMimeTypes = new Map([
   ['.webp', 'image/webp'],
 ]);
 const cloudUploadBaseUrl = 'https://test.sheepwall.com/fe-dash/api/oss/aliyun/resource';
+const externalUrlProtocols = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+const htmlPreviewMimeTypes = new Map([
+  ['.css', 'text/css; charset=utf-8'],
+  ['.gif', 'image/gif'],
+  ['.htm', 'text/html; charset=utf-8'],
+  ['.html', 'text/html; charset=utf-8'],
+  ['.ico', 'image/x-icon'],
+  ['.jpeg', 'image/jpeg'],
+  ['.jpg', 'image/jpeg'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.mjs', 'text/javascript; charset=utf-8'],
+  ['.png', 'image/png'],
+  ['.svg', 'image/svg+xml; charset=utf-8'],
+  ['.txt', 'text/plain; charset=utf-8'],
+  ['.webp', 'image/webp'],
+]);
 let mainWindow: BrowserWindow | null = null;
 let pendingExternalMarkdownPath: string | null = null;
 let rendererReadyForExternalOpen = false;
@@ -155,6 +196,13 @@ let closeConfirmed = false;
 let lastRecentFilesMainDiagnosticSignature = '';
 const watchedMarkdownFiles = new Map<string, fsSync.FSWatcher>();
 const markdownChangeTimers = new Map<string, NodeJS.Timeout>();
+const markdownFileEncodings = new Map<string, TextEncoding>();
+let htmlPreviewServer: http.Server | null = null;
+let htmlPreviewServerPort: number | null = null;
+let htmlPreviewCounter = 0;
+const htmlPreviewEntries = new Map<string, HtmlPreviewEntry>();
+const htmlPreviewMaxEntries = 40;
+const htmlPreviewIdSearchParam = 'markdown-preview-id';
 
 function mainLog(event: string, payload: Record<string, unknown> = {}): void {
   const record = {
@@ -198,12 +246,15 @@ function buildApplicationMenu(): void {
       label: '文件',
       submenu: [
         commandMenuItem('新建 Markdown', 'new-file', 'CmdOrCtrl+T'),
-        commandMenuItem('打开 Markdown...', 'open-file', 'CmdOrCtrl+O'),
+        commandMenuItem('打开文档...', 'open-file', 'CmdOrCtrl+O'),
         commandMenuItem('从磁盘刷新', 'refresh-file', 'CmdOrCtrl+R'),
         { type: 'separator' },
         commandMenuItem('保存', 'save-file', 'CmdOrCtrl+S'),
         commandMenuItem('另存为...', 'save-as', 'CmdOrCtrl+Shift+S'),
         commandMenuItem('全部保存', 'save-all', 'CmdOrCtrl+Alt+S'),
+        { type: 'separator' },
+        commandMenuItem('格式化 JSON', 'format-json'),
+        commandMenuItem('JSON 压成一行', 'compact-json'),
         { type: 'separator' },
         commandMenuItem('导出 HTML...', 'export-html', 'CmdOrCtrl+Shift+H'),
         commandMenuItem('导出 PDF...', 'export-pdf', 'CmdOrCtrl+Shift+P'),
@@ -234,7 +285,7 @@ function buildApplicationMenu(): void {
       submenu: [
         commandMenuItem('复制当前标签页', 'duplicate-tab', 'CmdOrCtrl+Shift+D'),
         commandMenuItem('复制文件路径', 'copy-tab-path', 'CmdOrCtrl+Shift+C'),
-        commandMenuItem('复制 Markdown 内容', 'copy-tab-content'),
+        commandMenuItem('复制文档内容', 'copy-tab-content'),
       ],
     },
     {
@@ -527,6 +578,7 @@ function normalizeSessionTabs(tabs: unknown): MarkdownSession['tabs'] {
       scrollTop: typeof candidate.scrollTop === 'number' ? Math.max(0, candidate.scrollTop) : 0,
       content: typeof candidate.content === 'string' ? candidate.content : undefined,
       lastSavedContent: typeof candidate.lastSavedContent === 'string' ? candidate.lastSavedContent : undefined,
+      encoding: normalizeTextEncoding(candidate.encoding),
     }];
   });
 }
@@ -589,14 +641,14 @@ function saveSessionSync(session: MarkdownSession): void {
   }, null, 2), 'utf8');
 }
 
-function isMarkdownFilePath(filePath: string): boolean {
-  return ['.md', '.markdown', '.mdown'].includes(path.extname(filePath).toLowerCase());
+function isSupportedDocumentPath(filePath: string): boolean {
+  return supportedDocumentExtensions.includes(path.extname(filePath).slice(1).toLowerCase());
 }
 
 function markdownPathFromLaunchValue(value: string): string | null {
   try {
     const filePath = value.startsWith('file://') ? fileURLToPath(value) : value;
-    return isMarkdownFilePath(filePath) ? path.resolve(filePath) : null;
+    return isSupportedDocumentPath(filePath) ? path.resolve(filePath) : null;
   } catch {
     return null;
   }
@@ -608,6 +660,231 @@ function markdownBaseName(markdownPath: string): string {
 
 function markdownAssetDir(markdownPath: string): string {
   return path.join(path.dirname(markdownPath), 'assets', 'images');
+}
+
+function htmlPreviewMimeType(filePath: string): string {
+  return htmlPreviewMimeTypes.get(path.extname(filePath).toLowerCase()) ?? 'application/octet-stream';
+}
+
+function pruneHtmlPreviewEntries(): void {
+  while (htmlPreviewEntries.size > htmlPreviewMaxEntries) {
+    const oldest = Array.from(htmlPreviewEntries.entries())
+      .sort((first, second) => first[1].createdAt - second[1].createdAt)[0];
+    if (!oldest) {
+      return;
+    }
+    htmlPreviewEntries.delete(oldest[0]);
+  }
+}
+
+function htmlPreviewEntryFromRequest(requestUrl: URL, referer?: string): HtmlPreviewEntry | null {
+  const directId = requestUrl.searchParams.get(htmlPreviewIdSearchParam);
+  const queryEntry = directId ? htmlPreviewEntries.get(directId) : null;
+  if (queryEntry) {
+    return queryEntry;
+  }
+
+  const match = requestUrl.pathname.match(/^\/preview\/([^/]+)(?:\/.*)?$/);
+  const directEntry = match ? htmlPreviewEntries.get(match[1]) : null;
+  if (directEntry) {
+    return directEntry;
+  }
+
+  if (!referer) {
+    return null;
+  }
+
+  try {
+    const refererUrl = new URL(referer);
+    const refererId = refererUrl.searchParams.get(htmlPreviewIdSearchParam);
+    const refererQueryEntry = refererId ? htmlPreviewEntries.get(refererId) : null;
+    if (refererQueryEntry) {
+      return refererQueryEntry;
+    }
+
+    const refererMatch = refererUrl.pathname.match(/^\/preview\/([^/]+)(?:\/.*)?$/);
+    return refererMatch ? htmlPreviewEntries.get(refererMatch[1]) ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+function htmlPreviewRelativePath(requestUrl: URL): string | null | undefined {
+  if (requestUrl.searchParams.has(htmlPreviewIdSearchParam) && requestUrl.pathname === '/') {
+    return null;
+  }
+
+  const previewMatch = requestUrl.pathname.match(/^\/preview\/[^/]+\/?(.*)$/);
+  const rawPath = previewMatch ? previewMatch[1] : requestUrl.pathname.replace(/^\/+/, '');
+  let decodedPath = '';
+  try {
+    decodedPath = decodeURIComponent(rawPath);
+  } catch {
+    return undefined;
+  }
+  if (!decodedPath || decodedPath === 'index.html') {
+    return null;
+  }
+  return decodedPath;
+}
+
+function htmlPreviewStaticPath(entry: HtmlPreviewEntry, relativePath: string): string | null {
+  if (!entry.baseDir) {
+    return null;
+  }
+
+  const resolved = path.resolve(entry.baseDir, relativePath);
+  const baseDir = path.resolve(entry.baseDir);
+  if (resolved !== baseDir && !resolved.startsWith(`${baseDir}${path.sep}`)) {
+    return null;
+  }
+  return resolved;
+}
+
+function sendHtmlPreviewResponse(response: http.ServerResponse, statusCode: number, body: string | Buffer, contentType: string): void {
+  response.writeHead(statusCode, {
+    'Cache-Control': 'no-store',
+    'Content-Type': contentType,
+  });
+  response.end(body);
+}
+
+function injectHtmlPreviewScrollStyles(content: string): string {
+  const style = [
+    '<style data-markdown-preview-scroll>',
+    'html,body{min-height:100%;overflow:auto!important;scrollbar-gutter:stable;}',
+    'html::-webkit-scrollbar,body::-webkit-scrollbar{display:block!important;width:12px!important;height:12px!important;}',
+    'html::-webkit-scrollbar-thumb,body::-webkit-scrollbar-thumb{background:rgba(100,116,139,.55)!important;border:3px solid transparent!important;border-radius:999px!important;background-clip:content-box!important;}',
+    'html::-webkit-scrollbar-track,body::-webkit-scrollbar-track{background:transparent!important;}',
+    '</style>',
+  ].join('');
+  if (/<\/head>/i.test(content)) {
+    return content.replace(/<\/head>/i, `${style}</head>`);
+  }
+  return `${style}${content}`;
+}
+
+function handleHtmlPreviewRequest(request: http.IncomingMessage, response: http.ServerResponse): void {
+  if (!request.url) {
+    sendHtmlPreviewResponse(response, 400, 'Bad Request', 'text/plain; charset=utf-8');
+    return;
+  }
+
+  const requestUrl = new URL(request.url, `http://${request.headers.host ?? '127.0.0.1'}`);
+  const entry = htmlPreviewEntryFromRequest(requestUrl, request.headers.referer);
+  if (!entry) {
+    sendHtmlPreviewResponse(response, 404, 'Preview not found', 'text/plain; charset=utf-8');
+    return;
+  }
+
+  const relativePath = htmlPreviewRelativePath(requestUrl);
+  if (relativePath === undefined) {
+    sendHtmlPreviewResponse(response, 400, 'Bad Request', 'text/plain; charset=utf-8');
+    return;
+  }
+
+  if (!relativePath) {
+    sendHtmlPreviewResponse(response, 200, injectHtmlPreviewScrollStyles(entry.content), 'text/html; charset=utf-8');
+    return;
+  }
+
+  const staticPath = htmlPreviewStaticPath(entry, relativePath);
+  if (!staticPath) {
+    sendHtmlPreviewResponse(response, 403, 'Forbidden', 'text/plain; charset=utf-8');
+    return;
+  }
+
+  fsSync.readFile(staticPath, (error, data) => {
+    if (error) {
+      sendHtmlPreviewResponse(response, 404, 'Not found', 'text/plain; charset=utf-8');
+      return;
+    }
+    sendHtmlPreviewResponse(response, 200, data, htmlPreviewMimeType(staticPath));
+  });
+}
+
+async function ensureHtmlPreviewServer(): Promise<number> {
+  if (htmlPreviewServerPort !== null) {
+    return htmlPreviewServerPort;
+  }
+
+  htmlPreviewServer = http.createServer(handleHtmlPreviewRequest);
+  await new Promise<void>((resolve, reject) => {
+    htmlPreviewServer?.once('error', reject);
+    htmlPreviewServer?.listen(0, '127.0.0.1', () => resolve());
+  });
+  const address = htmlPreviewServer.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Unable to start HTML preview server.');
+  }
+  htmlPreviewServerPort = address.port;
+  return htmlPreviewServerPort;
+}
+
+async function htmlPreviewUrl(payload: HtmlPreviewPayload): Promise<string> {
+  const port = await ensureHtmlPreviewServer();
+  const id = `${Date.now()}-${htmlPreviewCounter++}`;
+  htmlPreviewEntries.set(id, {
+    baseDir: payload.filePath ? path.dirname(path.resolve(payload.filePath)) : null,
+    content: payload.content,
+    createdAt: Date.now(),
+  });
+  pruneHtmlPreviewEntries();
+  return `http://127.0.0.1:${port}/?${htmlPreviewIdSearchParam}=${encodeURIComponent(id)}`;
+}
+
+function isAppNavigationUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (isDev) {
+      return parsed.origin === new URL(devServerUrl).origin;
+    }
+    return parsed.protocol === 'file:' && fileURLToPath(parsed) === path.join(__dirname, '../dist/index.html');
+  } catch {
+    return false;
+  }
+}
+
+function resolveExternalLinkUrl(linkUrl: string, baseMarkdownPath?: string | null): URL | null {
+  const trimmed = linkUrl.trim();
+  if (!trimmed || trimmed.startsWith('#')) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    return externalUrlProtocols.has(parsed.protocol) || parsed.protocol === 'file:' ? parsed : null;
+  } catch {
+    if (!baseMarkdownPath) {
+      return null;
+    }
+  }
+
+  try {
+    const baseDirUrl = pathToFileURL(`${path.dirname(baseMarkdownPath)}${path.sep}`);
+    return new URL(trimmed, baseDirUrl);
+  } catch {
+    return null;
+  }
+}
+
+async function openLinkOutsideApp(linkUrl: string, baseMarkdownPath?: string | null): Promise<boolean> {
+  const parsed = resolveExternalLinkUrl(linkUrl, baseMarkdownPath);
+  if (!parsed) {
+    return false;
+  }
+
+  if (externalUrlProtocols.has(parsed.protocol)) {
+    await shell.openExternal(parsed.toString());
+    return true;
+  }
+
+  if (parsed.protocol === 'file:') {
+    await shell.openPath(fileURLToPath(parsed));
+    return true;
+  }
+
+  return false;
 }
 
 function relativeMarkdownPath(markdownPath: string, filePath: string): string {
@@ -684,19 +961,21 @@ function assetPathFromRelative(markdownPath: string, relativePath: string): stri
   return resolved;
 }
 
-async function readMarkdownFile(filePath: string): Promise<MarkdownFile> {
+async function readMarkdownFile(filePath: string, encoding?: unknown): Promise<MarkdownFile> {
   const resolvedPath = path.resolve(filePath);
-  if (!isMarkdownFilePath(resolvedPath)) {
-    throw new Error('Only Markdown files can be opened.');
+  if (!isSupportedDocumentPath(resolvedPath)) {
+    throw new Error('Only Markdown, HTML, text, and JSON files can be opened.');
   }
 
   const canonicalPath = await fs.realpath(resolvedPath).catch(() => resolvedPath);
-  const content = await fs.readFile(canonicalPath, 'utf8');
+  const decoded = decodeTextBuffer(await fs.readFile(canonicalPath), encoding);
   const file = {
     path: canonicalPath,
     name: path.basename(canonicalPath),
-    content,
+    content: decoded.content,
+    encoding: decoded.encoding,
   };
+  markdownFileEncodings.set(canonicalPath, decoded.encoding);
   watchMarkdownFile(canonicalPath);
   return file;
 }
@@ -706,12 +985,14 @@ function sendMarkdownFileChanged(filePath: string): void {
     return;
   }
 
-  void fs.readFile(filePath, 'utf8')
-    .then((content) => {
+  void fs.readFile(filePath)
+    .then((data) => {
+      const decoded = decodeTextBuffer(data, markdownFileEncodings.get(filePath) ?? defaultTextEncoding);
       mainWindow?.webContents.send('markdown:file-changed', {
         path: filePath,
         name: path.basename(filePath),
-        content,
+        content: decoded.content,
+        encoding: decoded.encoding,
       } satisfies MarkdownFile);
     })
     .catch(() => {
@@ -740,6 +1021,7 @@ function closeMarkdownWatcher(filePath: string): void {
 
   watchedMarkdownFiles.get(filePath)?.close();
   watchedMarkdownFiles.delete(filePath);
+  markdownFileEncodings.delete(filePath);
 }
 
 function watchMarkdownFile(filePath: string): void {
@@ -807,7 +1089,7 @@ async function dispatchExternalMarkdownPath(filePath: string): Promise<void> {
     }
     mainWindow.focus();
   } catch {
-    dialog.showErrorBox(appTitle, `无法打开 Markdown 文件：${filePath}`);
+    dialog.showErrorBox(appTitle, `无法打开文档：${filePath}`);
   }
 }
 
@@ -856,18 +1138,25 @@ async function exportHtmlFile(payload: ExportDocumentPayload): Promise<string | 
   return result.filePath;
 }
 
-async function saveMarkdownFileAs(content: string, defaultName: string): Promise<MarkdownFile | null> {
+async function saveMarkdownFileAs(content: string, defaultName: string, encoding?: unknown): Promise<MarkdownFile | null> {
   const result = await dialog.showSaveDialog({
     defaultPath: defaultName || '未命名.md',
-    filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] }],
+    filters: [
+      { name: 'Supported Documents', extensions: supportedDocumentExtensions },
+      { name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] },
+      { name: 'HTML', extensions: ['html', 'htm'] },
+      { name: 'Text', extensions: ['txt', 'text'] },
+      { name: 'JSON', extensions: ['json'] },
+    ],
   });
 
   if (result.canceled || !result.filePath) {
     return null;
   }
 
-  await fs.writeFile(result.filePath, content, 'utf8');
-  return readMarkdownFile(result.filePath);
+  const normalizedEncoding = normalizeTextEncoding(encoding);
+  await fs.writeFile(result.filePath, encodeTextBuffer(content, normalizedEncoding));
+  return readMarkdownFile(result.filePath, normalizedEncoding);
 }
 
 async function exportPdfFile(payload: ExportDocumentPayload): Promise<string | null> {
@@ -1154,6 +1443,7 @@ async function createWindow(): Promise<void> {
     height: 860,
     minWidth: 900,
     minHeight: 600,
+    show: false,
     title: appTitle,
     webPreferences: {
       contextIsolation: true,
@@ -1163,6 +1453,13 @@ async function createWindow(): Promise<void> {
   });
   mainWindow = window;
   rendererReadyForExternalOpen = false;
+  window.once('ready-to-show', () => {
+    if (window.isDestroyed()) {
+      return;
+    }
+    window.maximize();
+    window.show();
+  });
   window.on('closed', () => {
     mainLog('window.closed');
     if (mainWindow === window) {
@@ -1208,6 +1505,18 @@ async function createWindow(): Promise<void> {
       window.webContents.send('markdown:toggle-editor-shortcut');
     }
   });
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    void openLinkOutsideApp(url);
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, url) => {
+    if (isAppNavigationUrl(url)) {
+      return;
+    }
+
+    event.preventDefault();
+    void openLinkOutsideApp(url);
+  });
   if (isDev) {
     await window.loadURL(devServerUrl);
   } else {
@@ -1218,7 +1527,13 @@ async function createWindow(): Promise<void> {
 ipcMain.handle('markdown:open', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openFile'],
-    filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] }],
+    filters: [
+      { name: 'Supported Documents', extensions: supportedDocumentExtensions },
+      { name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] },
+      { name: 'HTML', extensions: ['html', 'htm'] },
+      { name: 'Text', extensions: ['txt', 'text'] },
+      { name: 'JSON', extensions: ['json'] },
+    ],
   });
 
   if (result.canceled || !result.filePaths[0]) {
@@ -1264,21 +1579,30 @@ ipcMain.handle('markdown:read-last', async () => {
   }
 });
 
-ipcMain.handle('markdown:read-path', async (_event, filePath: string) => {
-  return readMarkdownFile(filePath);
+ipcMain.handle('markdown:read-path', async (_event, filePath: string, encoding?: string) => {
+  return readMarkdownFile(filePath, encoding);
 });
 
-ipcMain.handle('markdown:save', async (_event, filePath: string, content: string) => {
-  await fs.writeFile(filePath, content, 'utf8');
-  return readMarkdownFile(filePath);
+ipcMain.handle('markdown:save', async (_event, filePath: string, content: string, encoding?: string) => {
+  const normalizedEncoding = normalizeTextEncoding(encoding);
+  await fs.writeFile(filePath, encodeTextBuffer(content, normalizedEncoding));
+  return readMarkdownFile(filePath, normalizedEncoding);
 });
 
-ipcMain.handle('markdown:save-as', async (_event, content: string, defaultName: string) => {
-  return saveMarkdownFileAs(content, defaultName);
+ipcMain.handle('markdown:save-as', async (_event, content: string, defaultName: string, encoding?: string) => {
+  return saveMarkdownFileAs(content, defaultName, encoding);
 });
 
 ipcMain.handle('markdown:reveal-in-folder', async (_event, filePath: string) => {
   shell.showItemInFolder(path.resolve(filePath));
+});
+
+ipcMain.handle('app:open-external-link', async (_event, linkUrl: string, baseMarkdownPath?: string | null) => {
+  return openLinkOutsideApp(linkUrl, baseMarkdownPath);
+});
+
+ipcMain.handle('html-preview:url', async (_event, payload: HtmlPreviewPayload) => {
+  return htmlPreviewUrl(payload);
 });
 
 ipcMain.handle('markdown:export-html', async (_event, payload: ExportDocumentPayload) => {
@@ -1409,6 +1733,10 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   Array.from(watchedMarkdownFiles.keys()).forEach(closeMarkdownWatcher);
+  htmlPreviewServer?.close();
+  htmlPreviewServer = null;
+  htmlPreviewServerPort = null;
+  htmlPreviewEntries.clear();
 });
 
 app.on('activate', () => {

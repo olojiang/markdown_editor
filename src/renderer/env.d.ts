@@ -11,6 +11,7 @@ interface MarkdownFile {
   path: string | null;
   name: string;
   content: string;
+  encoding?: string;
 }
 
 interface MarkdownOpenRequest {
@@ -25,6 +26,8 @@ type AppMenuCommand =
   | 'save-file'
   | 'save-as'
   | 'save-all'
+  | 'format-json'
+  | 'compact-json'
   | 'export-html'
   | 'export-pdf'
   | 'close-tab'
@@ -68,9 +71,10 @@ interface MarkdownSession {
     id: string;
     filePath: string | null;
     name: string;
-    scrollTop: number;
-    content?: string;
-    lastSavedContent?: string;
+      scrollTop: number;
+      content?: string;
+      lastSavedContent?: string;
+      encoding?: string;
   }[];
   activeTabId: string | null;
   bookmarks: {
@@ -143,11 +147,13 @@ interface MarkdownBridge {
   onCloseRequest(callback: () => void): () => void;
   onAppMenuCommand?(callback: (command: AppMenuCommand) => void): () => void;
   readLastMarkdownFile(): Promise<MarkdownFile | null>;
-  readMarkdownFile(path: string): Promise<MarkdownFile>;
+  readMarkdownFile(path: string, encoding?: string): Promise<MarkdownFile>;
   getPathForFile(file: File): string;
-  saveMarkdownFile(path: string, content: string): Promise<MarkdownFile>;
-  saveMarkdownFileAs(content: string, defaultName: string): Promise<MarkdownFile | null>;
+  saveMarkdownFile(path: string, content: string, encoding?: string): Promise<MarkdownFile>;
+  saveMarkdownFileAs(content: string, defaultName: string, encoding?: string): Promise<MarkdownFile | null>;
   revealInFolder(path: string): Promise<void>;
+  openExternalLink(url: string, baseMarkdownPath?: string | null): Promise<boolean>;
+  htmlPreviewUrl(payload: { filePath: string | null; content: string }): Promise<string>;
   exportHtml(payload: ExportDocumentPayload): Promise<string | null>;
   exportPdf(payload: ExportDocumentPayload): Promise<string | null>;
   saveImageAsset(markdownPath: string, fileName: string, data: ArrayBuffer, mimeType: string): Promise<ImageAsset>;

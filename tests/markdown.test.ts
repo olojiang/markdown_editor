@@ -69,12 +69,51 @@ A->>B: evaluate_script("(() => { const el = ...; el.dispatchEvent(new MouseEvent
     expect(renderMarkdown(`\`\`\`mermaid\n${source}\n\`\`\``)).toContain('⇒');
   });
 
+  it('quotes flowchart labels with punctuation for Mermaid compatibility', () => {
+    const source = `flowchart LR
+    A[任何内容] --> B[抓取 / 转写 / OCR / 转 Markdown]
+    B --> C{可接受 NotebookLM / 第三方服务?}`;
+
+    expect(normalizeMermaidSource(source)).toContain('A["任何内容"]');
+    expect(normalizeMermaidSource(source)).toContain('B["抓取 / 转写 / OCR / 转 Markdown"]');
+    expect(normalizeMermaidSource(source)).toContain('C{"可接受 NotebookLM / 第三方服务?"}');
+  });
+
+  it('quotes quadrant chart labels that Mermaid rejects when unquoted', () => {
+    const source = `quadrantChart
+    title 使用价值 vs 风险
+    x-axis 低风险 --> 高风险
+    y-axis 低价值 --> 高价值
+    quadrant-1 谨慎使用
+    普通网页摘要: [0.2, 0.35]`;
+
+    expect(normalizeMermaidSource(source)).toContain('x-axis "低风险" --> "高风险"');
+    expect(normalizeMermaidSource(source)).toContain('y-axis "低价值" --> "高价值"');
+    expect(normalizeMermaidSource(source)).toContain('quadrant-1 "谨慎使用"');
+    expect(normalizeMermaidSource(source)).toContain('"普通网页摘要": [0.2, 0.35]');
+  });
+
   it('adds source line anchors to rendered block elements', () => {
     const html = renderMarkdown('# Title\n\nParagraph\n\n## Section');
 
     expect(html).toContain('data-source-line="1"');
     expect(html).toContain('data-source-line="3"');
     expect(html).toContain('data-source-line="5"');
+  });
+
+  it('marks rendered links for external browser handling', () => {
+    const html = renderMarkdown('[Apple](https://apple.com/account)');
+
+    expect(html).toContain('href="https://apple.com/account"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('leaves same-document anchor links in the preview', () => {
+    const html = renderMarkdown('[Jump](#title)');
+
+    expect(html).toContain('href="#title"');
+    expect(html).not.toContain('target="_blank"');
   });
 
   it('wraps tables in a scrollable presentation frame', () => {

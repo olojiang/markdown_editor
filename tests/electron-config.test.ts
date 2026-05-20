@@ -7,6 +7,7 @@ describe('Electron build configuration', () => {
       type?: string;
       main?: string;
       scripts?: {
+        'build:icon'?: string;
         'build:mac'?: string;
       };
       build?: {
@@ -17,6 +18,17 @@ describe('Electron build configuration', () => {
             target?: string;
             arch?: string[];
           }>;
+          identity?: string | null;
+          hardenedRuntime?: boolean;
+          entitlements?: string;
+          entitlementsInherit?: string;
+          fileAssociations?: Array<{
+            ext?: string[];
+            role?: string;
+            rank?: string;
+          }>;
+        };
+        win?: {
           fileAssociations?: Array<{
             ext?: string[];
             role?: string;
@@ -31,10 +43,16 @@ describe('Electron build configuration', () => {
 
     expect(packageJson.type).not.toBe('module');
     expect(packageJson.main).toBe('dist-electron/main.js');
+    expect(packageJson.scripts?.['build:icon']).toBe('node scripts/generate-mac-icon.cjs');
+    expect(packageJson.scripts?.['build:mac']).toContain('pnpm build:icon');
     expect(packageJson.scripts?.['build:mac']).toContain('--arm64');
     expect(packageJson.scripts?.['build:mac']).not.toContain('--x64');
     expect(packageJson.build?.productName).toBe('Markdown 纪');
     expect(packageJson.build?.mac?.icon).toBe('build/icon.icns');
+    expect(packageJson.build?.mac?.identity).toBeNull();
+    expect(packageJson.build?.mac?.hardenedRuntime).toBe(true);
+    expect(packageJson.build?.mac?.entitlements).toBe('build/entitlements.mac.plist');
+    expect(packageJson.build?.mac?.entitlementsInherit).toBe('build/entitlements.mac.plist');
     expect(packageJson.build?.mac?.target?.[0]).toEqual(
       expect.objectContaining({
         target: 'dmg',
@@ -48,6 +66,18 @@ describe('Electron build configuration', () => {
         rank: 'Owner',
       }),
     );
+    expect(packageJson.build?.mac?.fileAssociations?.map((association) => association.ext)).toEqual([
+      ['md', 'markdown', 'mdown'],
+      ['html', 'htm'],
+      ['txt', 'text'],
+      ['json'],
+    ]);
+    expect(packageJson.build?.win?.fileAssociations?.map((association) => association.ext)).toEqual([
+      ['md', 'markdown', 'mdown'],
+      ['html', 'htm'],
+      ['txt', 'text'],
+      ['json'],
+    ]);
     expect(electronTsConfig.compilerOptions.module).toBe('CommonJS');
   });
 
@@ -67,6 +97,7 @@ describe('Electron build configuration', () => {
     expect(indexHtml).toContain('https:');
     expect(indexHtml).toContain('markdown-asset:');
     expect(indexHtml).toContain("connect-src 'self' http: https:");
+    expect(indexHtml).toContain("frame-src 'self' http://127.0.0.1:*;");
     expect(mainSource).toContain("app.setName(appTitle)");
     expect(mainSource).not.toContain("const appTitle = 'Markdown Editor'");
   });
@@ -93,10 +124,21 @@ describe('Electron build configuration', () => {
     const preloadSource = fs.readFileSync('electron/preload.ts', 'utf8');
 
     expect(mainSource).toContain("app.on('window-all-closed', () => {\n  app.quit();\n});");
+    expect(mainSource).toContain('show: false');
+    expect(mainSource).toContain("window.once('ready-to-show'");
+    expect(mainSource).toContain('window.maximize()');
+    expect(mainSource).toContain('window.show()');
     expect(mainSource).toContain("ipcMain.on('session:save-sync'");
     expect(mainSource).toContain("import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell");
     expect(mainSource).toContain("'markdown:reveal-in-folder'");
     expect(mainSource).toContain('shell.showItemInFolder');
+    expect(mainSource).toContain("'app:open-external-link'");
+    expect(mainSource).toContain("'html-preview:url'");
+    expect(mainSource).toContain("htmlPreviewServer?.listen(0, '127.0.0.1'");
+    expect(mainSource).toContain("const htmlPreviewIdSearchParam = 'markdown-preview-id'");
+    expect(mainSource).toContain('window.webContents.setWindowOpenHandler');
+    expect(mainSource).toContain("window.webContents.on('will-navigate'");
+    expect(mainSource).toContain('openLinkOutsideApp');
     expect(mainSource).toContain("'Alt+Shift+I'");
     expect(mainSource).toContain("window.webContents.toggleDevTools()");
     expect(mainSource).toContain("mainLog('devtools.shortcut-toggle'");
@@ -122,5 +164,41 @@ describe('Electron build configuration', () => {
     expect(preloadSource).toContain("ipcRenderer.sendSync('session:save-sync'");
     expect(preloadSource).toContain("notifyReadyForExternalOpen");
     expect(preloadSource).toContain("ipcRenderer.on('markdown:toggle-editor-shortcut'");
+    expect(preloadSource).toContain("ipcRenderer.invoke('app:open-external-link'");
+    expect(preloadSource).toContain("ipcRenderer.invoke('html-preview:url'");
+  });
+
+  it('keeps the macOS local update path signed and relaunchable', () => {
+    const afterPackSource = fs.readFileSync('scripts/after-pack.cjs', 'utf8');
+    const signMacAppSource = fs.readFileSync('scripts/sign-mac-app.cjs', 'utf8');
+    const notarizeMacAppSource = fs.readFileSync('scripts/notarize-mac-app.cjs', 'utf8');
+    const updateAppSource = fs.readFileSync('update_app.sh', 'utf8');
+    const clearReleaseSource = fs.readFileSync('clear_release.sh', 'utf8');
+
+    expect(afterPackSource).toContain("require('./sign-mac-app.cjs')");
+    expect(signMacAppSource).toContain("'--options'");
+    expect(signMacAppSource).toContain("'runtime'");
+    expect(signMacAppSource).toContain("'--timestamp'");
+    expect(signMacAppSource).toContain("'--entitlements'");
+    expect(signMacAppSource).toContain('Developer ID Application: Pine Field Inc (Y8JR7FG9SR)');
+    expect(notarizeMacAppSource).toContain("'notarytool'");
+    expect(notarizeMacAppSource).toContain("'submit'");
+    expect(notarizeMacAppSource).toContain("'--wait'");
+    expect(notarizeMacAppSource).toContain("'stapler'");
+    expect(notarizeMacAppSource).toContain("'spctl'");
+    expect(updateAppSource).toContain('pnpm build:mac');
+    expect(updateAppSource).toContain('source "$APPLE_KEYS_DIR/apple_key_metadata.env"');
+    expect(updateAppSource).toContain('--sign');
+    expect(updateAppSource).toContain('NOTARIZE=false');
+    expect(updateAppSource).toContain('NOTARIZE=true');
+    expect(updateAppSource).toContain('node scripts/sign-mac-app.cjs "$BUILT_APP"');
+    expect(updateAppSource).toContain('node scripts/notarize-mac-app.cjs "$BUILT_APP"');
+    expect(updateAppSource).toContain('pkill -x "$APP_PROCESS_NAME"');
+    expect(updateAppSource).toContain('cp -R "$BUILT_APP" "$TARGET_APP"');
+    expect(updateAppSource).toContain('xcrun stapler validate "$TARGET_APP"');
+    expect(updateAppSource).toContain('spctl --assess --type execute --verbose=4 "$TARGET_APP"');
+    expect(updateAppSource).toContain('open "$TARGET_APP"');
+    expect(clearReleaseSource).toContain('RELEASE_DIR="${ROOT_DIR}/release"');
+    expect(clearReleaseSource).toContain('find "$RELEASE_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +');
   });
 });

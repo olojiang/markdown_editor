@@ -1,5 +1,6 @@
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
+const { signAndVerifyMacApp } = require('./sign-mac-app.cjs');
 
 const unusedMacUsageKeys = [
   'NSBluetoothAlwaysUsageDescription',
@@ -62,10 +63,12 @@ module.exports = async function afterPack(context) {
     return;
   }
 
-  const plistPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Info.plist');
+  const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
+  const plistPath = path.join(appPath, 'Contents', 'Info.plist');
 
   for (const key of unusedMacUsageKeys) {
     deletePlistKey(plistPath, key);
   }
   addMarkdownDocumentTypes(plistPath);
+  signAndVerifyMacApp(appPath);
 };

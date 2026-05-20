@@ -21,6 +21,7 @@ interface CursorPosition {
 const props = defineProps<{
   bookmarkLineNumbers: number[];
   configText: string;
+  language: string;
   modelValue: string;
   theme: 'light' | 'dark' | 'eye';
   vimEnabled: boolean;
@@ -68,7 +69,7 @@ function monacoOptions(config: ParsedEditorConfig): Monaco.editor.IStandaloneEdi
     fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
     fontSize: config.fontSize,
     insertSpaces: config.insertSpaces,
-    language: 'markdown',
+    language: props.language,
     glyphMargin: true,
     lineNumbers: config.lineNumbers,
     minimap: { enabled: config.minimap },
@@ -275,6 +276,14 @@ function getModel(): Monaco.editor.ITextModel | null {
   return monacoEditor?.getModel() ?? null;
 }
 
+function applyLanguage(): void {
+  const model = getModel();
+  if (!monacoModule || !model) {
+    return;
+  }
+  monacoModule.editor.setModelLanguage(model, props.language);
+}
+
 function getSelectionRange(): SelectionRange {
   const fallback = fallbackEditor.value;
   if (fallback) {
@@ -451,6 +460,8 @@ watch(() => props.theme, () => {
   monacoModule?.editor.setTheme(editorTheme());
 });
 
+watch(() => props.language, applyLanguage);
+
 watch(() => props.configText, () => {
   applyConfig();
   if (props.vimEnabled) {
@@ -492,7 +503,7 @@ defineExpose({
       :value="modelValue"
       wrap="soft"
       spellcheck="false"
-      placeholder="# 开始写 Markdown"
+      :placeholder="language === 'markdown' ? '# 开始写 Markdown' : '开始编辑文档'"
       @click="emitFocusLineChange"
       @focus="emitFocusLineChange"
       @input="onFallbackInput"

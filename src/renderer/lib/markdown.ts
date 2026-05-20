@@ -55,15 +55,68 @@ function normalizeSequenceMessage(message: string): string {
     .replace(/[{};]/g, ' ');
 }
 
-export function normalizeMermaidSource(source: string): string {
-  if (!/^\s*sequenceDiagram\b/m.test(source)) {
+function quoteMermaidText(value: string): string {
+  const trimmed = value.trim();
+  if (/^["'].*["']$/.test(trimmed)) {
+    return trimmed;
+  }
+  return `"${trimmed.replace(/"/g, '#quot;')}"`;
+}
+
+function shouldQuoteFlowchartLabel(value: string): boolean {
+  const trimmed = value.trim();
+  return Boolean(trimmed) && !/^["'`]/.test(trimmed) && /[^\w\s-]/u.test(trimmed);
+}
+
+function normalizeFlowchartSource(source: string): string {
+  if (!/^\s*(?:flowchart|graph)\b/m.test(source)) {
+    return source;
+  }
+
+  return source.replace(
+    /(\b[A-Za-z][\w-]*\s*)([\[{])([^\[\]\{\}\n]*[^\w\s-][^\[\]\{\}\n]*)([\]}])/gu,
+    (match, id: string, open: string, label: string, close: string) => {
+      return shouldQuoteFlowchartLabel(label) ? `${id}${open}${quoteMermaidText(label)}${close}` : match;
+    },
+  );
+}
+
+function normalizeQuadrantChartSource(source: string): string {
+  if (!/^\s*quadrantChart\b/m.test(source)) {
     return source;
   }
 
   return source.split('\n').map((line) => {
-    const message = line.match(/^(\s*\w+\s*(?:--|-)>>[+-]?\s*\w+\s*:)(.*)$/);
-    return message ? `${message[1]}${normalizeSequenceMessage(message[2])}` : line;
+    const indent = line.match(/^\s*/)?.[0] ?? '';
+    const trimmed = line.trim();
+    const axis = trimmed.match(/^(x-axis|y-axis)\s+(.+?)\s+-->\s+(.+)$/);
+    if (axis) {
+      return `${indent}${axis[1]} ${quoteMermaidText(axis[2])} --> ${quoteMermaidText(axis[3])}`;
+    }
+
+    const quadrant = trimmed.match(/^(quadrant-[1-4])\s+(.+)$/);
+    if (quadrant) {
+      return `${indent}${quadrant[1]} ${quoteMermaidText(quadrant[2])}`;
+    }
+
+    const point = trimmed.match(/^(.+?):\s*(\[[\d.\s,-]+\])$/);
+    if (point && !/^["'].*["']$/.test(point[1].trim())) {
+      return `${indent}${quoteMermaidText(point[1])}: ${point[2]}`;
+    }
+
+    return line;
   }).join('\n');
+}
+
+export function normalizeMermaidSource(source: string): string {
+  const sequenceNormalized = !/^\s*sequenceDiagram\b/m.test(source)
+    ? source
+    : source.split('\n').map((line) => {
+      const message = line.match(/^(\s*\w+\s*(?:--|-)>>[+-]?\s*\w+\s*:)(.*)$/);
+      return message ? `${message[1]}${normalizeSequenceMessage(message[2])}` : line;
+    }).join('\n');
+
+  return normalizeQuadrantChartSource(normalizeFlowchartSource(sequenceNormalized));
 }
 
 const languageAliases = new Map([
@@ -337,7 +390,7 @@ function readPattern(content: string, start: number, pattern: RegExp): number {
   return match?.index === 0 ? start + match[0].length : start;
 }
 
-function highlightSyntax(content: string, language: string): string {
+export function highlightSyntax(content: string, language: string): string {
   const normalizedLanguage = normalizeCodeLanguage(language);
   const keywords = normalizedLanguage === 'json' ? new Set<string>() : keywordGroups[normalizedLanguage];
   const usesHashComments = normalizedLanguage === 'python' || normalizedLanguage === 'shell' || normalizedLanguage === 'generic';
@@ -533,6 +586,15 @@ export function renderMarkdown(markdown: string): string {
     const id = slug(plainText(tokens, index));
     tokens[index].attrSet('id', id);
     tagSourceLine(tokens[index]);
+    return self.renderToken(tokens, index, options);
+  };
+
+  md.renderer.rules.link_open = (tokens, index, options, env, self) => {
+    const href = tokens[index].attrGet('href')?.trim() ?? '';
+    if (href && !href.startsWith('#')) {
+      tokens[index].attrSet('target', '_blank');
+      tokens[index].attrSet('rel', 'noopener noreferrer');
+    }
     return self.renderToken(tokens, index, options);
   };
 

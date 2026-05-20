@@ -1,11 +1,13 @@
 # Markdown 纪
 
-Electron + Vue + TypeScript Markdown reader/editor with a collapsible heading tree, source editing, right-side/fullscreen preview, Mermaid rendering, and automatic last-file/session restore.
+Electron + Vue + TypeScript document reader/editor with Markdown, HTML, text, and JSON editing, live preview, a collapsible heading tree where available, Mermaid rendering for Markdown, and automatic last-file/session restore.
 
 ## Features
 
-- Open and edit local `.md`, `.markdown`, and `.mdown` files.
-- Open Markdown files directly from Finder or a default `.md` file association in reader mode.
+- Open and edit local `.md`, `.markdown`, `.mdown`, `.html`, `.htm`, `.txt`, `.text`, and `.json` files.
+- Open supported files directly from Finder, Windows file associations, or Open With/default-app flows in reader mode.
+- Preview HTML in a live iframe backed by a local `127.0.0.1` static server so relative CSS, JavaScript, and images reload as you edit.
+- Format JSON with 2-space indentation or convert it to a compact single line.
 - Auto-save the current file and restore the last opened file/session on launch.
 - Open restored documents in a reader-first layout; switch to source editing with `Cmd/Ctrl+E`.
 - Browse headings in a collapsible table of contents, filter headings by keyword, and track the active heading while scrolling.
@@ -47,7 +49,7 @@ For local updates, build and install the current machine architecture directly i
 
 The ARM64 DMG is written to `release/` and ignored by git. The current package is unsigned because no Apple Developer ID certificate is configured in this repository; distribute it directly only to trusted machines. On first launch, macOS Gatekeeper may require opening from Finder with `Control` + click, then choosing Open.
 
-The app does not request camera, microphone, location, contacts, or broad filesystem permissions. Markdown files are accessed through the macOS file picker, drag-and-drop, recent files, or Finder's Open With/default-app flow and then saved back to the selected file path.
+The app does not request camera, microphone, location, contacts, or broad filesystem permissions. Documents are accessed through the macOS file picker, drag-and-drop, recent files, or Finder's Open With/default-app flow and then saved back to the selected file path.
 
 See [docs/Mac_Distribution.md](docs/Mac_Distribution.md) for packaging and permission notes.
 

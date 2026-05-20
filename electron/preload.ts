@@ -50,18 +50,18 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   takeLaunchMarkdownFile: () => ipcRenderer.invoke('markdown:take-launch-file'),
   notifyReadyForExternalOpen: () => ipcRenderer.invoke('markdown:ready-for-external-open'),
   onExternalMarkdownFile: (callback: (request: {
-    file: { path: string; name: string; content: string };
+    file: { path: string; name: string; content: string; encoding: string };
     external: boolean;
   }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, request: {
-      file: { path: string; name: string; content: string };
+      file: { path: string; name: string; content: string; encoding: string };
       external: boolean;
     }) => callback(request);
     ipcRenderer.on('markdown:external-open', listener);
     return () => ipcRenderer.removeListener('markdown:external-open', listener);
   },
-  onMarkdownFileChanged: (callback: (file: { path: string; name: string; content: string }) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, file: { path: string; name: string; content: string }) => callback(file);
+  onMarkdownFileChanged: (callback: (file: { path: string; name: string; content: string; encoding: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, file: { path: string; name: string; content: string; encoding: string }) => callback(file);
     ipcRenderer.on('markdown:file-changed', listener);
     return () => ipcRenderer.removeListener('markdown:file-changed', listener);
   },
@@ -81,11 +81,17 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     return () => ipcRenderer.removeListener('app:menu-command', listener);
   },
   readLastMarkdownFile: () => ipcRenderer.invoke('markdown:read-last'),
-  readMarkdownFile: (filePath: string) => ipcRenderer.invoke('markdown:read-path', filePath),
+  readMarkdownFile: (filePath: string, encoding?: string) => ipcRenderer.invoke('markdown:read-path', filePath, encoding),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  saveMarkdownFile: (filePath: string, content: string) => ipcRenderer.invoke('markdown:save', filePath, content),
-  saveMarkdownFileAs: (content: string, defaultName: string) => ipcRenderer.invoke('markdown:save-as', content, defaultName),
+  saveMarkdownFile: (filePath: string, content: string, encoding?: string) =>
+    ipcRenderer.invoke('markdown:save', filePath, content, encoding),
+  saveMarkdownFileAs: (content: string, defaultName: string, encoding?: string) =>
+    ipcRenderer.invoke('markdown:save-as', content, defaultName, encoding),
   revealInFolder: (filePath: string) => ipcRenderer.invoke('markdown:reveal-in-folder', filePath),
+  openExternalLink: (url: string, baseMarkdownPath?: string | null) =>
+    ipcRenderer.invoke('app:open-external-link', url, baseMarkdownPath),
+  htmlPreviewUrl: (payload: { filePath: string | null; content: string }) =>
+    ipcRenderer.invoke('html-preview:url', payload),
   exportHtml: (payload: {
     markdownPath: string;
     title: string;
@@ -126,6 +132,7 @@ contextBridge.exposeInMainWorld('markdownBridge', {
       scrollTop: number;
       content?: string;
       lastSavedContent?: string;
+      encoding?: string;
     }[];
     activeTabId: string | null;
     bookmarks: {
@@ -158,6 +165,7 @@ contextBridge.exposeInMainWorld('markdownBridge', {
       scrollTop: number;
       content?: string;
       lastSavedContent?: string;
+      encoding?: string;
     }[];
     activeTabId: string | null;
     bookmarks: {

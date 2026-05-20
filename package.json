@@ -7,9 +7,10 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "pnpm build:electron && concurrently -k \"vite --host 127.0.0.1 --port 26543 --strictPort\" \"wait-on http://127.0.0.1:26543 && electron .\"",
+    "build:icon": "node scripts/generate-mac-icon.cjs",
     "build": "vue-tsc --noEmit && vite build && pnpm build:electron",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "build:mac": "pnpm build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64 --publish never",
+    "build:mac": "pnpm build:icon && pnpm build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64 --publish never",
     "build:win_x64": "pnpm build && electron-builder --win nsis --x64 --publish never",
     "test": "vitest run",
     "test:electron": "pnpm build && playwright test -c playwright.electron.config.ts",
@@ -41,7 +42,9 @@
         }
       ],
       "identity": null,
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false,
       "fileAssociations": [
         {
@@ -53,6 +56,35 @@
           "name": "Markdown Document",
           "description": "Markdown document",
           "role": "Viewer",
+          "rank": "Owner"
+        },
+        {
+          "ext": [
+            "html",
+            "htm"
+          ],
+          "name": "HTML Document",
+          "description": "HTML document",
+          "role": "Viewer",
+          "rank": "Owner"
+        },
+        {
+          "ext": [
+            "txt",
+            "text"
+          ],
+          "name": "Text Document",
+          "description": "Text document",
+          "role": "Editor",
+          "rank": "Owner"
+        },
+        {
+          "ext": [
+            "json"
+          ],
+          "name": "JSON Document",
+          "description": "JSON document",
+          "role": "Editor",
           "rank": "Owner"
         }
       ]
@@ -81,7 +113,49 @@
           ]
         }
       ],
-      "artifactName": "${productName}-${version}-win-${arch}-setup.${ext}"
+      "artifactName": "${productName}-${version}-win-${arch}-setup.${ext}",
+      "fileAssociations": [
+        {
+          "ext": [
+            "md",
+            "markdown",
+            "mdown"
+          ],
+          "name": "Markdown Document",
+          "description": "Markdown document",
+          "role": "Viewer",
+          "rank": "Owner"
+        },
+        {
+          "ext": [
+            "html",
+            "htm"
+          ],
+          "name": "HTML Document",
+          "description": "HTML document",
+          "role": "Viewer",
+          "rank": "Owner"
+        },
+        {
+          "ext": [
+            "txt",
+            "text"
+          ],
+          "name": "Text Document",
+          "description": "Text document",
+          "role": "Editor",
+          "rank": "Owner"
+        },
+        {
+          "ext": [
+            "json"
+          ],
+          "name": "JSON Document",
+          "description": "JSON document",
+          "role": "Editor",
+          "rank": "Owner"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -93,6 +167,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^5.2.3",
+    "iconv-lite": "0.6.3",
     "markdown-it": "^14.1.0",
     "mermaid": "^11.6.0",
     "monaco-editor": "^0.55.1",

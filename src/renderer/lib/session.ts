@@ -28,6 +28,7 @@ export interface MarkdownSessionTab {
   scrollTop: number;
   content?: string;
   lastSavedContent?: string;
+  encoding?: string;
 }
 
 export interface MarkdownSession {
@@ -206,6 +207,7 @@ export function normalizeSessionTabs(tabs: unknown): MarkdownSessionTab[] {
       scrollTop: typeof candidate.scrollTop === 'number' ? Math.max(0, candidate.scrollTop) : 0,
       content: typeof candidate.content === 'string' ? candidate.content : undefined,
       lastSavedContent: typeof candidate.lastSavedContent === 'string' ? candidate.lastSavedContent : undefined,
+      encoding: typeof candidate.encoding === 'string' ? candidate.encoding : undefined,
     }];
   });
 }

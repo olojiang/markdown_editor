@@ -44,15 +44,15 @@ Normalization removes malformed entries, clamps line/column to at least `1`, nor
 
 1. Startup loads session through `bridge.getSession()`.
 2. Renderer normalizes session via `normalizeSession()`.
-3. Adding a bookmark reads the exposed editor cursor, active tab, file path/name, and current source line excerpt.
-4. The new bookmark is inserted at the front after removing any existing bookmark for the same target.
+3. Toggling a bookmark reads the exposed editor cursor, active tab, file path/name, and current source line excerpt.
+4. If the current line already has bookmarks, the toggle removes that line's bookmarks; otherwise the new bookmark is inserted at the front after removing any existing bookmark for the same target.
 5. `persistSession({ bookmarks })` saves through the existing session bridge.
 6. Jumping first activates an already-open tab when possible; otherwise it opens `filePath` from disk with `openFilePath()`.
 7. After activation/open, the editor is shown, cursor is set to `lineNumber`/`column`, preview is synced, and the manager closes.
 
 ## Usage
 
-- Add current cursor position: `Cmd/Ctrl+Shift+B` or the bookmark button in the editor toolbar.
+- Toggle the current line bookmark: `Cmd/Ctrl+Shift+B` or the bookmark button in the editor toolbar.
 - Open bookmark manager: `Cmd/Ctrl+B` or the bookmark button in the top toolbar.
 - Search: type in the manager search box; it matches file name, path, `line:column`, and excerpt.
 - View scope: choose `所有文件` or `当前文件`; this choice is persisted.
@@ -74,4 +74,3 @@ Normalization removes malformed entries, clamps line/column to at least `1`, nor
 
 - `pnpm lint`
 - `pnpm test -- session App`
-

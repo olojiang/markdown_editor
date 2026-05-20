@@ -122,6 +122,9 @@ describe('App', () => {
         content,
       })),
       revealInFolder: vi.fn().mockResolvedValue(undefined),
+      openExternalLink: vi.fn().mockResolvedValue(true),
+      htmlPreviewUrl: vi.fn().mockImplementation(async ({ filePath }: { filePath: string | null; content: string }) =>
+        `http://127.0.0.1:41000/?markdown-preview-id=${encodeURIComponent(filePath ?? 'draft')}`),
       exportHtml: vi.fn().mockResolvedValue('/docs/readme.html'),
       exportPdf: vi.fn().mockResolvedValue('/docs/readme.pdf'),
       saveImageAsset: vi.fn().mockResolvedValue(imageAsset),
@@ -673,6 +676,8 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
+    expect(wrapper.get('[data-testid="preview-panel"]').find('[data-testid="fullscreen-preview"]').exists()).toBe(true);
+
     await wrapper.find('[data-testid="fullscreen-preview"]').trigger('click');
 
     expect(wrapper.classes()).toContain('preview-fullscreen');
@@ -779,6 +784,30 @@ describe('App', () => {
     expect(wrapper.find('[data-code-action="copy"]').classes()).toContain('is-copied');
     expect(wrapper.find('[data-code-action="copy"]').attributes('aria-label')).toBe('已复制');
     expect(wrapper.text()).toContain('已复制代码');
+  });
+
+  it('opens preview links outside the Electron window', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('[Apple](https://apple.com/account)');
+    await vi.dynamicImportSettled();
+    await wrapper.find('.preview a').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.openExternalLink).toHaveBeenCalledWith('https://apple.com/account', openFile.path);
+    expect(wrapper.text()).toContain('已在系统浏览器中打开链接');
+  });
+
+  it('keeps same-document preview anchors inside the preview', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Title\n\n[Jump](#title)');
+    await vi.dynamicImportSettled();
+    await wrapper.find('.preview a').trigger('click');
+
+    expect(window.markdownBridge?.openExternalLink).not.toHaveBeenCalled();
   });
 
   it('opens, zooms, drags, and downloads preview images', async () => {
@@ -1319,6 +1348,8 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await nextTick();
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }));
     await nextTick();
 
@@ -1347,6 +1378,69 @@ describe('App', () => {
     await nextTick();
 
     expect(wrapper.find('[data-testid="editor-search"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('finds next and previous matches from the source search input', async () => {
+    const wrapper = mount(App, { attachTo: document.body });
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await nextTick();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }));
+    await nextTick();
+
+    const searchInput = wrapper.find<HTMLInputElement>('[data-testid="editor-search"]');
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    await searchInput.setValue('hello');
+    searchInput.element.focus();
+
+    await searchInput.trigger('keydown', { key: 'Enter' });
+    await nextTick();
+
+    const firstMatch = openFile.content.indexOf('hello');
+    const lastMatch = openFile.content.lastIndexOf('hello');
+    expect(editor.selectionStart).toBe(firstMatch);
+    expect(editor.selectionEnd).toBe(firstMatch + 'hello'.length);
+    expect(document.activeElement).toBe(searchInput.element);
+
+    await searchInput.trigger('keydown', { key: 'Enter', shiftKey: true });
+    await nextTick();
+
+    expect(editor.selectionStart).toBe(lastMatch);
+    expect(editor.selectionEnd).toBe(lastMatch + 'hello'.length);
+    expect(document.activeElement).toBe(searchInput.element);
+    wrapper.unmount();
+  });
+
+  it('searches and highlights matches while only the preview is visible', async () => {
+    const wrapper = mount(App, { attachTo: document.body });
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.classes()).toContain('reader-mode');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }));
+    await nextTick();
+
+    const searchInput = wrapper.find<HTMLInputElement>('[data-testid="editor-search"]');
+    await searchInput.setValue('hello');
+    searchInput.element.focus();
+
+    await searchInput.trigger('keydown', { key: 'Enter' });
+    await nextTick();
+
+    const firstMatch = wrapper.find<HTMLElement>('.preview-search-match');
+    expect(firstMatch.exists()).toBe(true);
+    expect(firstMatch.text()).toContain('hello alpha');
+    expect(wrapper.find('[data-testid="editor-replace"]').exists()).toBe(false);
+    expect(document.activeElement).toBe(searchInput.element);
+
+    await searchInput.trigger('keydown', { key: 'Enter', shiftKey: true });
+    await nextTick();
+
+    const previousMatch = wrapper.find<HTMLElement>('.preview-search-match');
+    expect(previousMatch.text()).toContain('hello beta');
+    expect(document.activeElement).toBe(searchInput.element);
     wrapper.unmount();
   });
 
@@ -1624,7 +1718,7 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
-    expect(wrapper.get('[data-testid="open-file"]').attributes('title')).toBe(`打开 Markdown 文件 (${expectedShortcut('O')})`);
+    expect(wrapper.get('[data-testid="open-file"]').attributes('title')).toBe(`打开文档 (${expectedShortcut('O')})`);
     expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe(`保存 Markdown 文件 (${expectedShortcut('S')})`);
     expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe(`显示/隐藏预览 (${expectedShortcut('P')})`);
     expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe(`切换阅读/编辑模式 (${expectedShortcut('E')})`);
@@ -1633,8 +1727,137 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('v0.1.4');
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('文件');
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('插入与资源');
-    expect(wrapper.get('[data-testid="help-popover"]').text()).toContain(`打开 Markdown${expectedShortcut('O')}`);
+    expect(wrapper.get('[data-testid="help-popover"]').text()).toContain(`打开文档${expectedShortcut('O')}`);
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('Mermaid 预览');
+  });
+
+  it('opens JSON files and exposes format/compact actions', async () => {
+    vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValueOnce({
+      path: '/docs/data.json',
+      name: 'data.json',
+      content: '{"b":1,"a":{"c":2}}',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.get('[data-testid="open-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="insert-table"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="format-json"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="format-json"]').trigger('click');
+    await nextTick();
+    expect((wrapper.get('[data-testid="editor"]').element as HTMLTextAreaElement).value).toBe('{\n  "b": 1,\n  "a": {\n    "c": 2\n  }\n}');
+
+    await wrapper.get('[data-testid="compact-json"]').trigger('click');
+    await nextTick();
+    expect((wrapper.get('[data-testid="editor"]').element as HTMLTextAreaElement).value).toBe('{"b":1,"a":{"c":2}}');
+  });
+
+  it('uses the selected encoding when reopening and saving documents', async () => {
+    vi.mocked(window.markdownBridge!.readMarkdownFile).mockImplementation(async (filePath: string, encoding?: string) => ({
+      ...openFile,
+      path: filePath,
+      name: filePath.split('/').pop() ?? 'file.md',
+      encoding,
+    }));
+    vi.mocked(window.markdownBridge!.saveMarkdownFile).mockImplementation(async (filePath: string, content: string, encoding?: string) => ({
+      path: filePath,
+      name: filePath.split('/').pop() ?? 'file.md',
+      content,
+      encoding,
+    }));
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.get('[data-testid="encoding-select"]').setValue('gbk');
+    await wrapper.get('[data-testid="reopen-with-encoding"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith('/docs/readme.md', 'gbk');
+
+    await wrapper.get('[data-testid="editor"]').setValue('# Changed');
+    await wrapper.get('[data-testid="save-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalledWith('/docs/readme.md', '# Changed', 'gbk');
+  });
+
+  it('renders a highlighted JSON preview but keeps text documents editor-only', async () => {
+    vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValueOnce({
+      path: '/docs/data.json',
+      name: 'data.json',
+      content: '{"ok":true}',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.get('[data-testid="open-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.classes()).not.toContain('no-preview-pane');
+    expect(wrapper.classes()).not.toContain('reader-mode');
+    expect(wrapper.find('[data-testid="preview-panel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="preview"]').html()).toContain('code-token-literal');
+    expect(wrapper.find('[data-testid="toggle-preview"]').exists()).toBe(true);
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ editorVisible: true }),
+    );
+
+    vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValueOnce({
+      path: '/docs/readme.txt',
+      name: 'readme.txt',
+      content: 'plain text',
+    });
+    await wrapper.get('[data-testid="open-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.classes()).toContain('no-preview-pane');
+    expect(wrapper.classes()).not.toContain('reader-mode');
+    expect(wrapper.find('[data-testid="preview-panel"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="toggle-preview"]').exists()).toBe(false);
+
+    await wrapper.get('[data-testid="toggle-editor"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.classes()).not.toContain('reader-mode');
+    expect(wrapper.text()).toContain('Text 文件始终使用编辑器模式');
+  });
+
+  it('previews HTML files in a reloading iframe served by the local preview server', async () => {
+    vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValueOnce({
+      path: '/docs/page.html',
+      name: 'page.html',
+      content: '<h1>Hello</h1>',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.get('[data-testid="open-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+    await new Promise((resolve) => window.setTimeout(resolve, 220));
+
+    expect(wrapper.classes()).not.toContain('reader-mode');
+    const frame = wrapper.get<HTMLIFrameElement>('[data-testid="html-preview-frame"]');
+    expect(frame.attributes('src')).toContain('http://127.0.0.1:41000/?markdown-preview-id=');
+    expect(window.markdownBridge?.htmlPreviewUrl).toHaveBeenLastCalledWith({
+      filePath: '/docs/page.html',
+      content: '<h1>Hello</h1>',
+    });
+    expect(wrapper.find('[data-testid="preview"]').exists()).toBe(false);
+
+    await wrapper.get('[data-testid="editor"]').setValue('<h1>Changed</h1>');
+    await new Promise((resolve) => window.setTimeout(resolve, 220));
+
+    expect(window.markdownBridge?.htmlPreviewUrl).toHaveBeenLastCalledWith({
+      filePath: '/docs/page.html',
+      content: '<h1>Changed</h1>',
+    });
+
+    await wrapper.get('[data-testid="toggle-editor"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.classes()).not.toContain('reader-mode');
+    expect(wrapper.text()).toContain('HTML 文件始终使用编辑器模式');
   });
 
   it('uses keyboard shortcut for toggling preview', async () => {
@@ -1684,6 +1907,35 @@ describe('App', () => {
     await nextTick();
     expect(wrapper.find('[data-testid="bookmark-empty"]').exists()).toBe(true);
     expect(vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0].bookmarks).toEqual([]);
+  });
+
+  it('toggles current-line bookmarks with the shortcut and toolbar button', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const betaStart = offsetForLineColumn(openFile.content, 9, 4);
+    editor.setSelectionRange(betaStart, betaStart);
+
+    await wrapper.find('[data-testid="add-bookmark"]').trigger('click');
+    await nextTick();
+    expect(vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0].bookmarks).toEqual([
+      expect.objectContaining({ lineNumber: 9, column: 4 }),
+    ]);
+
+    const sameLineOtherColumn = offsetForLineColumn(openFile.content, 9, 8);
+    editor.setSelectionRange(sameLineOtherColumn, sameLineOtherColumn);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true, shiftKey: true }));
+    await nextTick();
+
+    expect(vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0].bookmarks).toEqual([]);
+    expect(wrapper.find('[data-testid="add-bookmark"]').classes()).not.toContain('active');
+
+    await wrapper.find('[data-testid="add-bookmark"]').trigger('click');
+    await nextTick();
+
+    expect(vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0].bookmarks).toEqual([
+      expect.objectContaining({ lineNumber: 9, column: 8 }),
+    ]);
   });
 
   it('opens a saved bookmark with keyboard selection and jumps to its file position', async () => {
