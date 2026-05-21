@@ -7,6 +7,7 @@ import {
   documentKindFromFileName,
   documentLabel,
   formatJsonDocument,
+  isPreviewableDocumentKind,
   monacoLanguageForDocument,
   renderDocumentPreview,
   supportedDocumentExtensions,
@@ -299,7 +300,7 @@ const isHtmlDocument = computed(() => currentDocumentKind.value === 'html');
 const isJsonDocument = computed(() => currentDocumentKind.value === 'json');
 const currentEncoding = computed(() => normalizeTextEncoding(currentFile.value?.encoding));
 const currentEncodingLabel = computed(() => textEncodingLabel(currentEncoding.value));
-const hasPreviewPane = computed(() => isMarkdownDocument.value || isHtmlDocument.value || isJsonDocument.value);
+const hasPreviewPane = computed(() => isPreviewableDocumentKind(currentDocumentKind.value));
 const previewHtml = computed(() => rewriteLocalImageSources(`${renderDocumentPreview(source.value, currentDocumentKind.value)}<!-- theme:${session.value.theme} -->`));
 const headingTree = computed(() => applyCollapsedState(buildDocumentHeadingTree(source.value, currentDocumentKind.value)));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));

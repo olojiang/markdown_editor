@@ -2,6 +2,7 @@ import {
   buildDocumentHeadingTree,
   documentKindFromFileName,
   formatJsonDocument,
+  isPreviewableDocumentKind,
   renderDocumentPreview,
 } from '@/renderer/lib/document';
 
@@ -11,6 +12,13 @@ describe('document helpers', () => {
     expect(documentKindFromFileName('/tmp/page.HTML')).toBe('html');
     expect(documentKindFromFileName('/tmp/notes.txt')).toBe('text');
     expect(documentKindFromFileName('/tmp/data.json')).toBe('json');
+  });
+
+  it('allows preview panes only for Markdown and HTML documents', () => {
+    expect(isPreviewableDocumentKind('markdown')).toBe(true);
+    expect(isPreviewableDocumentKind('html')).toBe(true);
+    expect(isPreviewableDocumentKind('text')).toBe(false);
+    expect(isPreviewableDocumentKind('json')).toBe(false);
   });
 
   it('renders non-markdown previews without interpreting text as HTML', () => {

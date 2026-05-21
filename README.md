@@ -1,12 +1,13 @@
 # Markdown 纪
 
-Electron + Vue + TypeScript document reader/editor with Markdown, HTML, text, and JSON editing, live preview, a collapsible heading tree where available, Mermaid rendering for Markdown, and automatic last-file/session restore.
+Electron + Vue + TypeScript document reader/editor with Markdown, HTML, text, and JSON editing, Markdown/HTML preview, a collapsible heading tree where available, Mermaid rendering for Markdown, and automatic last-file/session restore.
 
 ## Features
 
 - Open and edit local `.md`, `.markdown`, `.mdown`, `.html`, `.htm`, `.txt`, `.text`, and `.json` files.
 - Open supported files directly from Finder, Windows file associations, or Open With/default-app flows in reader mode.
 - Preview HTML in a live iframe backed by a local `127.0.0.1` static server so relative CSS, JavaScript, and images reload as you edit.
+- Keep text and JSON documents in editor-only mode.
 - Format JSON with 2-space indentation or convert it to a compact single line.
 - Auto-save the current file and restore the last opened file/session on launch.
 - Open restored documents in a reader-first layout; switch to source editing with `Cmd/Ctrl+E`.

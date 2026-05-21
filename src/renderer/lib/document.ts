@@ -51,6 +51,10 @@ export function documentLabel(kind: DocumentKind): string {
   return 'Markdown';
 }
 
+export function isPreviewableDocumentKind(kind: DocumentKind): boolean {
+  return kind === 'markdown' || kind === 'html';
+}
+
 export function monacoLanguageForDocument(kind: DocumentKind): string {
   if (kind === 'html') {
     return 'html';

@@ -1782,7 +1782,7 @@ describe('App', () => {
     expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalledWith('/docs/readme.md', '# Changed', 'gbk');
   });
 
-  it('renders a highlighted JSON preview but keeps text documents editor-only', async () => {
+  it('keeps JSON and text documents editor-only without opening preview', async () => {
     vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValueOnce({
       path: '/docs/data.json',
       name: 'data.json',
@@ -1791,17 +1791,26 @@ describe('App', () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
+    expect(wrapper.classes()).toContain('reader-mode');
+
     await wrapper.get('[data-testid="open-file"]').trigger('click');
     await vi.dynamicImportSettled();
 
-    expect(wrapper.classes()).not.toContain('no-preview-pane');
     expect(wrapper.classes()).not.toContain('reader-mode');
-    expect(wrapper.find('[data-testid="preview-panel"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="preview"]').html()).toContain('code-token-literal');
-    expect(wrapper.find('[data-testid="toggle-preview"]').exists()).toBe(true);
+    expect(wrapper.classes()).toContain('no-preview-pane');
+    expect(wrapper.find('[data-testid="preview-panel"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="toggle-preview"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="format-json"]').exists()).toBe(true);
     expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
       expect.objectContaining({ editorVisible: true }),
     );
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', metaKey: true }));
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.classes()).toContain('no-preview-pane');
+    expect(wrapper.find('[data-testid="preview-panel"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('JSON 文件没有预览视图');
 
     vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValueOnce({
       path: '/docs/readme.txt',

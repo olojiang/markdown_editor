@@ -62,6 +62,16 @@ function editorTheme(): string {
   return props.theme === 'dark' ? 'markdown-dark' : props.theme === 'eye' ? 'markdown-eye' : 'markdown-light';
 }
 
+async function loadMonacoEditor(): Promise<typeof Monaco> {
+  const [monaco] = await Promise.all([
+    import('monaco-editor/esm/vs/editor/editor.api.js'),
+    import('monaco-editor/esm/vs/basic-languages/html/html.contribution.js'),
+    import('monaco-editor/esm/vs/language/json/monaco.contribution.js'),
+  ]);
+
+  return monaco;
+}
+
 function monacoOptions(config: ParsedEditorConfig): Monaco.editor.IStandaloneEditorConstructionOptions {
   return {
     automaticLayout: true,
@@ -119,7 +129,21 @@ function defineMonacoThemes(monaco: typeof Monaco): void {
   monaco.editor.defineTheme('markdown-light', {
     base: 'vs',
     inherit: true,
-    rules: [],
+    rules: [
+      { token: 'tag.html', foreground: '0f766e' },
+      { token: 'delimiter.html', foreground: '64748b' },
+      { token: 'metatag.html', foreground: '7c3aed' },
+      { token: 'attribute.name.html', foreground: 'b45309' },
+      { token: 'attribute.value.html', foreground: '0969da' },
+      { token: 'string.key.json', foreground: '0969da' },
+      { token: 'string.value.json', foreground: '0f766e' },
+      { token: 'number.json', foreground: 'b45309' },
+      { token: 'keyword.json', foreground: '7c3aed' },
+      { token: 'delimiter.bracket.json', foreground: '64748b' },
+      { token: 'delimiter.array.json', foreground: '64748b' },
+      { token: 'delimiter.colon.json', foreground: '64748b' },
+      { token: 'delimiter.comma.json', foreground: '64748b' },
+    ],
     colors: {
       'editor.background': '#fbfdff',
       'editor.foreground': '#172026',
@@ -130,7 +154,21 @@ function defineMonacoThemes(monaco: typeof Monaco): void {
   monaco.editor.defineTheme('markdown-dark', {
     base: 'vs-dark',
     inherit: true,
-    rules: [],
+    rules: [
+      { token: 'tag.html', foreground: '5eead4' },
+      { token: 'delimiter.html', foreground: '94a3b8' },
+      { token: 'metatag.html', foreground: 'c4b5fd' },
+      { token: 'attribute.name.html', foreground: 'f8c471' },
+      { token: 'attribute.value.html', foreground: '8ec5ff' },
+      { token: 'string.key.json', foreground: '8ec5ff' },
+      { token: 'string.value.json', foreground: '5eead4' },
+      { token: 'number.json', foreground: 'f8c471' },
+      { token: 'keyword.json', foreground: 'c4b5fd' },
+      { token: 'delimiter.bracket.json', foreground: '94a3b8' },
+      { token: 'delimiter.array.json', foreground: '94a3b8' },
+      { token: 'delimiter.colon.json', foreground: '94a3b8' },
+      { token: 'delimiter.comma.json', foreground: '94a3b8' },
+    ],
     colors: {
       'editor.background': '#0f1724',
       'editor.foreground': '#e5edf6',
@@ -141,7 +179,21 @@ function defineMonacoThemes(monaco: typeof Monaco): void {
   monaco.editor.defineTheme('markdown-eye', {
     base: 'vs',
     inherit: true,
-    rules: [],
+    rules: [
+      { token: 'tag.html', foreground: '557a35' },
+      { token: 'delimiter.html', foreground: '65755d' },
+      { token: 'metatag.html', foreground: '7c4d25' },
+      { token: 'attribute.name.html', foreground: '9a5319' },
+      { token: 'attribute.value.html', foreground: '1d6e7d' },
+      { token: 'string.key.json', foreground: '1d6e7d' },
+      { token: 'string.value.json', foreground: '557a35' },
+      { token: 'number.json', foreground: '9f6a13' },
+      { token: 'keyword.json', foreground: '7c4d25' },
+      { token: 'delimiter.bracket.json', foreground: '65755d' },
+      { token: 'delimiter.array.json', foreground: '65755d' },
+      { token: 'delimiter.colon.json', foreground: '65755d' },
+      { token: 'delimiter.comma.json', foreground: '65755d' },
+    ],
     colors: {
       'editor.background': '#fffef2',
       'editor.foreground': '#243024',
@@ -234,7 +286,7 @@ async function createMonacoEditor(): Promise<void> {
     theme: props.theme,
     vimEnabled: props.vimEnabled,
   });
-  monacoModule = await import('monaco-editor/esm/vs/editor/editor.api.js');
+  monacoModule = await loadMonacoEditor();
   defineMonacoThemes(monacoModule);
   monacoEditor = monacoModule.editor.create(container.value, monacoOptions(parsedConfig.value));
   syncBookmarkDecorations();
