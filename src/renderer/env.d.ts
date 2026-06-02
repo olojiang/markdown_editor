@@ -71,10 +71,13 @@ interface MarkdownSession {
     id: string;
     filePath: string | null;
     name: string;
-      scrollTop: number;
-      content?: string;
-      lastSavedContent?: string;
-      encoding?: string;
+    scrollTop: number;
+    editorScrollTop?: number;
+    previewScrollTop?: number;
+    tocScrollTop?: number;
+    content?: string;
+    lastSavedContent?: string;
+    encoding?: string;
   }[];
   activeTabId: string | null;
   bookmarks: {
@@ -90,6 +93,11 @@ interface MarkdownSession {
   }[];
   bookmarkViewMode: 'all' | 'current';
   recentFiles: string[];
+  fileScrollPositions: {
+    filePath: string;
+    scrollTop: number;
+    updatedAt: number;
+  }[];
   scrollTop: number;
   tocWidth: number;
   editorWidth: number;

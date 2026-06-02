@@ -130,6 +130,9 @@ contextBridge.exposeInMainWorld('markdownBridge', {
       filePath: string | null;
       name: string;
       scrollTop: number;
+      editorScrollTop: number;
+      previewScrollTop: number;
+      tocScrollTop: number;
       content?: string;
       lastSavedContent?: string;
       encoding?: string;
@@ -148,6 +151,11 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     }[];
     bookmarkViewMode: 'all' | 'current';
     recentFiles: string[];
+    fileScrollPositions: {
+      filePath: string;
+      scrollTop: number;
+      updatedAt: number;
+    }[];
     scrollTop: number;
     tocWidth: number;
     editorWidth: number;
@@ -163,6 +171,9 @@ contextBridge.exposeInMainWorld('markdownBridge', {
       filePath: string | null;
       name: string;
       scrollTop: number;
+      editorScrollTop: number;
+      previewScrollTop: number;
+      tocScrollTop: number;
       content?: string;
       lastSavedContent?: string;
       encoding?: string;
@@ -181,6 +192,11 @@ contextBridge.exposeInMainWorld('markdownBridge', {
     }[];
     bookmarkViewMode: 'all' | 'current';
     recentFiles: string[];
+    fileScrollPositions: {
+      filePath: string;
+      scrollTop: number;
+      updatedAt: number;
+    }[];
     scrollTop: number;
     tocWidth: number;
     editorWidth: number;

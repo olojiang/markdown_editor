@@ -190,7 +190,8 @@ describe('Electron build configuration', () => {
     expect(notarizeMacAppSource).toContain("'stapler'");
     expect(notarizeMacAppSource).toContain("'spctl'");
     expect(updateAppSource).toContain('pnpm build:mac');
-    expect(updateAppSource).toContain('source "$APPLE_KEYS_DIR/apple_key_metadata.env"');
+    expect(updateAppSource).toContain('source "$APPLE_KEY_METADATA_ENV"');
+    expect(updateAppSource).toContain('prepare_signing_keychain');
     expect(updateAppSource).toContain('--sign');
     expect(updateAppSource).toContain('NOTARIZE=false');
     expect(updateAppSource).toContain('NOTARIZE=true');

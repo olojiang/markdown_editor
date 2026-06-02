@@ -20,6 +20,9 @@ interface MarkdownSession {
     filePath: string | null;
     name: string;
     scrollTop: number;
+    editorScrollTop: number;
+    previewScrollTop: number;
+    tocScrollTop: number;
     content?: string;
     lastSavedContent?: string;
     encoding?: TextEncoding;
@@ -28,6 +31,7 @@ interface MarkdownSession {
   bookmarks: MarkdownBookmark[];
   bookmarkViewMode: 'all' | 'current';
   recentFiles: string[];
+  fileScrollPositions: FileScrollPosition[];
   scrollTop: number;
   tocWidth: number;
   editorWidth: number;
@@ -45,6 +49,12 @@ interface MarkdownBookmark {
   column: number;
   excerpt: string;
   createdAt: number;
+  updatedAt: number;
+}
+
+interface FileScrollPosition {
+  filePath: string;
+  scrollTop: number;
   updatedAt: number;
 }
 
@@ -404,6 +414,7 @@ function createDefaultSession(): MarkdownSession {
     bookmarks: [],
     bookmarkViewMode: 'all',
     recentFiles: [],
+    fileScrollPositions: [],
     scrollTop: 0,
     tocWidth: 260,
     editorWidth: 560,
@@ -430,6 +441,34 @@ function normalizeRecentFiles(recentFiles: unknown): string[] {
     }
     seen.add(key);
     return [normalized];
+  }).slice(0, 20);
+}
+
+function normalizeFileScrollPositions(positions: unknown): FileScrollPosition[] {
+  if (!Array.isArray(positions)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return positions.flatMap((position): FileScrollPosition[] => {
+    if (!position || typeof position !== 'object') {
+      return [];
+    }
+    const candidate = position as Partial<FileScrollPosition>;
+    if (typeof candidate.filePath !== 'string') {
+      return [];
+    }
+    const filePath = normalizeRecentFilePath(candidate.filePath);
+    const key = recentFileKey(filePath);
+    if (!filePath || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [{
+      filePath,
+      scrollTop: typeof candidate.scrollTop === 'number' ? Math.max(0, candidate.scrollTop) : 0,
+      updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
+    }];
   }).slice(0, 20);
 }
 
@@ -549,6 +588,10 @@ function tabIdForPath(filePath: string): string {
   return `file:${filePath}`;
 }
 
+function normalizeScrollTop(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
 function normalizeSessionTabs(tabs: unknown): MarkdownSession['tabs'] {
   if (!Array.isArray(tabs)) {
     return [];
@@ -571,11 +614,15 @@ function normalizeSessionTabs(tabs: unknown): MarkdownSession['tabs'] {
     }
     seen.add(id);
     const fallbackName = candidate.filePath ? path.basename(candidate.filePath) : '未命名.md';
+    const scrollTop = normalizeScrollTop(candidate.scrollTop);
     return [{
       id,
       filePath: candidate.filePath ?? null,
       name: typeof candidate.name === 'string' ? candidate.name : fallbackName,
-      scrollTop: typeof candidate.scrollTop === 'number' ? Math.max(0, candidate.scrollTop) : 0,
+      scrollTop,
+      editorScrollTop: normalizeScrollTop(candidate.editorScrollTop, scrollTop),
+      previewScrollTop: normalizeScrollTop(candidate.previewScrollTop, scrollTop),
+      tocScrollTop: normalizeScrollTop(candidate.tocScrollTop),
       content: typeof candidate.content === 'string' ? candidate.content : undefined,
       lastSavedContent: typeof candidate.lastSavedContent === 'string' ? candidate.lastSavedContent : undefined,
       encoding: normalizeTextEncoding(candidate.encoding),
@@ -603,6 +650,7 @@ async function readSession(): Promise<MarkdownSession> {
       bookmarks: normalizeBookmarks(parsed.bookmarks),
       bookmarkViewMode: normalizeBookmarkViewMode(parsed.bookmarkViewMode),
       recentFiles,
+      fileScrollPositions: normalizeFileScrollPositions(parsed.fileScrollPositions),
       scrollTop: typeof parsed.scrollTop === 'number' ? parsed.scrollTop : 0,
       tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
       editorWidth: typeof parsed.editorWidth === 'number' ? parsed.editorWidth : 560,
@@ -619,12 +667,14 @@ async function saveSession(session: MarkdownSession): Promise<void> {
   await fs.mkdir(path.dirname(sessionFilePath()), { recursive: true });
   const recentFiles = normalizeRecentFiles(session.recentFiles);
   const bookmarks = normalizeBookmarks(session.bookmarks);
+  const fileScrollPositions = normalizeFileScrollPositions(session.fileScrollPositions);
   logRecentFilesDiagnostics('save-session', session.recentFiles, recentFiles);
   await fs.writeFile(sessionFilePath(), JSON.stringify({
     ...session,
     bookmarks,
     bookmarkViewMode: normalizeBookmarkViewMode(session.bookmarkViewMode),
     recentFiles,
+    fileScrollPositions,
   }, null, 2), 'utf8');
 }
 
@@ -632,12 +682,14 @@ function saveSessionSync(session: MarkdownSession): void {
   fsSync.mkdirSync(path.dirname(sessionFilePath()), { recursive: true });
   const recentFiles = normalizeRecentFiles(session.recentFiles);
   const bookmarks = normalizeBookmarks(session.bookmarks);
+  const fileScrollPositions = normalizeFileScrollPositions(session.fileScrollPositions);
   logRecentFilesDiagnostics('save-session-sync', session.recentFiles, recentFiles);
   fsSync.writeFileSync(sessionFilePath(), JSON.stringify({
     ...session,
     bookmarks,
     bookmarkViewMode: normalizeBookmarkViewMode(session.bookmarkViewMode),
     recentFiles,
+    fileScrollPositions,
   }, null, 2), 'utf8');
 }
 

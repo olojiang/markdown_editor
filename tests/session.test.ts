@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addFileScrollPosition,
   addRecentFile,
   createDefaultSession,
+  findFileScrollPosition,
+  maxFileScrollPositions,
   maxRecentFiles,
   mergeSession,
   normalizeBookmarks,
+  normalizeFileScrollPositions,
+  normalizeSessionTabs,
   removeRecentFile,
 } from '@/renderer/lib/session';
 
@@ -17,6 +22,7 @@ describe('session helpers', () => {
       bookmarks: [],
       bookmarkViewMode: 'all',
       recentFiles: [],
+      fileScrollPositions: [],
       scrollTop: 0,
       tocWidth: 260,
       editorWidth: 560,
@@ -40,6 +46,7 @@ describe('session helpers', () => {
       bookmarks: [],
       bookmarkViewMode: 'all',
       recentFiles: [],
+      fileScrollPositions: [],
       scrollTop: 42,
       tocWidth: 260,
       editorWidth: 560,
@@ -63,6 +70,34 @@ describe('session helpers', () => {
     expect(mergeSession({ theme: 'unknown' } as never, {})).toEqual(
       expect.objectContaining({ theme: 'light' }),
     );
+  });
+
+  it('normalizes separate tab scroll positions with legacy fallback', () => {
+    expect(normalizeSessionTabs([
+      { id: 'file:/docs/a.md', filePath: '/docs/a.md', name: 'a.md', scrollTop: 42 },
+      {
+        id: 'file:/docs/b.md',
+        filePath: '/docs/b.md',
+        name: 'b.md',
+        scrollTop: 10,
+        editorScrollTop: 20,
+        previewScrollTop: 30,
+        tocScrollTop: 40,
+      },
+    ])).toEqual([
+      expect.objectContaining({
+        scrollTop: 42,
+        editorScrollTop: 42,
+        previewScrollTop: 42,
+        tocScrollTop: 0,
+      }),
+      expect.objectContaining({
+        scrollTop: 10,
+        editorScrollTop: 20,
+        previewScrollTop: 30,
+        tocScrollTop: 40,
+      }),
+    ]);
   });
 
   it('normalizes bookmarks and remembers the bookmark view mode', () => {
@@ -168,5 +203,32 @@ describe('session helpers', () => {
     ], 'file:///docs/remote%20image.md')).toEqual([
       '/docs/other.md',
     ]);
+  });
+
+  it('keeps file scroll positions as a capped LRU list', () => {
+    const positions = Array.from({ length: 25 }, (_, index) => `/tmp/${index}.md`)
+      .reduce<ReturnType<typeof addFileScrollPosition>>(
+        (current, filePath, index) => addFileScrollPosition(current, filePath, index * 10, index),
+        [],
+      );
+
+    expect(positions).toHaveLength(maxFileScrollPositions);
+    expect(positions[0]).toMatchObject({ filePath: '/tmp/24.md', scrollTop: 240 });
+    expect(positions).not.toEqual(expect.arrayContaining([expect.objectContaining({ filePath: '/tmp/0.md' })]));
+    expect(addFileScrollPosition(positions, 'file:///tmp/20.md', 999)[0]).toMatchObject({
+      filePath: '/tmp/20.md',
+      scrollTop: 999,
+    });
+  });
+
+  it('normalizes and finds file scroll positions by path', () => {
+    const positions = normalizeFileScrollPositions([
+      { filePath: 'file:///docs/remote%20image.md', scrollTop: 42, updatedAt: 1 },
+      { filePath: '/docs/REMOTE IMAGE.md', scrollTop: 100, updatedAt: 2 },
+      { filePath: '', scrollTop: 10, updatedAt: 3 },
+    ]);
+
+    expect(positions).toEqual([{ filePath: '/docs/remote image.md', scrollTop: 42, updatedAt: 1 }]);
+    expect(findFileScrollPosition(positions, '/docs/REMOTE IMAGE.md')).toMatchObject({ scrollTop: 42 });
   });
 });

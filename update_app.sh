@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APPLE_KEYS_DIR="${APPLE_KEYS_DIR:-/Users/hunter/Workspace/apple_keys}"
+APPLE_KEY_METADATA_ENV="$APPLE_KEYS_DIR/apple_key_metadata.env"
+APPLE_KEY_SECRETS_ENV="$APPLE_KEYS_DIR/apple_key_secrets.env"
 APP_NAME="Markdown 纪.app"
 APP_BUNDLE_ID="com.olojiang.markdowneditor"
 APP_PROCESS_NAME="Markdown 纪"
@@ -46,19 +48,105 @@ done
 
 cd "$ROOT_DIR"
 
-if [[ ! -f "$APPLE_KEYS_DIR/apple_key_metadata.env" ]]; then
-  echo "Missing Apple signing metadata: $APPLE_KEYS_DIR/apple_key_metadata.env" >&2
-  exit 1
-fi
+require_file() {
+  local path="$1"
+  local label="$2"
+  if [[ ! -f "$path" ]]; then
+    echo "Missing $label: $path" >&2
+    exit 1
+  fi
+}
+
+require_value() {
+  local value="$1"
+  local label="$2"
+  if [[ -z "$value" ]]; then
+    echo "Missing $label" >&2
+    exit 1
+  fi
+}
+
+require_file "$APPLE_KEY_METADATA_ENV" "Apple signing metadata"
+require_file "$APPLE_KEY_SECRETS_ENV" "Apple signing secrets"
 
 # shellcheck disable=SC1090
-source "$APPLE_KEYS_DIR/apple_key_metadata.env"
+source "$APPLE_KEY_METADATA_ENV"
+# shellcheck disable=SC1090
+source "$APPLE_KEY_SECRETS_ENV"
+
+KEYCHAIN_NAME="${KEYCHAIN_NAME:-apple-build-signing.keychain-db}"
+KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-${APPLE_CERTIFICATE_PASSWORD:-}}"
+KEYCHAIN_PATH="${MAC_CODESIGN_KEYCHAIN:-$HOME/Library/Keychains/$KEYCHAIN_NAME}"
+
+require_value "${APPLE_CERTIFICATE_ID:-}" "APPLE_CERTIFICATE_ID"
+require_value "${APPLE_CERTIFICATE_PASSWORD:-}" "APPLE_CERTIFICATE_PASSWORD"
+require_value "${KEYCHAIN_PASSWORD:-}" "KEYCHAIN_PASSWORD or APPLE_CERTIFICATE_PASSWORD"
+require_value "${MODERN_P12:-}" "MODERN_P12"
+require_value "${APPLE_API_KEY:-}" "APPLE_API_KEY"
+require_value "${APPLE_API_ISSUER:-}" "APPLE_API_ISSUER"
+require_value "${APPLE_API_KEY_PATH:-}" "APPLE_API_KEY_PATH"
+require_file "$MODERN_P12" "modern Apple signing PKCS#12"
+
+identity_available() {
+  security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$APPLE_CERTIFICATE_ID" >/dev/null
+}
+
+prepare_signing_keychain() {
+  if [[ -f "$KEYCHAIN_PATH" ]]; then
+    echo "Using existing signing keychain: $KEYCHAIN_PATH"
+  else
+    echo "Creating signing keychain: $KEYCHAIN_PATH"
+    mkdir -p "$(dirname "$KEYCHAIN_PATH")"
+    security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+  fi
+
+  security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+  security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+
+  local existing_keychains=()
+  while IFS= read -r keychain; do
+    existing_keychains+=("$keychain")
+  done < <(security list-keychains -d user | sed 's/^[[:space:]]*"\(.*\)"[[:space:]]*$/\1/')
+
+  if ! printf '%s\n' "${existing_keychains[@]}" | grep -Fx "$KEYCHAIN_PATH" >/dev/null; then
+    security list-keychains -d user -s "$KEYCHAIN_PATH" "${existing_keychains[@]}"
+  fi
+
+  if identity_available; then
+    echo "Signing identity already present in keychain."
+  else
+    echo "Importing signing identity into keychain."
+    security import "$MODERN_P12" \
+      -f pkcs12 \
+      -k "$KEYCHAIN_PATH" \
+      -P "$APPLE_CERTIFICATE_PASSWORD" \
+      -T /usr/bin/codesign >/dev/null
+  fi
+
+  security set-key-partition-list \
+    -S apple-tool:,apple:,codesign: \
+    -s \
+    -k "$KEYCHAIN_PASSWORD" \
+    "$KEYCHAIN_PATH" >/dev/null
+
+  if ! identity_available; then
+    echo "Expected signing identity not found after keychain setup: $APPLE_CERTIFICATE_ID" >&2
+    security find-identity -v -p codesigning "$KEYCHAIN_PATH" >&2 || true
+    exit 1
+  fi
+
+  echo "Signing keychain is ready for non-interactive codesign."
+}
+
+require_file "$APPLE_API_KEY_PATH" "Apple notarization API key"
+
+prepare_signing_keychain
 
 export APPLE_API_KEY
 export APPLE_API_ISSUER
 export APPLE_API_KEY_PATH
 export MAC_CODESIGN_IDENTITY="$APPLE_CERTIFICATE_ID"
-export MAC_CODESIGN_KEYCHAIN="${MAC_CODESIGN_KEYCHAIN:-$HOME/Library/Keychains/apple-build-signing.keychain-db}"
+export MAC_CODESIGN_KEYCHAIN="$KEYCHAIN_PATH"
 export MAC_CODESIGN_ENTITLEMENTS="${MAC_CODESIGN_ENTITLEMENTS:-$ROOT_DIR/build/entitlements.mac.plist}"
 
 pnpm build:mac

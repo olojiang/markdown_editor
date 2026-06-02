@@ -20,8 +20,10 @@ import {
   type HeadingNode,
 } from '@/renderer/lib/markdown';
 import {
+  addFileScrollPosition,
   addRecentFile,
   createDefaultSession,
+  findFileScrollPosition,
   mergeSession,
   normalizeBookmarks,
   normalizeRecentFiles,
@@ -52,6 +54,9 @@ interface OpenTab {
   source: string;
   lastSavedContent: string;
   scrollTop: number;
+  editorScrollTop: number;
+  previewScrollTop: number;
+  tocScrollTop: number;
 }
 
 interface TabContextMenu {
@@ -230,6 +235,7 @@ const previewZoom = ref(1);
 const activeMermaidDiagram = shallowRef<ActiveMermaidDiagram | null>(null);
 const activeImagePreview = shallowRef<ActiveImagePreview | null>(null);
 const preview = ref<HTMLElement | null>(null);
+const tocPanel = ref<HTMLElement | null>(null);
 const editor = ref<EditorSurface | null>(null);
 const status = ref('请选择或打开一个支持的文档');
 const activeEditorLine = ref(1);
@@ -951,7 +957,25 @@ async function jumpToCursorHistory(direction: -1 | 1): Promise<void> {
 }
 
 function activeScrollTop(): number {
-  return preview.value?.scrollTop ?? activeTab.value?.scrollTop ?? session.value.scrollTop;
+  if (hasPreviewPane.value && !session.value.previewHidden && preview.value) {
+    return preview.value.scrollTop;
+  }
+  if (isEditorVisible.value && editor.value) {
+    return editorScrollTop();
+  }
+  return activeTab.value?.scrollTop ?? session.value.scrollTop;
+}
+
+function activeEditorScrollTop(): number {
+  return editor.value ? editorScrollTop() : activeTab.value?.editorScrollTop ?? activeTab.value?.scrollTop ?? session.value.scrollTop;
+}
+
+function activePreviewScrollTop(): number {
+  return preview.value?.scrollTop ?? activeTab.value?.previewScrollTop ?? activeTab.value?.scrollTop ?? session.value.scrollTop;
+}
+
+function activeTocScrollTop(): number {
+  return tocPanel.value?.scrollTop ?? activeTab.value?.tocScrollTop ?? 0;
 }
 
 function syncActiveTabState(): void {
@@ -964,6 +988,9 @@ function syncActiveTabState(): void {
   tab.source = source.value;
   tab.lastSavedContent = lastSavedContent.value;
   tab.scrollTop = activeScrollTop();
+  tab.editorScrollTop = activeEditorScrollTop();
+  tab.previewScrollTop = activePreviewScrollTop();
+  tab.tocScrollTop = activeTocScrollTop();
 }
 
 function serializedOpenTabs(): MarkdownSession['tabs'] {
@@ -972,6 +999,9 @@ function serializedOpenTabs(): MarkdownSession['tabs'] {
     filePath: tab.file.path,
     name: tab.file.name,
     scrollTop: tab.scrollTop,
+    editorScrollTop: tab.editorScrollTop,
+    previewScrollTop: tab.previewScrollTop,
+    tocScrollTop: tab.tocScrollTop,
     content: tab.file.path ? undefined : tab.source,
     lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
     encoding: normalizeTextEncoding(tab.file.encoding),
@@ -1013,6 +1043,9 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
       filePath: tab.filePath,
       name: tab.name,
       scrollTop: tab.scrollTop,
+      editorScrollTop: tab.editorScrollTop,
+      previewScrollTop: tab.previewScrollTop,
+      tocScrollTop: tab.tocScrollTop,
       content: tab.content,
       lastSavedContent: tab.lastSavedContent,
       encoding: tab.encoding,
@@ -1021,6 +1054,7 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
     bookmarks: normalized.bookmarks.map((bookmark) => ({ ...bookmark })),
     bookmarkViewMode: normalized.bookmarkViewMode,
     recentFiles: [...normalized.recentFiles],
+    fileScrollPositions: normalized.fileScrollPositions.map((position) => ({ ...position })),
     scrollTop: normalized.scrollTop,
     tocWidth: normalized.tocWidth,
     editorWidth: normalized.editorWidth,
@@ -1367,18 +1401,34 @@ function persistOpenedFile(file: MarkdownFile, scrollTop: number, tabId = file.p
     tabs: serializedOpenTabs().map((tab) => ({
       ...tab,
       scrollTop: tab.id === tabId ? scrollTop : tab.scrollTop,
+      editorScrollTop: tab.id === tabId ? scrollTop : tab.editorScrollTop,
+      previewScrollTop: tab.id === tabId ? scrollTop : tab.previewScrollTop,
     })),
     activeTabId: tabId,
     recentFiles: addRecentFile(session.value.recentFiles, file.path),
+    fileScrollPositions: addFileScrollPosition(session.value.fileScrollPositions, file.path, scrollTop),
     scrollTop,
   }, { syncActive: false });
 }
 
 function rememberScroll(scrollTop: number): void {
+  const filePath = currentFile.value?.path ?? null;
   if (activeTab.value) {
     activeTab.value.scrollTop = scrollTop;
+    activeTab.value.editorScrollTop = activeEditorScrollTop();
+    activeTab.value.previewScrollTop = activePreviewScrollTop();
+    activeTab.value.tocScrollTop = activeTocScrollTop();
   }
-  persistTabSession({ scrollTop }, { deferred: true });
+  persistTabSession({
+    scrollTop,
+    fileScrollPositions: filePath
+      ? addFileScrollPosition(session.value.fileScrollPositions, filePath, scrollTop)
+      : session.value.fileScrollPositions,
+  }, { deferred: true });
+}
+
+function onTocScroll(): void {
+  rememberScroll(activeScrollTop());
 }
 
 function flattenHeadingIds(nodes: HeadingNode[]): Set<string> {
@@ -1694,10 +1744,10 @@ function syncScroll(from: 'editor' | 'preview', lock = true): void {
   }
 }
 
-function onEditorScroll(event: Event): void {
+function onEditorScroll(): void {
   syncScroll('editor');
   updateActiveHeadingFromPreview();
-  rememberScroll(preview.value?.scrollTop ?? (event.target as HTMLElement).scrollTop);
+  rememberScroll(activeScrollTop());
 }
 
 function onEditorFocusLineChange(): void {
@@ -1707,14 +1757,14 @@ function onEditorFocusLineChange(): void {
     rememberCursorPosition();
     syncPreviewToLine(line);
     updateActiveHeadingFromSourceLine(line);
-    rememberScroll(preview.value?.scrollTop ?? editorScrollTop());
+    rememberScroll(activeScrollTop());
   });
 }
 
 function onPreviewScroll(event: Event): void {
   updateActiveHeadingFromPreview();
-  rememberScroll((event.target as HTMLElement).scrollTop);
   syncScroll('preview');
+  rememberScroll((event.target as HTMLElement).scrollTop);
 }
 
 function updateActiveHeadingFromSourceLine(line: number): void {
@@ -1776,6 +1826,50 @@ function jumpToHeading(id: string): void {
   rememberScroll(container.scrollTop);
 }
 
+function rememberedFileScrollTop(filePath: string | null): number | null {
+  if (!filePath) {
+    return null;
+  }
+  return findFileScrollPosition(session.value.fileScrollPositions, filePath)?.scrollTop ?? null;
+}
+
+function restoreTocScroll(scrollTop: number): void {
+  if (tocPanel.value) {
+    tocPanel.value.scrollTop = scrollTop;
+  }
+  void nextTick(() => {
+    if (tocPanel.value) {
+      tocPanel.value.scrollTop = scrollTop;
+    }
+    window.requestAnimationFrame(() => {
+      if (tocPanel.value) {
+        tocPanel.value.scrollTop = scrollTop;
+      }
+    });
+  });
+}
+
+function restoreDocumentScroll(tab: Pick<OpenTab, 'editorScrollTop' | 'previewScrollTop' | 'scrollTop' | 'tocScrollTop'>): void {
+  const editorTop = tab.editorScrollTop ?? tab.scrollTop;
+  const previewTop = tab.previewScrollTop ?? tab.scrollTop;
+  if (preview.value) {
+    preview.value.scrollTop = previewTop;
+  }
+  setEditorScrollTop(editorTop);
+  restoreTocScroll(tab.tocScrollTop ?? 0);
+  updateActiveHeadingFromPreview();
+}
+
+function tabSwitchShortcut(index: number): string | null {
+  return index >= 0 && index < 9 ? `${shortcutModifier.value}+${index + 1}` : null;
+}
+
+function tabTitle(tab: OpenTab, index: number): string {
+  const path = tab.file.path ?? '未保存的新文档';
+  const shortcut = tabSwitchShortcut(index);
+  return shortcut ? `${path}\n${shortcut} 切换到此标签页` : path;
+}
+
 function activateTab(tabId: string): void {
   syncActiveTabState();
   const tab = openTabs.value.find((item) => item.id === tabId);
@@ -1792,23 +1886,24 @@ function activateTab(tabId: string): void {
   persistTabSession({
     filePath: tab.file.path,
     activeTabId: tab.id,
+    fileScrollPositions: tab.file.path
+      ? addFileScrollPosition(session.value.fileScrollPositions, tab.file.path, tab.scrollTop)
+      : session.value.fileScrollPositions,
     scrollTop: tab.scrollTop,
     ...forcedEditorPatchForFile(tab.file),
   }, { syncActive: false });
   void refreshImageAssets(tab.file.path ?? undefined);
   void nextTick(() => {
-    if (preview.value) {
-      preview.value.scrollTop = tab.scrollTop;
-    }
-    syncScroll('preview', false);
-    updateActiveHeadingFromPreview();
+    restoreDocumentScroll(tab);
     void renderMermaid();
   });
 }
 
 function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolean; persist?: boolean } = {}): void {
   const normalizedFile = setFileEncoding(file, file.encoding);
-  const nextScrollTop = options.external ? 0 : scrollTop;
+  const requestedScrollTop = options.external ? 0 : scrollTop;
+  const rememberedScrollTop = options.external ? 0 : rememberedFileScrollTop(normalizedFile.path);
+  let nextScrollTop = requestedScrollTop > 0 ? requestedScrollTop : rememberedScrollTop ?? requestedScrollTop;
   if (options.external) {
     session.value = mergeSession(session.value, {
       editorVisible: false,
@@ -1821,10 +1916,16 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
   const tabId = normalizedFile.path ? tabIdForPath(normalizedFile.path) : nextDraftId();
   const existing = openTabs.value.find((tab) => tab.id === tabId);
   if (existing) {
+    nextScrollTop = options.external ? 0 : existing.scrollTop;
     existing.file = normalizedFile;
     existing.source = normalizedFile.content;
     existing.lastSavedContent = normalizedFile.content;
     existing.scrollTop = nextScrollTop;
+    if (options.external) {
+      existing.editorScrollTop = 0;
+      existing.previewScrollTop = 0;
+      existing.tocScrollTop = 0;
+    }
   } else {
     openTabs.value.push({
       id: tabId,
@@ -1832,6 +1933,9 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
       source: normalizedFile.content,
       lastSavedContent: normalizedFile.content,
       scrollTop: nextScrollTop,
+      editorScrollTop: nextScrollTop,
+      previewScrollTop: nextScrollTop,
+      tocScrollTop: 0,
     });
   }
   activeTabId.value = tabId;
@@ -1844,11 +1948,12 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
   status.value = normalizedFile.path ?? '未保存的新文档';
   void refreshImageAssets(normalizedFile.path ?? undefined);
   void nextTick(() => {
-    if (preview.value) {
-      preview.value.scrollTop = nextScrollTop;
-    }
-    syncScroll('preview', false);
-    updateActiveHeadingFromPreview();
+    restoreDocumentScroll(activeTab.value ?? {
+      scrollTop: nextScrollTop,
+      editorScrollTop: nextScrollTop,
+      previewScrollTop: nextScrollTop,
+      tocScrollTop: 0,
+    });
   });
 }
 
@@ -2079,6 +2184,9 @@ function createNewMarkdownTab(content = '', name?: string): void {
     source: content,
     lastSavedContent: '',
     scrollTop: 0,
+    editorScrollTop: 0,
+    previewScrollTop: 0,
+    tocScrollTop: 0,
   };
   openTabs.value.push(tab);
   activeTabId.value = tab.id;
@@ -2149,11 +2257,7 @@ function applyFreshFileContent(file: MarkdownFile, message: string): void {
   }, { syncActive: false, deferred: true });
   void refreshImageAssets(file.path ?? undefined);
   void nextTick(() => {
-    if (preview.value) {
-      preview.value.scrollTop = scrollTop;
-    }
-    syncScroll('preview', false);
-    updateActiveHeadingFromPreview();
+    restoreDocumentScroll(tab);
     void renderMermaid();
   });
 }
@@ -3367,6 +3471,14 @@ function onKeyDown(event: KeyboardEvent): void {
   }
 
   const key = event.key.toLowerCase();
+  if (!event.altKey && !event.shiftKey && /^[1-9]$/.test(key)) {
+    const tab = openTabs.value[Number(key) - 1];
+    if (tab) {
+      event.preventDefault();
+      activateTab(tab.id);
+    }
+    return;
+  }
   if (event.ctrlKey && !event.altKey && !event.shiftKey && (key === '[' || key === ']')) {
     event.preventDefault();
     void jumpToCursorHistory(key === '[' ? -1 : 1);
@@ -4104,6 +4216,9 @@ async function restoreSessionTabs(): Promise<boolean> {
         source: content,
         lastSavedContent: tab.lastSavedContent ?? '',
         scrollTop: tab.scrollTop,
+        editorScrollTop: tab.editorScrollTop,
+        previewScrollTop: tab.previewScrollTop,
+        tocScrollTop: tab.tocScrollTop,
       } satisfies OpenTab;
     }
     try {
@@ -4114,6 +4229,9 @@ async function restoreSessionTabs(): Promise<boolean> {
         source: file.content,
         lastSavedContent: file.content,
         scrollTop: tab.scrollTop,
+        editorScrollTop: tab.editorScrollTop,
+        previewScrollTop: tab.previewScrollTop,
+        tocScrollTop: tab.tocScrollTop,
       } satisfies OpenTab;
     } catch {
       return null;
@@ -4141,6 +4259,9 @@ async function restoreSessionTabs(): Promise<boolean> {
       filePath: tab.file.path,
       name: tab.file.name,
       scrollTop: tab.scrollTop,
+      editorScrollTop: tab.editorScrollTop,
+      previewScrollTop: tab.previewScrollTop,
+      tocScrollTop: tab.tocScrollTop,
       content: tab.file.path ? undefined : tab.source,
       lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
       encoding: normalizeTextEncoding(tab.file.encoding),
@@ -4151,11 +4272,7 @@ async function restoreSessionTabs(): Promise<boolean> {
   });
   void refreshImageAssets(active.file.path ?? undefined);
   void nextTick(() => {
-    if (preview.value) {
-      preview.value.scrollTop = active.scrollTop;
-    }
-    syncScroll('preview', false);
-    updateActiveHeadingFromPreview();
+    restoreDocumentScroll(active);
   });
   saveSessionNow(session.value);
   return true;
@@ -4163,7 +4280,8 @@ async function restoreSessionTabs(): Promise<boolean> {
 
 onMounted(async () => {
   isRestoringStartup = true;
-  session.value = normalizeSession((await bridge?.getSession()) ?? createDefaultSession());
+  const savedSession = await bridge?.getSession();
+  session.value = normalizeSession(savedSession as Partial<MarkdownSession> | null | undefined);
   removeExternalOpenListener = bridge?.onExternalMarkdownFile(queueMarkdownOpenRequest);
   removeMarkdownFileChangedListener = bridge?.onMarkdownFileChanged(onMarkdownFileChanged);
   removeToggleEditorShortcutListener = bridge?.onToggleEditorShortcut(toggleEditor);
@@ -4455,13 +4573,13 @@ onBeforeUnmount(() => {
 
     <nav class="tabbar" aria-label="打开的文件">
       <div
-        v-for="tab in openTabs"
+        v-for="(tab, index) in openTabs"
         :key="tab.id"
         class="tab-button"
         role="button"
         tabindex="0"
         :class="{ active: tab.id === activeTabId, dirty: tab.source !== tab.lastSavedContent }"
-        :title="tab.file.path ?? '未保存的新文档'"
+        :title="tabTitle(tab, index)"
         :data-testid="`tab-${tab.file.name}`"
         draggable="true"
         @click="activateTab(tab.id)"
@@ -4514,7 +4632,7 @@ onBeforeUnmount(() => {
     </div>
 
     <section class="workspace" :style="gridStyle">
-      <aside class="toc-panel" data-testid="toc">
+      <aside ref="tocPanel" class="toc-panel" data-testid="toc" @scroll="onTocScroll">
         <div class="panel-toolbar">
           <div class="toc-toolbar-row">
             <h2>目录</h2>

@@ -7,6 +7,7 @@ import {
 export type ThemeMode = 'light' | 'dark' | 'eye';
 export type BookmarkViewMode = 'all' | 'current';
 export const maxRecentFiles = 20;
+export const maxFileScrollPositions = 20;
 export const maxBookmarks = 500;
 
 export interface MarkdownBookmark {
@@ -26,9 +27,18 @@ export interface MarkdownSessionTab {
   filePath: string | null;
   name: string;
   scrollTop: number;
+  editorScrollTop: number;
+  previewScrollTop: number;
+  tocScrollTop: number;
   content?: string;
   lastSavedContent?: string;
   encoding?: string;
+}
+
+export interface FileScrollPosition {
+  filePath: string;
+  scrollTop: number;
+  updatedAt: number;
 }
 
 export interface MarkdownSession {
@@ -38,6 +48,7 @@ export interface MarkdownSession {
   bookmarks: MarkdownBookmark[];
   bookmarkViewMode: BookmarkViewMode;
   recentFiles: string[];
+  fileScrollPositions: FileScrollPosition[];
   scrollTop: number;
   tocWidth: number;
   editorWidth: number;
@@ -55,6 +66,7 @@ export function createDefaultSession(): MarkdownSession {
     bookmarks: [],
     bookmarkViewMode: 'all',
     recentFiles: [],
+    fileScrollPositions: [],
     scrollTop: 0,
     tocWidth: 260,
     editorWidth: 560,
@@ -102,6 +114,60 @@ export function removeRecentFile(recentFiles: unknown, filePath: string): string
   return normalizeRecentFiles(recentFiles).filter((recent) => recentFileKey(recent) !== removedKey);
 }
 
+export function normalizeFileScrollPositions(positions: unknown): FileScrollPosition[] {
+  if (!Array.isArray(positions)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return positions.flatMap((position): FileScrollPosition[] => {
+    if (!position || typeof position !== 'object') {
+      return [];
+    }
+    const candidate = position as Partial<FileScrollPosition>;
+    if (typeof candidate.filePath !== 'string') {
+      return [];
+    }
+    const filePath = normalizeRecentFilePath(candidate.filePath);
+    const key = recentFileKey(filePath);
+    if (!filePath || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [{
+      filePath,
+      scrollTop: typeof candidate.scrollTop === 'number' ? Math.max(0, candidate.scrollTop) : 0,
+      updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
+    }];
+  }).slice(0, maxFileScrollPositions);
+}
+
+export function addFileScrollPosition(
+  positions: unknown,
+  filePath: string,
+  scrollTop: number,
+  updatedAt = Date.now(),
+): FileScrollPosition[] {
+  const normalizedFilePath = normalizeRecentFilePath(filePath);
+  if (!normalizedFilePath) {
+    return normalizeFileScrollPositions(positions);
+  }
+
+  return normalizeFileScrollPositions([
+    {
+      filePath: normalizedFilePath,
+      scrollTop: Math.max(0, scrollTop),
+      updatedAt,
+    },
+    ...normalizeFileScrollPositions(positions),
+  ]);
+}
+
+export function findFileScrollPosition(positions: unknown, filePath: string): FileScrollPosition | null {
+  const key = recentFileKey(filePath);
+  return normalizeFileScrollPositions(positions).find((position) => recentFileKey(position.filePath) === key) ?? null;
+}
+
 export function normalizeRecentFilePath(filePath: string): string {
   let normalized = filePath.trim();
   if (normalized.startsWith('file://')) {
@@ -122,6 +188,10 @@ export function normalizeRecentFilePath(filePath: string): string {
 
 function recentFileKey(filePath: string): string {
   return normalizeRecentFilePath(filePath).toLocaleLowerCase();
+}
+
+function normalizeScrollTop(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
 function bookmarkTargetKey(bookmark: Pick<MarkdownBookmark, 'column' | 'filePath' | 'lineNumber' | 'tabId'>): string {
@@ -200,11 +270,15 @@ export function normalizeSessionTabs(tabs: unknown): MarkdownSessionTab[] {
     }
     seen.add(id);
     const fallbackName = candidate.filePath?.split(/[\\/]/).pop() ?? '未命名.md';
+    const scrollTop = normalizeScrollTop(candidate.scrollTop);
     return [{
       id,
       filePath: candidate.filePath ?? null,
       name: typeof candidate.name === 'string' ? candidate.name : fallbackName,
-      scrollTop: typeof candidate.scrollTop === 'number' ? Math.max(0, candidate.scrollTop) : 0,
+      scrollTop,
+      editorScrollTop: normalizeScrollTop(candidate.editorScrollTop, scrollTop),
+      previewScrollTop: normalizeScrollTop(candidate.previewScrollTop, scrollTop),
+      tocScrollTop: normalizeScrollTop(candidate.tocScrollTop),
       content: typeof candidate.content === 'string' ? candidate.content : undefined,
       lastSavedContent: typeof candidate.lastSavedContent === 'string' ? candidate.lastSavedContent : undefined,
       encoding: typeof candidate.encoding === 'string' ? candidate.encoding : undefined,
@@ -227,6 +301,7 @@ export function normalizeSession(session: Partial<MarkdownSession> | null | unde
     bookmarks: normalizeBookmarks(session?.bookmarks),
     bookmarkViewMode: normalizeBookmarkViewMode(session?.bookmarkViewMode),
     recentFiles: normalizeRecentFiles(session?.recentFiles),
+    fileScrollPositions: normalizeFileScrollPositions(session?.fileScrollPositions),
     scrollTop: typeof session?.scrollTop === 'number' ? session.scrollTop : 0,
     tocWidth: Math.max(180, Math.min(520, typeof session?.tocWidth === 'number' ? session.tocWidth : 260)),
     editorWidth: Math.max(320, Math.min(1200, typeof session?.editorWidth === 'number' ? session.editorWidth : 560)),
@@ -253,6 +328,9 @@ export function mergeSession(
       ? normalized.bookmarkViewMode
       : normalizeBookmarkViewMode(patch.bookmarkViewMode),
     recentFiles: patch.recentFiles === undefined ? normalized.recentFiles : normalizeRecentFiles(patch.recentFiles),
+    fileScrollPositions: patch.fileScrollPositions === undefined
+      ? normalized.fileScrollPositions
+      : normalizeFileScrollPositions(patch.fileScrollPositions),
     scrollTop: patch.scrollTop === undefined ? normalized.scrollTop : patch.scrollTop,
     editorPreferences: patch.editorPreferences === undefined
       ? normalized.editorPreferences

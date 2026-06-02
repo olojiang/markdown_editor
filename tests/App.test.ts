@@ -652,7 +652,12 @@ describe('App', () => {
 
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledTimes(1);
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
-      expect.objectContaining({ scrollTop: preview.scrollTop }),
+      expect.objectContaining({
+        scrollTop: preview.scrollTop,
+        fileScrollPositions: expect.arrayContaining([
+          expect.objectContaining({ filePath: openFile.path, scrollTop: preview.scrollTop }),
+        ]),
+      }),
     );
   });
 
@@ -1055,6 +1060,16 @@ describe('App', () => {
 
     expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="tab-recent.md"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="tab-readme.md"]').attributes('title')).toContain(`${expectedShortcut('1')} 切换到此标签页`);
+    expect(wrapper.get('[data-testid="tab-recent.md"]').attributes('title')).toContain(`${expectedShortcut('2')} 切换到此标签页`);
+    expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', metaKey: true }));
+    await vi.dynamicImportSettled();
+    expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', openFile.content);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2', metaKey: true }));
+    await vi.dynamicImportSettled();
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
 
     await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
@@ -1067,6 +1082,10 @@ describe('App', () => {
           expect.objectContaining({ filePath: openFile.path }),
           expect.objectContaining({ filePath: recentFile.path }),
         ]),
+        fileScrollPositions: [
+          expect.objectContaining({ filePath: openFile.path }),
+          expect.objectContaining({ filePath: recentFile.path }),
+        ],
       }),
     );
   });
@@ -1105,6 +1124,81 @@ describe('App', () => {
         tabs: expect.arrayContaining([
           expect.objectContaining({ filePath: openFile.path, scrollTop: 10 }),
           expect.objectContaining({ filePath: secondFile.path, scrollTop: 24 }),
+        ]),
+      }),
+    );
+  });
+
+  it('restores editor, preview, and table-of-contents scroll independently when switching tabs', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: secondFile.path,
+      tabs: [
+        {
+          id: `file:${openFile.path}`,
+          filePath: openFile.path,
+          name: openFile.name,
+          scrollTop: 333,
+          editorScrollTop: 111,
+          previewScrollTop: 333,
+          tocScrollTop: 55,
+        },
+        {
+          id: `file:${secondFile.path}`,
+          filePath: secondFile.path,
+          name: secondFile.name,
+          scrollTop: 24,
+          editorScrollTop: 24,
+          previewScrollTop: 24,
+          tocScrollTop: 0,
+        },
+      ],
+      activeTabId: `file:${secondFile.path}`,
+      recentFiles: [secondFile.path, openFile.path],
+      scrollTop: 24,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: true,
+      theme: 'light',
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.scrollTop).toBe(111);
+    expect(wrapper.find<HTMLElement>('[data-testid="preview"]').element.scrollTop).toBe(333);
+    expect(wrapper.find<HTMLElement>('[data-testid="toc"]').element.scrollTop).toBe(55);
+  });
+
+  it('restores recently remembered scroll positions when reopening files', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [],
+      activeTabId: null,
+      recentFiles: [recentFile.path],
+      fileScrollPositions: [
+        { filePath: recentFile.path, scrollTop: 77, updatedAt: 1 },
+      ],
+      scrollTop: 12,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await openRecentFileFromMenu(wrapper, recentFile.name);
+
+    expect(wrapper.find<HTMLElement>('[data-testid="preview"]').element.scrollTop).toBe(77);
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        fileScrollPositions: expect.arrayContaining([
+          expect.objectContaining({ filePath: recentFile.path, scrollTop: 77 }),
         ]),
       }),
     );

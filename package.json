@@ -1,6 +1,6 @@
 {
   "name": "markdown-editor",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Electron Markdown reader and editor with live preview, table of contents, Mermaid rendering, and session restore.",
   "author": "olojiang",
   "private": true,
