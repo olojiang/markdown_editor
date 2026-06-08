@@ -50,18 +50,18 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   takeLaunchMarkdownFile: () => ipcRenderer.invoke('markdown:take-launch-file'),
   notifyReadyForExternalOpen: () => ipcRenderer.invoke('markdown:ready-for-external-open'),
   onExternalMarkdownFile: (callback: (request: {
-    file: { path: string; name: string; content: string; encoding: string };
+    file: { path: string; name: string; content: string; encoding: string; size: number; modifiedAt: number };
     external: boolean;
   }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, request: {
-      file: { path: string; name: string; content: string; encoding: string };
+      file: { path: string; name: string; content: string; encoding: string; size: number; modifiedAt: number };
       external: boolean;
     }) => callback(request);
     ipcRenderer.on('markdown:external-open', listener);
     return () => ipcRenderer.removeListener('markdown:external-open', listener);
   },
-  onMarkdownFileChanged: (callback: (file: { path: string; name: string; content: string; encoding: string }) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, file: { path: string; name: string; content: string; encoding: string }) => callback(file);
+  onMarkdownFileChanged: (callback: (file: { path: string; name: string; content: string; encoding: string; size: number; modifiedAt: number }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, file: { path: string; name: string; content: string; encoding: string; size: number; modifiedAt: number }) => callback(file);
     ipcRenderer.on('markdown:file-changed', listener);
     return () => ipcRenderer.removeListener('markdown:file-changed', listener);
   },

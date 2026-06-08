@@ -41,6 +41,8 @@ interface MarkdownFile {
   name: string;
   content: string;
   encoding?: string;
+  size?: number;
+  modifiedAt?: number;
 }
 
 interface ScrollAnchor {
@@ -57,6 +59,9 @@ interface OpenTab {
   editorScrollTop: number;
   previewScrollTop: number;
   tocScrollTop: number;
+  editorVisible: boolean;
+  previewHidden: boolean;
+  previewFullscreen: boolean;
 }
 
 interface TabContextMenu {
@@ -239,6 +244,7 @@ const tocPanel = ref<HTMLElement | null>(null);
 const editor = ref<EditorSurface | null>(null);
 const status = ref('请选择或打开一个支持的文档');
 const activeEditorLine = ref(1);
+const activeEditorColumn = ref(1);
 const tocSearch = ref('');
 const collapsedHeadingIds = ref(new Set<string>());
 const activeHeadingId = ref('');
@@ -332,17 +338,27 @@ const activeImageStyle = computed(() => {
   };
 });
 const isEditorForcedVisible = computed(() => currentFile.value !== null && currentDocumentKind.value !== 'markdown');
-const isEditorVisible = computed(() => isEditorForcedVisible.value || session.value.editorVisible || !currentFile.value);
+const isEditorVisible = computed(() => (
+  isEditorForcedVisible.value
+  || (activeTab.value ? activeTab.value.editorVisible : session.value.editorVisible)
+  || !currentFile.value
+));
+const isPreviewHidden = computed(() => activeTab.value?.previewHidden ?? session.value.previewHidden);
 const isPreviewSearchMode = computed(() => (
   editorSearchVisible.value
   && hasPreviewPane.value
-  && !session.value.previewHidden
+  && !isPreviewHidden.value
   && (!isEditorVisible.value || isPreviewFullscreen.value)
 ));
 const hasUnsavedChanges = computed(() => currentFile.value !== null && source.value !== lastSavedContent.value);
 const unsavedTabCount = computed(() => openTabs.value.filter((tab) => tab.source !== tab.lastSavedContent).length);
 const displayTitle = computed(() => (hasUnsavedChanges.value ? `${title.value} *` : title.value));
 const statusText = computed(() => (hasUnsavedChanges.value ? `${status.value} · 未保存` : status.value));
+const currentFileSizeText = computed(() => formatFileSize(currentFileSize()));
+const currentFileModifiedText = computed(() => formatFileModifiedTime(currentFile.value?.modifiedAt));
+const editorStatusText = computed(() => (
+  `${currentFileSizeText.value} · 最后更新 ${currentFileModifiedText.value} · 共 ${sourceLineCount()} 行 · 第 ${activeEditorLine.value} 行，第 ${activeEditorColumn.value} 列`
+));
 const recentFilePaths = computed(() => normalizeRecentFiles(session.value.recentFiles));
 const recentFileOptions = computed(() => buildRecentFileOptions(recentFilePaths.value));
 const shortcutModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'));
@@ -483,7 +499,7 @@ const gridStyle = computed(() => {
     };
   }
 
-  if (session.value.previewHidden) {
+  if (isPreviewHidden.value) {
     return {
       gridTemplateColumns: `${tocColumnWidth.value}px ${isTocPanelCollapsed.value ? 0 : 6}px minmax(0, 1fr) 6px 0`,
     };
@@ -648,6 +664,47 @@ function setFileEncoding(file: MarkdownFile, encoding: unknown): MarkdownFile {
     ...file,
     encoding: normalizeTextEncoding(encoding),
   };
+}
+
+function currentFileSize(): number {
+  const savedSize = currentFile.value?.size;
+  if (!hasUnsavedChanges.value && typeof savedSize === 'number' && Number.isFinite(savedSize) && savedSize >= 0) {
+    return savedSize;
+  }
+  return new TextEncoder().encode(source.value).byteLength;
+}
+
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return '0 B';
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = value >= 10 ? value.toFixed(0) : value.toFixed(1);
+  return `${rounded.replace(/\.0$/, '')} ${units[unitIndex]}`;
+}
+
+function formatFileModifiedTime(timestamp: unknown): string {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
+    return '未保存';
+  }
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return '未保存';
+  }
+  const pad = (value: number) => value.toString().padStart(2, '0');
+  return [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+  ].join(' ');
 }
 
 function tabPath(tab: OpenTab): string | null {
@@ -957,7 +1014,7 @@ async function jumpToCursorHistory(direction: -1 | 1): Promise<void> {
 }
 
 function activeScrollTop(): number {
-  if (hasPreviewPane.value && !session.value.previewHidden && preview.value) {
+  if (hasPreviewPane.value && !isPreviewHidden.value && preview.value) {
     return preview.value.scrollTop;
   }
   if (isEditorVisible.value && editor.value) {
@@ -991,6 +1048,9 @@ function syncActiveTabState(): void {
   tab.editorScrollTop = activeEditorScrollTop();
   tab.previewScrollTop = activePreviewScrollTop();
   tab.tocScrollTop = activeTocScrollTop();
+  tab.editorVisible = isEditorVisible.value;
+  tab.previewHidden = isPreviewHidden.value;
+  tab.previewFullscreen = hasPreviewPane.value && isPreviewFullscreen.value;
 }
 
 function serializedOpenTabs(): MarkdownSession['tabs'] {
@@ -1002,6 +1062,9 @@ function serializedOpenTabs(): MarkdownSession['tabs'] {
     editorScrollTop: tab.editorScrollTop,
     previewScrollTop: tab.previewScrollTop,
     tocScrollTop: tab.tocScrollTop,
+    editorVisible: tab.editorVisible,
+    previewHidden: tab.previewHidden,
+    previewFullscreen: tab.previewFullscreen,
     content: tab.file.path ? undefined : tab.source,
     lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
     encoding: normalizeTextEncoding(tab.file.encoding),
@@ -1026,6 +1089,38 @@ function forcedEditorPatchForFile(file: MarkdownFile): Partial<MarkdownSession> 
   return documentKindForFile(file) === 'markdown' ? {} : { editorVisible: true };
 }
 
+function tabViewStateForFile(file: MarkdownFile): Pick<OpenTab, 'editorVisible' | 'previewHidden' | 'previewFullscreen'> {
+  const fileHasPreview = isPreviewableDocumentKind(documentKindForFile(file));
+  const editorVisible = documentKindForFile(file) === 'markdown'
+    ? session.value.editorVisible
+    : true;
+  return {
+    editorVisible,
+    previewHidden: fileHasPreview ? session.value.previewHidden : true,
+    previewFullscreen: false,
+  };
+}
+
+function applyActiveTabViewState(
+  patch: Partial<Pick<OpenTab, 'editorVisible' | 'previewHidden' | 'previewFullscreen'>>,
+): void {
+  const tab = activeTab.value;
+  if (tab) {
+    if (patch.editorVisible !== undefined) {
+      tab.editorVisible = isEditorForcedVisible.value ? true : patch.editorVisible;
+    }
+    if (patch.previewHidden !== undefined) {
+      tab.previewHidden = patch.previewHidden;
+    }
+    if (patch.previewFullscreen !== undefined) {
+      tab.previewFullscreen = hasPreviewPane.value && patch.previewFullscreen;
+      isPreviewFullscreen.value = tab.previewFullscreen;
+    }
+  } else if (patch.previewFullscreen !== undefined) {
+    isPreviewFullscreen.value = hasPreviewPane.value && patch.previewFullscreen;
+  }
+}
+
 function persistableSession(): MarkdownSession {
   syncActiveTabState();
   return {
@@ -1046,6 +1141,9 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
       editorScrollTop: tab.editorScrollTop,
       previewScrollTop: tab.previewScrollTop,
       tocScrollTop: tab.tocScrollTop,
+      editorVisible: tab.editorVisible,
+      previewHidden: tab.previewHidden,
+      previewFullscreen: tab.previewFullscreen,
       content: tab.content,
       lastSavedContent: tab.lastSavedContent,
       encoding: tab.encoding,
@@ -1686,7 +1784,7 @@ function syncPreviewToLine(line: number, lock = true): void {
 
   const sourceElement = editorElement();
   const targetElement = preview.value;
-  if (!sourceElement || !targetElement || session.value.previewHidden || !isEditorVisible.value) {
+  if (!sourceElement || !targetElement || isPreviewHidden.value || !isEditorVisible.value) {
     return;
   }
 
@@ -1717,7 +1815,7 @@ function syncScroll(from: 'editor' | 'preview', lock = true): void {
 
   const sourceElement = from === 'editor' ? editorElement() : preview.value;
   const targetElement = from === 'editor' ? preview.value : editorElement();
-  if (!sourceElement || !targetElement || session.value.previewHidden || !isEditorVisible.value) {
+  if (!sourceElement || !targetElement || isPreviewHidden.value || !isEditorVisible.value) {
     return;
   }
 
@@ -1752,8 +1850,10 @@ function onEditorScroll(): void {
 
 function onEditorFocusLineChange(): void {
   void nextTick(() => {
-    const line = lineFromEditorSelection();
-    activeEditorLine.value = line;
+    const position = editor.value?.getCursorPosition();
+    const line = position?.lineNumber ?? lineFromEditorSelection();
+    activeEditorLine.value = Math.min(sourceLineCount(), Math.max(1, line));
+    activeEditorColumn.value = Math.max(1, position?.column ?? 1);
     rememberCursorPosition();
     syncPreviewToLine(line);
     updateActiveHeadingFromSourceLine(line);
@@ -1802,6 +1902,10 @@ function updateActiveHeadingFromPreview(): void {
 }
 
 function persistSession(patch: Partial<MarkdownSession>, options: { deferred?: boolean } = {}): void {
+  applyActiveTabViewState({
+    editorVisible: patch.editorVisible,
+    previewHidden: patch.previewHidden,
+  });
   session.value = mergeSession(session.value, patch);
   if (options.deferred) {
     scheduleSessionSave();
@@ -1881,6 +1985,7 @@ function activateTab(tabId: string): void {
   currentFile.value = tab.file;
   source.value = tab.source;
   lastSavedContent.value = tab.lastSavedContent;
+  isPreviewFullscreen.value = hasPreviewPane.value && tab.previewFullscreen;
   status.value = tab.file.path ?? '未保存的新文档';
   selectedAssetPath.value = '';
   persistTabSession({
@@ -1890,6 +1995,8 @@ function activateTab(tabId: string): void {
       ? addFileScrollPosition(session.value.fileScrollPositions, tab.file.path, tab.scrollTop)
       : session.value.fileScrollPositions,
     scrollTop: tab.scrollTop,
+    editorVisible: tab.editorVisible,
+    previewHidden: tab.previewHidden,
     ...forcedEditorPatchForFile(tab.file),
   }, { syncActive: false });
   void refreshImageAssets(tab.file.path ?? undefined);
@@ -1910,6 +2017,7 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
       previewHidden: false,
       scrollTop: 0,
     });
+    isPreviewFullscreen.value = false;
   }
   session.value = mergeSession(session.value, forcedEditorPatchForFile(normalizedFile));
   syncActiveTabState();
@@ -1925,6 +2033,9 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
       existing.editorScrollTop = 0;
       existing.previewScrollTop = 0;
       existing.tocScrollTop = 0;
+      existing.editorVisible = false;
+      existing.previewHidden = false;
+      existing.previewFullscreen = false;
     }
   } else {
     openTabs.value.push({
@@ -1936,12 +2047,14 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
       editorScrollTop: nextScrollTop,
       previewScrollTop: nextScrollTop,
       tocScrollTop: 0,
+      ...tabViewStateForFile(normalizedFile),
     });
   }
   activeTabId.value = tabId;
   currentFile.value = normalizedFile;
   source.value = normalizedFile.content;
   lastSavedContent.value = normalizedFile.content;
+  isPreviewFullscreen.value = hasPreviewPane.value && (activeTab.value?.previewFullscreen ?? false);
   if (options.persist !== false) {
     persistOpenedFile(normalizedFile, nextScrollTop, tabId);
   }
@@ -2187,6 +2300,9 @@ function createNewMarkdownTab(content = '', name?: string): void {
     editorScrollTop: 0,
     previewScrollTop: 0,
     tocScrollTop: 0,
+    editorVisible: true,
+    previewHidden: false,
+    previewFullscreen: false,
   };
   openTabs.value.push(tab);
   activeTabId.value = tab.id;
@@ -2195,8 +2311,9 @@ function createNewMarkdownTab(content = '', name?: string): void {
   lastSavedContent.value = tab.lastSavedContent;
   selectedAssetPath.value = '';
   imageAssets.value = [];
+  isPreviewFullscreen.value = false;
   status.value = '未保存的新 Markdown 文件';
-  persistTabSession(undefined, { syncActive: false });
+  persistTabSession({ editorVisible: true, previewHidden: false }, { syncActive: false });
   void nextTick(() => {
     editor.value?.focus();
     updateActiveHeadingFromPreview();
@@ -3041,7 +3158,7 @@ function transformJsonSource(compact: boolean): void {
 
 function showEditorSearch(): void {
   editorSearchVisible.value = true;
-  if (!isEditorVisible.value && session.value.previewHidden) {
+  if (!isEditorVisible.value && isPreviewHidden.value) {
     persistSession({
       editorVisible: true,
       previewHidden: false,
@@ -3201,14 +3318,25 @@ function togglePreview(): void {
     return;
   }
 
-  const willShowPreview = session.value.previewHidden;
+  const willShowPreview = isPreviewHidden.value;
   persistSession({
-    previewHidden: !session.value.previewHidden,
+    previewHidden: !isPreviewHidden.value,
     editorVisible: true,
   });
   if (willShowPreview) {
     void nextTick(() => syncScroll('editor', false));
   }
+}
+
+function togglePreviewFullscreen(): void {
+  if (!hasPreviewPane.value) {
+    return;
+  }
+  applyActiveTabViewState({ previewFullscreen: !isPreviewFullscreen.value });
+  persistTabSession({
+    editorVisible: isEditorVisible.value,
+    previewHidden: isPreviewHidden.value,
+  });
 }
 
 function toggleTocPanel(): void {
@@ -3385,7 +3513,7 @@ function executeAppMenuCommand(command: AppMenuCommand): void {
     return;
   }
   if (command === 'toggle-fullscreen-preview') {
-    isPreviewFullscreen.value = !isPreviewFullscreen.value;
+    togglePreviewFullscreen();
     return;
   }
   if (command === 'preview-zoom-in') {
@@ -4171,7 +4299,7 @@ watch(source, () => {
 
 watch(() => [currentDocumentKind.value, currentFile.value?.path ?? null] as const, () => {
   if (!hasPreviewPane.value) {
-    isPreviewFullscreen.value = false;
+    applyActiveTabViewState({ previewFullscreen: false });
     htmlPreviewSrc.value = '';
     return;
   }
@@ -4219,6 +4347,9 @@ async function restoreSessionTabs(): Promise<boolean> {
         editorScrollTop: tab.editorScrollTop,
         previewScrollTop: tab.previewScrollTop,
         tocScrollTop: tab.tocScrollTop,
+        editorVisible: tab.editorVisible,
+        previewHidden: tab.previewHidden,
+        previewFullscreen: tab.previewFullscreen,
       } satisfies OpenTab;
     }
     try {
@@ -4232,6 +4363,9 @@ async function restoreSessionTabs(): Promise<boolean> {
         editorScrollTop: tab.editorScrollTop,
         previewScrollTop: tab.previewScrollTop,
         tocScrollTop: tab.tocScrollTop,
+        editorVisible: tab.editorVisible,
+        previewHidden: tab.previewHidden,
+        previewFullscreen: tab.previewFullscreen,
       } satisfies OpenTab;
     } catch {
       return null;
@@ -4251,6 +4385,7 @@ async function restoreSessionTabs(): Promise<boolean> {
   currentFile.value = active.file;
   source.value = active.source;
   lastSavedContent.value = active.lastSavedContent;
+  isPreviewFullscreen.value = hasPreviewPane.value && active.previewFullscreen;
   status.value = active.file.path ?? '未保存的新文档';
   session.value = mergeSession(session.value, {
     filePath: active.file.path,
@@ -4262,12 +4397,17 @@ async function restoreSessionTabs(): Promise<boolean> {
       editorScrollTop: tab.editorScrollTop,
       previewScrollTop: tab.previewScrollTop,
       tocScrollTop: tab.tocScrollTop,
+      editorVisible: tab.editorVisible,
+      previewHidden: tab.previewHidden,
+      previewFullscreen: tab.previewFullscreen,
       content: tab.file.path ? undefined : tab.source,
       lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
       encoding: normalizeTextEncoding(tab.file.encoding),
     })),
     activeTabId: active.id,
     scrollTop: active.scrollTop,
+    editorVisible: active.editorVisible,
+    previewHidden: active.previewHidden,
     ...forcedEditorPatchForFile(active.file),
   });
   void refreshImageAssets(active.file.path ?? undefined);
@@ -4341,7 +4481,7 @@ onBeforeUnmount(() => {
       `theme-${session.theme}`,
       {
         'preview-fullscreen': isPreviewFullscreen && hasPreviewPane,
-        'preview-hidden': session.previewHidden,
+        'preview-hidden': isPreviewHidden,
         'reader-mode': !isEditorVisible,
         'no-preview-pane': !hasPreviewPane,
         'toc-collapsed': isTocPanelCollapsed,
@@ -4522,11 +4662,11 @@ onBeforeUnmount(() => {
           data-testid="toggle-preview"
           class="icon-button"
           type="button"
-          :aria-label="session.previewHidden ? '展开预览' : '隐藏预览'"
+          :aria-label="isPreviewHidden ? '展开预览' : '隐藏预览'"
           :title="previewShortcutHint"
           @click="togglePreview"
         >
-          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="session.previewHidden ? icons.eye : icons.eyeOff" /></svg>
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="isPreviewHidden ? icons.eye : icons.eyeOff" /></svg>
         </button>
         <button
           data-testid="toggle-editor"
@@ -4839,6 +4979,9 @@ onBeforeUnmount(() => {
             @vim-status="onVimStatus"
           />
         </div>
+        <div class="editor-statusbar" data-testid="editor-statusbar">
+          <span>{{ editorStatusText }}</span>
+        </div>
       </section>
 
       <div
@@ -4869,7 +5012,7 @@ onBeforeUnmount(() => {
             type="button"
             :aria-label="isPreviewFullscreen ? '退出预览' : '全屏预览'"
             :title="isPreviewFullscreen ? '退出预览' : '全屏预览'"
-            @click="isPreviewFullscreen = !isPreviewFullscreen"
+            @click="togglePreviewFullscreen"
           >
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.expand" /></svg>
           </button>

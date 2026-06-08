@@ -12,6 +12,8 @@ interface MarkdownFile {
   name: string;
   content: string;
   encoding?: string;
+  size?: number;
+  modifiedAt?: number;
 }
 
 interface MarkdownOpenRequest {

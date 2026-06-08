@@ -63,6 +63,8 @@ interface MarkdownFile {
   name: string;
   content: string;
   encoding: TextEncoding;
+  size: number;
+  modifiedAt: number;
 }
 
 interface MarkdownOpenRequest {
@@ -1020,12 +1022,18 @@ async function readMarkdownFile(filePath: string, encoding?: unknown): Promise<M
   }
 
   const canonicalPath = await fs.realpath(resolvedPath).catch(() => resolvedPath);
-  const decoded = decodeTextBuffer(await fs.readFile(canonicalPath), encoding);
+  const [data, stat] = await Promise.all([
+    fs.readFile(canonicalPath),
+    fs.stat(canonicalPath),
+  ]);
+  const decoded = decodeTextBuffer(data, encoding);
   const file = {
     path: canonicalPath,
     name: path.basename(canonicalPath),
     content: decoded.content,
     encoding: decoded.encoding,
+    size: stat.size,
+    modifiedAt: stat.mtimeMs,
   };
   markdownFileEncodings.set(canonicalPath, decoded.encoding);
   watchMarkdownFile(canonicalPath);
@@ -1037,14 +1045,16 @@ function sendMarkdownFileChanged(filePath: string): void {
     return;
   }
 
-  void fs.readFile(filePath)
-    .then((data) => {
+  void Promise.all([fs.readFile(filePath), fs.stat(filePath)])
+    .then(([data, stat]) => {
       const decoded = decodeTextBuffer(data, markdownFileEncodings.get(filePath) ?? defaultTextEncoding);
       mainWindow?.webContents.send('markdown:file-changed', {
         path: filePath,
         name: path.basename(filePath),
         content: decoded.content,
         encoding: decoded.encoding,
+        size: stat.size,
+        modifiedAt: stat.mtimeMs,
       } satisfies MarkdownFile);
     })
     .catch(() => {

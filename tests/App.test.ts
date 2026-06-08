@@ -7,6 +7,8 @@ const openFile = {
   path: '/docs/readme.md',
   name: 'readme.md',
   content: '# Title\n\n## Alpha\n\nhello alpha\n\n## Beta\n\nhello beta\n\n```mermaid\ngraph TD\nA-->B\n```',
+  size: 1536,
+  modifiedAt: new Date('2026-06-08T04:34:00.000Z').getTime(),
 };
 const recentFile = {
   path: '/docs/recent.md',
@@ -1171,6 +1173,75 @@ describe('App', () => {
     expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.scrollTop).toBe(111);
     expect(wrapper.find<HTMLElement>('[data-testid="preview"]').element.scrollTop).toBe(333);
     expect(wrapper.find<HTMLElement>('[data-testid="toc"]').element.scrollTop).toBe(55);
+  });
+
+  it('keeps edit, preview, and fullscreen view state isolated per tab', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await wrapper.find('[data-testid="toggle-preview"]').trigger('click');
+    expect(wrapper.classes()).toContain('preview-hidden');
+    expect(wrapper.classes()).not.toContain('reader-mode');
+
+    await openRecentFileFromMenu(wrapper, recentFile.name);
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await wrapper.find('[data-testid="fullscreen-preview"]').trigger('click');
+    expect(wrapper.classes()).toContain('reader-mode');
+    expect(wrapper.classes()).toContain('preview-fullscreen');
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+    expect(wrapper.classes()).toContain('preview-hidden');
+    expect(wrapper.classes()).not.toContain('reader-mode');
+    expect(wrapper.classes()).not.toContain('preview-fullscreen');
+
+    await wrapper.find('[data-testid="tab-recent.md"]').trigger('click');
+    expect(wrapper.classes()).toContain('reader-mode');
+    expect(wrapper.classes()).toContain('preview-fullscreen');
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tabs: expect.arrayContaining([
+          expect.objectContaining({
+            filePath: openFile.path,
+            editorVisible: true,
+            previewHidden: true,
+            previewFullscreen: false,
+          }),
+          expect.objectContaining({
+            filePath: recentFile.path,
+            editorVisible: false,
+            previewHidden: false,
+            previewFullscreen: true,
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('shows editor line and cursor position in the editor status bar', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]');
+    const offset = offsetForLineColumn(openFile.content, 3, 2);
+    editor.element.setSelectionRange(offset, offset);
+    await editor.trigger('select');
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="editor-statusbar"]').text()).toContain('共 14 行');
+    expect(wrapper.find('[data-testid="editor-statusbar"]').text()).toContain('第 3 行，第 2 列');
+  });
+
+  it('shows file size and last modified time in the editor status bar', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const statusbarText = wrapper.find('[data-testid="editor-statusbar"]').text();
+
+    expect(statusbarText).toContain('1.5 KB');
+    expect(statusbarText).toContain('最后更新');
+    expect(statusbarText).toContain('2026-06-08');
   });
 
   it('restores recently remembered scroll positions when reopening files', async () => {

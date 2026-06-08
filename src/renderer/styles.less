@@ -429,6 +429,7 @@ select:disabled {
   display: grid;
   grid-template-rows: 56px auto minmax(0, 1fr);
   height: 100%;
+  max-height: 100dvh;
   min-height: 0;
   overflow: hidden;
 }
@@ -694,6 +695,7 @@ select:disabled {
 
 .workspace {
   display: grid;
+  height: 100%;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -782,12 +784,13 @@ select:disabled {
 .editor-panel {
   display: grid;
   grid-column: 3;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
   min-width: 0;
 }
 
 .editor-panel.search-visible {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 .format-toolbar {
@@ -1005,6 +1008,26 @@ select:disabled {
   min-width: 0;
   overflow: hidden;
   position: relative;
+}
+
+.editor-statusbar {
+  align-items: center;
+  background: var(--surface-muted);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  display: flex;
+  font: 12px/1.4 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  justify-content: flex-end;
+  min-height: 28px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 10px;
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 .source-editor-shell:focus-within {

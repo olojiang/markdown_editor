@@ -9,6 +9,7 @@ import {
   mergeSession,
   normalizeBookmarks,
   normalizeFileScrollPositions,
+  normalizeSession,
   normalizeSessionTabs,
   removeRecentFile,
 } from '@/renderer/lib/session';
@@ -90,12 +91,65 @@ describe('session helpers', () => {
         editorScrollTop: 42,
         previewScrollTop: 42,
         tocScrollTop: 0,
+        editorVisible: false,
+        previewHidden: false,
+        previewFullscreen: false,
       }),
       expect.objectContaining({
         scrollTop: 10,
         editorScrollTop: 20,
         previewScrollTop: 30,
         tocScrollTop: 40,
+        editorVisible: false,
+        previewHidden: false,
+        previewFullscreen: false,
+      }),
+    ]);
+  });
+
+  it('normalizes per-tab view state independently', () => {
+    expect(normalizeSessionTabs([
+      {
+        id: 'file:/docs/edit.md',
+        filePath: '/docs/edit.md',
+        name: 'edit.md',
+        scrollTop: 0,
+        editorVisible: true,
+        previewHidden: true,
+      },
+      {
+        id: 'file:/docs/preview.md',
+        filePath: '/docs/preview.md',
+        name: 'preview.md',
+        scrollTop: 0,
+        previewFullscreen: true,
+      },
+    ])).toEqual([
+      expect.objectContaining({
+        editorVisible: true,
+        previewHidden: true,
+        previewFullscreen: false,
+      }),
+      expect.objectContaining({
+        editorVisible: false,
+        previewHidden: false,
+        previewFullscreen: true,
+      }),
+    ]);
+  });
+
+  it('uses legacy global view state as defaults for older persisted tabs', () => {
+    expect(normalizeSession({
+      editorVisible: true,
+      previewHidden: true,
+      tabs: [
+        { id: 'file:/docs/legacy.md', filePath: '/docs/legacy.md', name: 'legacy.md', scrollTop: 0 },
+      ] as never,
+    }).tabs).toEqual([
+      expect.objectContaining({
+        editorVisible: true,
+        previewHidden: true,
+        previewFullscreen: false,
       }),
     ]);
   });

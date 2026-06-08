@@ -30,6 +30,9 @@ export interface MarkdownSessionTab {
   editorScrollTop: number;
   previewScrollTop: number;
   tocScrollTop: number;
+  editorVisible: boolean;
+  previewHidden: boolean;
+  previewFullscreen: boolean;
   content?: string;
   lastSavedContent?: string;
   encoding?: string;
@@ -248,7 +251,10 @@ export function tabIdForPath(filePath: string): string {
   return `file:${filePath}`;
 }
 
-export function normalizeSessionTabs(tabs: unknown): MarkdownSessionTab[] {
+export function normalizeSessionTabs(
+  tabs: unknown,
+  defaults: Partial<Pick<MarkdownSessionTab, 'editorVisible' | 'previewHidden'>> = {},
+): MarkdownSessionTab[] {
   if (!Array.isArray(tabs)) {
     return [];
   }
@@ -271,6 +277,12 @@ export function normalizeSessionTabs(tabs: unknown): MarkdownSessionTab[] {
     seen.add(id);
     const fallbackName = candidate.filePath?.split(/[\\/]/).pop() ?? '未命名.md';
     const scrollTop = normalizeScrollTop(candidate.scrollTop);
+    const editorVisible = typeof candidate.editorVisible === 'boolean'
+      ? candidate.editorVisible
+      : defaults.editorVisible === true;
+    const previewHidden = typeof candidate.previewHidden === 'boolean'
+      ? candidate.previewHidden
+      : defaults.previewHidden === true;
     return [{
       id,
       filePath: candidate.filePath ?? null,
@@ -279,6 +291,9 @@ export function normalizeSessionTabs(tabs: unknown): MarkdownSessionTab[] {
       editorScrollTop: normalizeScrollTop(candidate.editorScrollTop, scrollTop),
       previewScrollTop: normalizeScrollTop(candidate.previewScrollTop, scrollTop),
       tocScrollTop: normalizeScrollTop(candidate.tocScrollTop),
+      editorVisible,
+      previewHidden,
+      previewFullscreen: candidate.previewFullscreen === true,
       content: typeof candidate.content === 'string' ? candidate.content : undefined,
       lastSavedContent: typeof candidate.lastSavedContent === 'string' ? candidate.lastSavedContent : undefined,
       encoding: typeof candidate.encoding === 'string' ? candidate.encoding : undefined,
@@ -287,7 +302,9 @@ export function normalizeSessionTabs(tabs: unknown): MarkdownSessionTab[] {
 }
 
 export function normalizeSession(session: Partial<MarkdownSession> | null | undefined): MarkdownSession {
-  const tabs = normalizeSessionTabs(session?.tabs);
+  const previewHidden = session?.previewHidden === true;
+  const editorVisible = session?.editorVisible === true;
+  const tabs = normalizeSessionTabs(session?.tabs, { editorVisible, previewHidden });
   const activeTabId = typeof session?.activeTabId === 'string' && tabs.some((tab) => tab.id === session.activeTabId)
     ? session.activeTabId
     : tabs[0]?.id ?? null;
@@ -305,8 +322,8 @@ export function normalizeSession(session: Partial<MarkdownSession> | null | unde
     scrollTop: typeof session?.scrollTop === 'number' ? session.scrollTop : 0,
     tocWidth: Math.max(180, Math.min(520, typeof session?.tocWidth === 'number' ? session.tocWidth : 260)),
     editorWidth: Math.max(320, Math.min(1200, typeof session?.editorWidth === 'number' ? session.editorWidth : 560)),
-    previewHidden: session?.previewHidden === true,
-    editorVisible: session?.editorVisible === true,
+    previewHidden,
+    editorVisible,
     editorPreferences: normalizeEditorPreferences(session?.editorPreferences),
     theme: normalizeTheme(session?.theme),
   };
@@ -321,7 +338,12 @@ export function mergeSession(
     ...normalized,
     ...patch,
     filePath: patch.filePath === undefined ? normalized.filePath : patch.filePath,
-    tabs: patch.tabs === undefined ? normalized.tabs : normalizeSessionTabs(patch.tabs),
+    tabs: patch.tabs === undefined
+      ? normalized.tabs
+      : normalizeSessionTabs(patch.tabs, {
+        editorVisible: normalized.editorVisible,
+        previewHidden: normalized.previewHidden,
+      }),
     activeTabId: patch.activeTabId === undefined ? normalized.activeTabId : patch.activeTabId,
     bookmarks: patch.bookmarks === undefined ? normalized.bookmarks : normalizeBookmarks(patch.bookmarks),
     bookmarkViewMode: patch.bookmarkViewMode === undefined
