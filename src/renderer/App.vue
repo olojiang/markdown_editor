@@ -282,6 +282,7 @@ const editorConfigDraft = ref('');
 const editorConfigError = ref('');
 const closeConfirmationVisible = ref(false);
 const closeConfirmationBusy = ref(false);
+const closeConfirmationTargetTabId = ref<string | null>(null);
 const helpPopoverPinned = ref(false);
 const htmlPreviewSrc = ref('');
 const recentFilesOpen = ref(false);
@@ -291,6 +292,7 @@ const activeResize = ref<'toc' | 'editor' | null>(null);
 const cursorHistory = ref<CursorHistoryEntry[]>([]);
 let sessionSaveTimer: number | undefined;
 let untitledCounter = 1;
+const untitledDraftNamePattern = /^未命名-\d+\.md$/;
 let cursorHistoryIndex = -1;
 let isNavigatingCursorHistory = false;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
@@ -366,6 +368,35 @@ const isPreviewSearchMode = computed(() => (
 ));
 const hasUnsavedChanges = computed(() => currentFile.value !== null && source.value !== lastSavedContent.value);
 const unsavedTabCount = computed(() => openTabs.value.filter((tab) => tab.source !== tab.lastSavedContent).length);
+const closeConfirmationTargetTab = computed(() =>
+  openTabs.value.find((tab) => tab.id === closeConfirmationTargetTabId.value) ?? null);
+const isCloseConfirmationForTab = computed(() => closeConfirmationTargetTabId.value !== null);
+const closeConfirmationUnsavedCount = computed(() => {
+  if (!isCloseConfirmationForTab.value) {
+    return unsavedTabCount.value;
+  }
+
+  const tab = closeConfirmationTargetTab.value;
+  return tab && tab.source !== tab.lastSavedContent ? 1 : 0;
+});
+const closeConfirmationLeadText = computed(() => {
+  if (!isCloseConfirmationForTab.value) {
+    return `${closeConfirmationUnsavedCount.value} 个文件还没有手工保存。`;
+  }
+
+  const name = closeConfirmationTargetTab.value?.file.name ?? '当前文档';
+  return closeConfirmationUnsavedCount.value === 0
+    ? `${name} 没有未保存修改。`
+    : `${name} 有未保存修改。`;
+});
+const closeConfirmationHelpText = computed(() =>
+  isCloseConfirmationForTab.value
+    ? '关闭前可以保存这个标签页，也可以放弃这些未保存修改。'
+    : '关闭前可以全部保存，也可以放弃这些未保存修改。');
+const closeConfirmationDiscardLabel = computed(() =>
+  isCloseConfirmationForTab.value ? '放弃修改并关闭标签页' : '放弃修改并关闭');
+const closeConfirmationSaveLabel = computed(() =>
+  isCloseConfirmationForTab.value ? '保存并关闭标签页' : '全部保存并关闭');
 const displayTitle = computed(() => (hasUnsavedChanges.value ? `${title.value} *` : title.value));
 const statusText = computed(() => (hasUnsavedChanges.value ? `${status.value} · 未保存` : status.value));
 const currentFileSizeText = computed(() => formatFileSize(currentFileSize()));
@@ -616,6 +647,25 @@ function escapeCssIdentifier(value: string): string {
 
 function nextDraftId(): string {
   return `draft:${Date.now()}:${untitledCounter++}`;
+}
+
+function suggestedMarkdownFileNameFromContent(content: string, fallbackName: string): string {
+  const firstLine = content.split(/\r?\n/, 1)[0] ?? '';
+  const safeBaseName = firstLine
+    .replace(/[^\p{L}\p{N}\s_-]+/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 30)
+    .trim();
+
+  return safeBaseName ? `${safeBaseName}.md` : fallbackName;
+}
+
+function saveAsDefaultNameForTab(tab: OpenTab): string {
+  if (tab.file.path || !untitledDraftNamePattern.test(tab.file.name)) {
+    return tab.file.name;
+  }
+  return suggestedMarkdownFileNameFromContent(tab.source, tab.file.name);
 }
 
 function currentFilePath(): string | null {
@@ -1296,29 +1346,37 @@ function unsavedTabs(): OpenTab[] {
   return openTabs.value.filter((tab) => tab.source !== tab.lastSavedContent);
 }
 
+async function saveDirtyTab(tab: OpenTab): Promise<boolean> {
+  if (!bridge) {
+    return false;
+  }
+
+  if (!tab.file.path) {
+    await saveTabAs(tab.id);
+    return Boolean(tab.file.path) && tab.source === tab.lastSavedContent;
+  }
+
+  const saved = await saveMarkdownFileWithEncoding(tab.file.path, tab.source, tab.file.encoding);
+  tab.file = saved;
+  tab.source = saved.content;
+  tab.lastSavedContent = saved.content;
+  if (tab.id === activeTabId.value) {
+    currentFile.value = saved;
+    source.value = saved.content;
+    lastSavedContent.value = saved.content;
+    status.value = `已保存 ${saved.path}（${textEncodingLabel(saved.encoding)}）`;
+  }
+  return true;
+}
+
 async function saveAllUnsavedTabs(): Promise<boolean> {
   if (!bridge) {
     return false;
   }
 
   for (const tab of unsavedTabs()) {
-    if (!tab.file.path) {
-      await saveTabAs(tab.id);
-      if (!tab.file.path || tab.source !== tab.lastSavedContent) {
-        return false;
-      }
-      continue;
-    }
-
-    const saved = await saveMarkdownFileWithEncoding(tab.file.path, tab.source, tab.file.encoding);
-    tab.file = saved;
-    tab.source = saved.content;
-    tab.lastSavedContent = saved.content;
-    if (tab.id === activeTabId.value) {
-      currentFile.value = saved;
-      source.value = saved.content;
-      lastSavedContent.value = saved.content;
-      status.value = `已保存 ${saved.path}（${textEncodingLabel(saved.encoding)}）`;
+    if (!await saveDirtyTab(tab)) {
+      return false;
     }
   }
 
@@ -1381,16 +1439,38 @@ async function requestApplicationClose(): Promise<void> {
   debugLog('app.close-request.received', { unsavedCount });
   if (unsavedCount === 0) {
     closeConfirmationVisible.value = false;
+    closeConfirmationTargetTabId.value = null;
     await closeApplication();
     return;
   }
 
+  closeConfirmationTargetTabId.value = null;
   closeConfirmationVisible.value = true;
 }
 
 async function saveAllAndClose(): Promise<void> {
   closeConfirmationBusy.value = true;
   try {
+    if (closeConfirmationTargetTabId.value) {
+      const tab = closeConfirmationTargetTab.value;
+      if (!tab) {
+        closeConfirmationVisible.value = false;
+        closeConfirmationTargetTabId.value = null;
+        return;
+      }
+
+      syncActiveTabState();
+      if (tab.source !== tab.lastSavedContent && !await saveDirtyTab(tab)) {
+        status.value = '仍有未保存文件，已取消关闭';
+        return;
+      }
+
+      closeConfirmationVisible.value = false;
+      closeConfirmationTargetTabId.value = null;
+      await closeTabNow(tab.id);
+      return;
+    }
+
     if (unsavedTabs().length === 0) {
       closeConfirmationVisible.value = false;
       await closeApplication();
@@ -1413,6 +1493,16 @@ async function saveAllAndClose(): Promise<void> {
 async function discardAllAndClose(): Promise<void> {
   closeConfirmationBusy.value = true;
   try {
+    if (closeConfirmationTargetTabId.value) {
+      const tab = closeConfirmationTargetTab.value;
+      closeConfirmationVisible.value = false;
+      closeConfirmationTargetTabId.value = null;
+      if (tab) {
+        await closeTabNow(tab.id);
+      }
+      return;
+    }
+
     if (unsavedTabs().length > 0) {
       discardUnsavedChangesBeforeClose();
     }
@@ -1425,6 +1515,7 @@ async function discardAllAndClose(): Promise<void> {
 
 function cancelCloseConfirmation(): void {
   closeConfirmationVisible.value = false;
+  closeConfirmationTargetTabId.value = null;
 }
 
 function recentFileName(filePath: string): string {
@@ -2084,16 +2175,9 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
   });
 }
 
-async function closeTab(tabId: string, event?: MouseEvent): Promise<void> {
-  event?.stopPropagation();
-  syncActiveTabState();
+async function closeTabNow(tabId: string): Promise<void> {
   const index = openTabs.value.findIndex((tab) => tab.id === tabId);
   if (index === -1) {
-    return;
-  }
-
-  if (openTabs.value.length === 1 && unsavedTabs().some((tab) => tab.id === tabId)) {
-    closeConfirmationVisible.value = true;
     return;
   }
 
@@ -2111,6 +2195,23 @@ async function closeTab(tabId: string, event?: MouseEvent): Promise<void> {
 
   const nextTab = openTabs.value[Math.min(index, openTabs.value.length - 1)];
   activateTab(nextTab.id);
+}
+
+async function closeTab(tabId: string, event?: MouseEvent): Promise<void> {
+  event?.stopPropagation();
+  syncActiveTabState();
+  const tab = openTabs.value.find((item) => item.id === tabId);
+  if (!tab) {
+    return;
+  }
+
+  if (tab.source !== tab.lastSavedContent) {
+    closeConfirmationTargetTabId.value = tab.id;
+    closeConfirmationVisible.value = true;
+    return;
+  }
+
+  await closeTabNow(tab.id);
 }
 
 function startTabDrag(tabId: string, event: DragEvent): void {
@@ -2551,7 +2652,7 @@ async function saveTabAs(tabId: string | null): Promise<void> {
   }
 
   syncActiveTabState();
-  const saved = await saveMarkdownFileAsWithEncoding(tab.source, tab.file.name, tab.file.encoding);
+  const saved = await saveMarkdownFileAsWithEncoding(tab.source, saveAsDefaultNameForTab(tab), tab.file.encoding);
   if (!saved?.path) {
     status.value = '已取消另存为';
     return;
@@ -5349,18 +5450,18 @@ onBeforeUnmount(() => {
           <strong>有未保存的修改</strong>
         </div>
         <div class="close-confirm-body">
-          <p>{{ unsavedTabCount }} 个文件还没有手工保存。</p>
-          <p>关闭前可以全部保存，也可以放弃这些未保存修改。</p>
+          <p>{{ closeConfirmationLeadText }}</p>
+          <p>{{ closeConfirmationHelpText }}</p>
         </div>
         <div class="close-confirm-actions">
-          <button type="button" class="secondary-button" :disabled="closeConfirmationBusy" @click="cancelCloseConfirmation">
+          <button type="button" class="secondary-button" data-testid="close-cancel" :disabled="closeConfirmationBusy" @click="cancelCloseConfirmation">
             取消
           </button>
           <button type="button" class="secondary-button" data-testid="close-discard-all" :disabled="closeConfirmationBusy" @click="discardAllAndClose">
-            放弃修改并关闭
+            {{ closeConfirmationDiscardLabel }}
           </button>
           <button type="button" class="primary-button" data-testid="close-save-all" :disabled="closeConfirmationBusy" @click="saveAllAndClose">
-            全部保存并关闭
+            {{ closeConfirmationSaveLabel }}
           </button>
         </div>
       </div>

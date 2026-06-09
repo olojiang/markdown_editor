@@ -199,6 +199,8 @@ describe('Electron build configuration', () => {
     expect(updateAppSource).toContain('--sign');
     expect(updateAppSource).toContain('NOTARIZE=false');
     expect(updateAppSource).toContain('NOTARIZE=true');
+    expect(updateAppSource).toContain('MAC_CODESIGN_REQUIRE_TIMESTAMP=1');
+    expect(updateAppSource).toContain('MAC_CODESIGN_REQUIRE_TIMESTAMP="${MAC_CODESIGN_REQUIRE_TIMESTAMP:-0}"');
     expect(updateAppSource).toContain('node scripts/sign-mac-app.cjs "$BUILT_APP"');
     expect(updateAppSource).toContain('node scripts/notarize-mac-app.cjs "$BUILT_APP"');
     expect(updateAppSource).toContain('pkill -x "$APP_PROCESS_NAME"');

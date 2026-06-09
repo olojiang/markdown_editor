@@ -1503,6 +1503,68 @@ describe('App', () => {
     );
   });
 
+  it('asks before closing a dirty tab through the native close command', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await openRecentFileFromMenu(wrapper, recentFile.name);
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+    vi.mocked(window.markdownBridge!.saveMarkdownFile).mockClear();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+    menuCallbacks[0]?.('close-tab');
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="close-confirm-modal"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="close-confirm-modal"]').text()).toContain('readme.md 有未保存修改');
+
+    await wrapper.find('[data-testid="close-cancel"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="close-confirm-modal"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
+
+    menuCallbacks[0]?.('close-tab');
+    await nextTick();
+    await wrapper.find('[data-testid="close-discard-all"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveMarkdownFile).not.toHaveBeenCalled();
+    expect(window.markdownBridge?.confirmCloseSync).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tab-recent.md"]').exists()).toBe(true);
+  });
+
+  it('saves a dirty tab before closing it through the native close command', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await openRecentFileFromMenu(wrapper, recentFile.name);
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+    vi.mocked(window.markdownBridge!.saveMarkdownFile).mockClear();
+
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+    menuCallbacks[0]?.('close-tab');
+    await nextTick();
+    await wrapper.find('[data-testid="close-save-all"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalledWith(openFile.path, '# Changed');
+    expect(window.markdownBridge?.confirmCloseSync).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tab-recent.md"]').exists()).toBe(true);
+  });
+
   it('saves all tabs synchronously before the window unloads', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -1881,6 +1943,23 @@ describe('App', () => {
           expect.objectContaining({ filePath: null, content: '' }),
         ]),
       }),
+    );
+  });
+
+  it('suggests a sanitized first-line filename when saving an untitled draft', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    const content = '# abcdefghijklmnopqrstuvwxyz1234567890!!!\n正文';
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="editor"]').setValue(content);
+    await wrapper.find('[data-testid="save-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveMarkdownFileAs).toHaveBeenCalledWith(
+      content,
+      'abcdefghijklmnopqrstuvwxyz1234.md',
     );
   });
 

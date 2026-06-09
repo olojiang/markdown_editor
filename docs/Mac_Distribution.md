@@ -72,4 +72,4 @@ The repository intentionally disables automatic certificate discovery for local 
 CSC_IDENTITY_AUTO_DISCOVERY=false
 ```
 
-The explicit signing path uses hardened runtime and `build/entitlements.mac.plist`. Keep the entitlements aligned with the Electron runtime and any future native modules before releasing new builds.
+The explicit signing path uses hardened runtime and `build/entitlements.mac.plist`. It first requests an Apple secure timestamp; local non-notarized builds may retry without the timestamp if Apple's timestamp service fails, while `./update_app.sh --sign` sets `MAC_CODESIGN_REQUIRE_TIMESTAMP=1` so notarized release builds fail instead of silently downgrading. Keep the entitlements aligned with the Electron runtime and any future native modules before releasing new builds.
