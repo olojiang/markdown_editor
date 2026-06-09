@@ -132,7 +132,7 @@ describe('Electron build configuration', () => {
     expect(mainSource).toContain('window.maximize()');
     expect(mainSource).toContain('window.show()');
     expect(mainSource).toContain("ipcMain.on('session:save-sync'");
-    expect(mainSource).toContain("import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell");
+    expect(mainSource).toContain("import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, shell");
     expect(mainSource).toContain("'markdown:reveal-in-folder'");
     expect(mainSource).toContain('shell.showItemInFolder');
     expect(mainSource).toContain("'app:open-external-link'");
@@ -147,8 +147,12 @@ describe('Electron build configuration', () => {
     expect(mainSource).toContain("mainLog('devtools.shortcut-toggle'");
     expect(mainSource).toContain("'markdown-editor-debug.log'");
     expect(mainSource).toContain("'app:confirm-close-sync'");
+    expect(mainSource).toContain("'app:read-clipboard-sync'");
+    expect(mainSource).toContain('clipboard.availableFormats()');
+    expect(mainSource).toContain('clipboard.readHTML()');
     expect(mainSource).toContain("'app:debug-log'");
     expect(preloadSource).toContain("ipcRenderer.sendSync('app:confirm-close-sync'");
+    expect(preloadSource).toContain("ipcRenderer.sendSync('app:read-clipboard-sync'");
     expect(preloadSource).toContain("ipcRenderer.invoke('app:debug-log'");
     expect(mainSource).toContain("let rendererReadyForExternalOpen = false;");
     expect(mainSource).toContain("'markdown:ready-for-external-open'");

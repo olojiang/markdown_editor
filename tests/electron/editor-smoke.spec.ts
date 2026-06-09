@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test } from '@playwright/test';
-import type { ElectronApplication } from '@playwright/test';
+import type { ElectronApplication, Page } from '@playwright/test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,7 +25,16 @@ async function launchEditor(args: string[] = ['.']): Promise<{ app: ElectronAppl
 
 async function closeEditor(launched: { app: ElectronApplication; userDataDir: string }): Promise<void> {
   await launched.app.close();
-  await fs.rm(launched.userDataDir, { force: true, recursive: true });
+  await fs.rm(launched.userDataDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
+}
+
+async function ensureEditorVisible(page: Page): Promise<void> {
+  const editor = page.getByTestId('editor');
+  if (!(await editor.isVisible())) {
+    await page.getByTestId('toggle-editor').click();
+  }
+  await expect(editor).toBeVisible();
+  await editor.click();
 }
 
 test('launches the Electron editor shell', async () => {
@@ -38,10 +47,7 @@ test('launches the Electron editor shell', async () => {
     await expect(page.getByTestId('preview')).toBeVisible();
     await expect(page.getByTestId('toggle-editor')).toBeVisible();
 
-    if (!(await page.getByTestId('editor').isVisible())) {
-      await page.getByTestId('toggle-editor').click();
-    }
-    await expect(page.getByTestId('editor')).toBeVisible();
+    await ensureEditorVisible(page);
   } finally {
     await closeEditor(launched);
   }
@@ -60,7 +66,8 @@ test('opens a markdown file supplied as a launch argument', async () => {
     await expect(page.getByTestId('preview')).toContainText('Finder Launch');
     await expect(page.getByTitle(markdownPath)).toBeVisible();
   } finally {
-    await closeEditor(launched);
+    await launched.app.evaluate(({ app }) => app.exit(0)).catch(() => undefined);
+    await fs.rm(launched.userDataDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }).catch(() => undefined);
     await fs.rm(tempDir, { force: true, recursive: true });
   }
 });
@@ -133,6 +140,42 @@ test('loads remote images in markdown preview', async () => {
   }
 });
 
+test('converts rich clipboard HTML to Markdown in the Monaco editor', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-rich-paste-'));
+  const markdownPath = path.join(tempDir, 'rich paste.md');
+  await fs.writeFile(markdownPath, '# Start\n\n', 'utf8');
+
+  const launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
+
+  try {
+    const page = await launched.app.firstWindow();
+    await expect(page.getByTestId('preview')).toContainText('Start');
+    await expect(page.getByTitle(markdownPath)).toBeVisible();
+    await ensureEditorVisible(page);
+
+    await launched.app.evaluate(({ clipboard }, payload) => {
+      clipboard.write(payload);
+    }, {
+      html: '<h2>Why Impeccable?</h2><p>Use <strong>7 files</strong> and <a href="https://example.com">source</a>.</p><ul><li><code>polish</code></li></ul>',
+      text: 'Why Impeccable?\nUse 7 files and source.\npolish',
+    });
+
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+
+    await expect(page.locator('.view-lines')).toContainText('## Why Impeccable?');
+    await expect(page.locator('.view-lines')).toContainText('Use **7 files** and [source](https://example.com).');
+    await expect(page.locator('.view-lines')).toContainText('- `polish`');
+
+    const debugLog = await fs.readFile(path.join(launched.userDataDir, 'markdown-editor-debug.log'), 'utf8');
+    expect(debugLog).toContain('renderer.editor.paste.shortcut.detected');
+    expect(debugLog).toContain('renderer.editor.paste.richText.converted');
+  } finally {
+    await launched.app.evaluate(({ app }) => app.exit(0)).catch(() => undefined);
+    await fs.rm(launched.userDataDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }).catch(() => undefined);
+    await fs.rm(tempDir, { force: true, recursive: true });
+  }
+});
+
 test('keeps long source lines inside the editor viewport', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-long-line-'));
   const markdownPath = path.join(tempDir, 'long line.md');
@@ -156,9 +199,9 @@ test('keeps long source lines inside the editor viewport', async () => {
   try {
     const page = await launched.app.firstWindow();
     await page.setViewportSize({ width: 1178, height: 768 });
+    await expect(page.getByTestId('preview')).toContainText('Long Line');
 
-    await page.getByTestId('toggle-editor').click();
-    await expect(page.getByTestId('editor')).toBeVisible();
+    await ensureEditorVisible(page);
 
     const metrics = await page.evaluate(() => {
       const workspace = document.querySelector<HTMLElement>('.workspace');

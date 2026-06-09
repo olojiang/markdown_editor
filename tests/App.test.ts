@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
 import App from '@/renderer/App.vue';
+import MarkdownMonacoEditor from '@/renderer/components/MarkdownMonacoEditor.vue';
 
 const openFile = {
   path: '/docs/readme.md',
@@ -172,6 +173,7 @@ describe('App', () => {
       quitApp: vi.fn().mockResolvedValue(undefined),
       confirmClose: vi.fn().mockResolvedValue(undefined),
       confirmCloseSync: vi.fn().mockReturnValue(true),
+      readClipboard: vi.fn().mockReturnValue({ formats: [], html: '', text: '' }),
       debugLog: vi.fn().mockResolvedValue(undefined),
     };
   });
@@ -437,6 +439,134 @@ describe('App', () => {
     expect(drawImage).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
     expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('![1778054400000](assets/images/1778054400000.webp)');
+  });
+
+  it('converts rich text clipboard HTML to Markdown when pasting into a Markdown file', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [],
+        getData: vi.fn((type: string) => (type === 'text/html'
+          ? '<h2>Why Impeccable?</h2><p>Use <strong>7 files</strong> and <a href="https://example.com">source</a>.</p><ul><li><code>polish</code></li></ul>'
+          : 'Why Impeccable?\nUse 7 files and source.\npolish')),
+      },
+    });
+
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(editor.value).toContain([
+      '## Why Impeccable?',
+      '',
+      'Use **7 files** and [source](https://example.com).',
+      '',
+      '- `polish`',
+    ].join('\n'));
+  });
+
+  it('falls back to the Electron clipboard HTML when the paste event only exposes plain text', async () => {
+    vi.mocked(window.markdownBridge!.readClipboard!).mockReturnValue({
+      formats: ['text/html', 'text/plain'],
+      html: '<h2>Why Impeccable?</h2><p>Use <strong>7 files</strong> and <a href="https://example.com">source</a>.</p><ul><li><code>polish</code></li></ul>',
+      text: 'Why Impeccable?\nUse 7 files and source.\npolish',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [],
+        types: ['text/plain'],
+        getData: vi.fn((type: string) => (type === 'text/plain'
+          ? 'Why Impeccable?\nUse 7 files and source.\npolish'
+          : '')),
+      },
+    });
+
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(editor.value).toContain([
+      '## Why Impeccable?',
+      '',
+      'Use **7 files** and [source](https://example.com).',
+      '',
+      '- `polish`',
+    ].join('\n'));
+  });
+
+  it('replaces Monaco default plain-text paste with Markdown converted from Electron clipboard HTML', async () => {
+    vi.mocked(window.markdownBridge!.readClipboard!).mockReturnValue({
+      formats: ['text/html', 'text/plain'],
+      html: '<h2>Why Impeccable?</h2><p>Use <strong>7 files</strong> and <a href="https://example.com">source</a>.</p><ul><li><code>polish</code></li></ul>',
+      text: 'Why Impeccable?\nUse 7 files and source.\npolish',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const plainText = 'Why Impeccable?\nUse 7 files and source.\npolish';
+    const pasteStart = editor.value.length;
+    editor.value = `${editor.value}${plainText}`;
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+
+    wrapper.findComponent(MarkdownMonacoEditor).vm.$emit('monaco-paste', {
+      range: {
+        start: pasteStart,
+        end: pasteStart + plainText.length,
+      },
+    });
+    await nextTick();
+
+    expect(editor.value).toContain([
+      '## Why Impeccable?',
+      '',
+      'Use **7 files** and [source](https://example.com).',
+      '',
+      '- `polish`',
+    ].join('\n'));
+    expect(editor.value).not.toContain(plainText);
+  });
+
+  it('converts rich HTML from the Electron clipboard before Monaco handles paste shortcuts', async () => {
+    vi.mocked(window.markdownBridge!.readClipboard!).mockReturnValue({
+      formats: ['text/html', 'text/plain'],
+      html: '<h2>Clipboard Heading</h2><p>Use <strong>rich</strong> text.</p>',
+      text: 'Clipboard Heading\nUse rich text.',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'v',
+      metaKey: true,
+    });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    const stopPropagation = vi.spyOn(event, 'stopPropagation');
+
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(stopPropagation).toHaveBeenCalled();
+    expect(editor.value).toContain('## Clipboard Heading\n\nUse **rich** text.');
   });
 
   it('opens a cloud upload dialog for pasted images and inserts the uploaded URL', async () => {

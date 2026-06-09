@@ -2,6 +2,7 @@ import {
   buildDocumentHeadingTree,
   documentKindFromFileName,
   formatJsonDocument,
+  htmlToMarkdown,
   isPreviewableDocumentKind,
   renderDocumentPreview,
 } from '@/renderer/lib/document';
@@ -61,5 +62,36 @@ describe('document helpers', () => {
   it('formats JSON with two spaces or a compact single line', () => {
     expect(formatJsonDocument('{"b":1,"a":{"c":2}}')).toBe('{\n  "b": 1,\n  "a": {\n    "c": 2\n  }\n}');
     expect(formatJsonDocument('{"b":1,"a":{"c":2}}', true)).toBe('{"b":1,"a":{"c":2}}');
+  });
+
+  it('converts copied rich HTML into Markdown blocks and inline formatting', () => {
+    const markdown = htmlToMarkdown(`
+      <h2>Why Impeccable?</h2>
+      <p>Anthropic's <a href="https://example.com/frontend">frontend-design</a> was <strong>first</strong>.</p>
+      <p>Commands include <code>polish</code>, <code>audit</code>, and <em>more</em>.</p>
+      <ul>
+        <li><strong>7 domain reference files</strong> (<a href="https://example.com/source">view source</a>).</li>
+        <li><strong>23 commands.</strong> Shared vocabulary.</li>
+      </ul>
+    `);
+
+    expect(markdown).toBe([
+      '## Why Impeccable?',
+      '',
+      "Anthropic's [frontend-design](https://example.com/frontend) was **first**.",
+      '',
+      'Commands include `polish`, `audit`, and *more*.',
+      '',
+      '- **7 domain reference files** ([view source](https://example.com/source)).',
+      '- **23 commands.** Shared vocabulary.',
+    ].join('\n'));
+  });
+
+  it('converts copied HTML tables into Markdown tables', () => {
+    expect(htmlToMarkdown('<table><tr><th>Name</th><th>Count</th></tr><tr><td>Rules</td><td>27</td></tr></table>')).toBe([
+      '| Name | Count |',
+      '| --- | --- |',
+      '| Rules | 27 |',
+    ].join('\n'));
   });
 });

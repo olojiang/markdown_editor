@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFileSync } from 'node:child_process';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
@@ -1748,6 +1748,21 @@ ipcMain.on('app:confirm-close-sync', (event) => {
   mainLog('ipc.app.confirm-close-sync');
   confirmApplicationClose();
   event.returnValue = true;
+});
+
+ipcMain.on('app:read-clipboard-sync', (event) => {
+  try {
+    event.returnValue = {
+      formats: clipboard.availableFormats(),
+      html: clipboard.readHTML(),
+      text: clipboard.readText(),
+    };
+  } catch (error) {
+    mainLog('ipc.app.read-clipboard-sync.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    event.returnValue = { formats: [], html: '', text: '' };
+  }
 });
 
 ipcMain.handle('app:debug-log', (_event, eventName: string, payload: Record<string, unknown> = {}) => {

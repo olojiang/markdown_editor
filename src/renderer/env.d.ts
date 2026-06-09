@@ -179,6 +179,7 @@ interface MarkdownBridge {
   quitApp(): Promise<void>;
   confirmClose(): Promise<void>;
   confirmCloseSync?(): boolean;
+  readClipboard?(): { formats: string[]; html: string; text: string };
   debugLog?(event: string, payload?: Record<string, unknown>): Promise<void>;
 }
 

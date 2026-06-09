@@ -7,6 +7,7 @@ import {
   documentKindFromFileName,
   documentLabel,
   formatJsonDocument,
+  htmlToMarkdown,
   isPreviewableDocumentKind,
   monacoLanguageForDocument,
   renderDocumentPreview,
@@ -100,6 +101,19 @@ interface EditorInsertionRange {
   start: number;
   end: number;
   scrollTop: number;
+}
+
+interface MonacoPasteEvent {
+  clipboardEvent?: ClipboardEvent;
+  range: {
+    end: number;
+    start: number;
+  };
+}
+
+interface PasteShortcutEvent {
+  preventDefault(): void;
+  stopPropagation(): void;
 }
 
 interface CursorPosition {
@@ -2680,6 +2694,63 @@ function insertRemoteImageMarkdown(url: string, name: string, range: EditorInser
   replaceEditorRange(`![${altText}](${url})`, range);
 }
 
+function insertRichClipboardMarkdown(html: string, sourceName: 'clipboard' | 'paste-event'): boolean {
+  if (!isMarkdownDocument.value || !html.trim()) {
+    return false;
+  }
+
+  const markdown = htmlToMarkdown(html);
+  if (!markdown.trim()) {
+    return false;
+  }
+
+  replaceSelection(markdown);
+  status.value = '已将富文本转换为 Markdown';
+  debugLog('editor.paste.richText.converted', {
+    htmlLength: html.length,
+    markdownLength: markdown.length,
+    source: sourceName,
+  });
+  return true;
+}
+
+function replaceRangeWithRichClipboardMarkdown(
+  html: string,
+  sourceName: 'clipboard' | 'monaco-paste-event',
+  range: EditorInsertionRange,
+): boolean {
+  if (!isMarkdownDocument.value || !html.trim()) {
+    return false;
+  }
+
+  const markdown = htmlToMarkdown(html);
+  if (!markdown.trim()) {
+    return false;
+  }
+
+  replaceEditorRange(markdown, range);
+  status.value = '已将富文本转换为 Markdown';
+  debugLog('editor.paste.richText.converted', {
+    htmlLength: html.length,
+    markdownLength: markdown.length,
+    source: sourceName,
+  });
+  return true;
+}
+
+function readBridgeClipboardHtml(): { formats: string[]; html: string; textLength: number } | null {
+  const clipboard = bridge?.readClipboard?.();
+  if (!clipboard) {
+    return null;
+  }
+
+  return {
+    formats: clipboard.formats,
+    html: clipboard.html,
+    textLength: clipboard.text.length,
+  };
+}
+
 function timestampedWebpName(): string {
   return `${Date.now()}.webp`;
 }
@@ -2891,16 +2962,46 @@ async function deleteSelectedAsset(): Promise<void> {
 }
 
 async function onEditorPaste(event: ClipboardEvent): Promise<void> {
+  const clipboardData = event.clipboardData;
+  const clipboardTypes = Array.from(clipboardData?.types ?? []);
   const imageFile = Array.from(event.clipboardData?.files ?? []).find((file) => file.type.startsWith('image/'));
   if (!imageFile) {
+    const richHtml = clipboardData?.getData('text/html') ?? '';
+    const plainText = clipboardData?.getData('text/plain') ?? '';
+    const fallbackClipboard = richHtml.trim() ? null : readBridgeClipboardHtml();
+    debugLog('editor.paste.detected', {
+      currentDocumentKind: currentDocumentKind.value,
+      fallbackFormats: fallbackClipboard?.formats ?? [],
+      fallbackHtmlLength: fallbackClipboard?.html.length ?? 0,
+      fallbackPlainTextLength: fallbackClipboard?.textLength ?? 0,
+      fileCount: clipboardData?.files.length ?? 0,
+      htmlLength: richHtml.length,
+      isMarkdownDocument: isMarkdownDocument.value,
+      plainTextLength: plainText.length,
+      types: clipboardTypes,
+    });
+    if (isMarkdownDocument.value && richHtml.trim()) {
+      if (insertRichClipboardMarkdown(richHtml, 'paste-event')) {
+        event.preventDefault();
+      }
+    } else if (fallbackClipboard && insertRichClipboardMarkdown(fallbackClipboard.html, 'clipboard')) {
+      event.preventDefault();
+    } else if (isMarkdownDocument.value) {
+      debugLog('editor.paste.richText.skipped', {
+        fallbackFormats: fallbackClipboard?.formats ?? [],
+        reason: richHtml.trim() || fallbackClipboard?.html.trim() ? 'empty-conversion' : 'missing-text-html',
+        types: clipboardTypes,
+      });
+    }
     return;
   }
 
   event.preventDefault();
-  rendererLog.info('editor.paste.image.detected', {
+  debugLog('editor.paste.image.detected', {
     fileName: imageFile.name,
     mode: imageUploadMode.value,
     type: imageFile.type,
+    types: clipboardTypes,
   });
   if (imageUploadMode.value === 'cloud') {
     if (!bridge?.saveTempImageAsset || !bridge.uploadCloudImage) {
@@ -2913,7 +3014,7 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
       scrollTop: 0,
     };
     const converted = await convertImageFileToWebp(imageFile);
-    rendererLog.info('editor.paste.image.converted', {
+    debugLog('editor.paste.image.converted', {
       fileName: converted.fileName,
       mode: 'cloud',
       mimeType: converted.mimeType,
@@ -2930,7 +3031,7 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
   }
 
   const converted = await convertImageFileToWebp(imageFile);
-  rendererLog.info('editor.paste.image.converted', {
+  debugLog('editor.paste.image.converted', {
     fileName: converted.fileName,
     mode: 'local',
     mimeType: converted.mimeType,
@@ -2944,6 +3045,70 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
   await refreshImageAssets();
   selectedAssetPath.value = asset.relativePath;
   insertImageMarkdown(asset);
+}
+
+function onEditorMonacoPaste(event: MonacoPasteEvent): void {
+  const richHtml = event.clipboardEvent?.clipboardData?.getData('text/html') ?? '';
+  const plainText = event.clipboardEvent?.clipboardData?.getData('text/plain') ?? '';
+  const fallbackClipboard = richHtml.trim() ? null : readBridgeClipboardHtml();
+  const range = {
+    start: event.range.start,
+    end: event.range.end,
+    scrollTop: editorScrollTop(),
+  };
+
+  debugLog('editor.paste.monaco-did-paste', {
+    currentDocumentKind: currentDocumentKind.value,
+    fallbackFormats: fallbackClipboard?.formats ?? [],
+    fallbackHtmlLength: fallbackClipboard?.html.length ?? 0,
+    fallbackPlainTextLength: fallbackClipboard?.textLength ?? 0,
+    htmlLength: richHtml.length,
+    isMarkdownDocument: isMarkdownDocument.value,
+    plainTextLength: plainText.length,
+    rangeEnd: range.end,
+    rangeStart: range.start,
+  });
+
+  if (richHtml.trim()) {
+    if (replaceRangeWithRichClipboardMarkdown(richHtml, 'monaco-paste-event', range)) {
+      return;
+    }
+  } else if (fallbackClipboard && replaceRangeWithRichClipboardMarkdown(fallbackClipboard.html, 'clipboard', range)) {
+    return;
+  }
+
+  if (isMarkdownDocument.value) {
+    debugLog('editor.paste.richText.skipped', {
+      fallbackFormats: fallbackClipboard?.formats ?? [],
+      reason: richHtml.trim() || fallbackClipboard?.html.trim() ? 'empty-conversion' : 'missing-text-html',
+      source: 'monaco-did-paste',
+    });
+  }
+}
+
+function onEditorPasteShortcut(event: PasteShortcutEvent): void {
+  const clipboard = readBridgeClipboardHtml();
+  if (!clipboard) {
+    return;
+  }
+
+  debugLog('editor.paste.shortcut.detected', {
+    currentDocumentKind: currentDocumentKind.value,
+    formats: clipboard.formats,
+    htmlLength: clipboard.html.length,
+    isMarkdownDocument: isMarkdownDocument.value,
+    plainTextLength: clipboard.textLength,
+  });
+
+  if (insertRichClipboardMarkdown(clipboard.html, 'clipboard')) {
+    event.preventDefault();
+    event.stopPropagation();
+  } else if (isMarkdownDocument.value) {
+    debugLog('editor.paste.richText.skipped', {
+      formats: clipboard.formats,
+      reason: clipboard.html.trim() ? 'empty-conversion' : 'missing-clipboard-html',
+    });
+  }
 }
 
 function scheduleSave(): void {
@@ -4973,8 +5138,10 @@ onBeforeUnmount(() => {
             :theme="session.theme"
             :vim-enabled="session.editorPreferences.vimEnabled"
             @focus-line-change="onEditorFocusLineChange"
+            @monaco-paste="onEditorMonacoPaste"
             @scroll="onEditorScroll"
             @paste="onEditorPaste"
+            @paste-shortcut="onEditorPasteShortcut"
             @vim-command="onVimCommand"
             @vim-status="onVimStatus"
           />

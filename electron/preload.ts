@@ -207,6 +207,7 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   quitApp: () => ipcRenderer.invoke('app:quit'),
   confirmClose: () => ipcRenderer.invoke('app:confirm-close'),
   confirmCloseSync: () => ipcRenderer.sendSync('app:confirm-close-sync'),
+  readClipboard: () => ipcRenderer.sendSync('app:read-clipboard-sync'),
   debugLog: (event: string, payload: Record<string, unknown> = {}) =>
     ipcRenderer.invoke('app:debug-log', event, payload),
 });

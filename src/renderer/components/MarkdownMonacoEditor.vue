@@ -13,6 +13,21 @@ interface SelectionRange {
   start: number;
 }
 
+interface MonacoPasteEvent {
+  clipboardEvent?: ClipboardEvent;
+  range: SelectionRange;
+}
+
+interface PasteShortcutEvent {
+  altKey?: boolean;
+  ctrlKey?: boolean;
+  key?: string;
+  metaKey?: boolean;
+  preventDefault(): void;
+  shiftKey?: boolean;
+  stopPropagation(): void;
+}
+
 interface CursorPosition {
   column: number;
   lineNumber: number;
@@ -29,7 +44,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'focus-line-change'): void;
+  (event: 'monaco-paste', value: MonacoPasteEvent): void;
   (event: 'paste', value: ClipboardEvent): void;
+  (event: 'paste-shortcut', value: PasteShortcutEvent): void;
   (event: 'scroll', value: Event): void;
   (event: 'update:modelValue', value: string): void;
   (event: 'vim-command', value: 'write' | 'write-quit' | 'quit' | 'force-quit'): void;
@@ -224,6 +241,43 @@ function onPasteCapture(event: ClipboardEvent): void {
   emit('paste', event);
 }
 
+function isPasteShortcut(event: KeyboardEvent): boolean {
+  return event.key.toLowerCase() === 'v' && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
+}
+
+function onKeydownCapture(event: KeyboardEvent): void {
+  if (isPasteShortcut(event)) {
+    emit('paste-shortcut', event);
+  }
+}
+
+function onMonacoKeyDown(event: Monaco.IKeyboardEvent): void {
+  if (event.keyCode === monacoModule?.KeyCode.KeyV && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+    emit('paste-shortcut', event);
+  }
+}
+
+function onMonacoPaste(event: Monaco.editor.IPasteEvent): void {
+  const model = getModel();
+  if (!model) {
+    return;
+  }
+
+  emit('monaco-paste', {
+    clipboardEvent: event.clipboardEvent,
+    range: {
+      start: model.getOffsetAt({
+        column: event.range.startColumn,
+        lineNumber: event.range.startLineNumber,
+      }),
+      end: model.getOffsetAt({
+        column: event.range.endColumn,
+        lineNumber: event.range.endLineNumber,
+      }),
+    },
+  });
+}
+
 async function startVimMode(): Promise<void> {
   if (!monacoEditor || vimMode) {
     return;
@@ -301,8 +355,11 @@ async function createMonacoEditor(): Promise<void> {
     }),
     monacoEditor.onDidScrollChange(emitScroll),
     monacoEditor.onDidChangeCursorPosition(emitFocusLineChange),
+    monacoEditor.onDidPaste(onMonacoPaste),
+    monacoEditor.onKeyDown(onMonacoKeyDown),
   ];
-  container.value.addEventListener('paste', onPasteCapture);
+  container.value.addEventListener('paste', onPasteCapture, { capture: true });
+  container.value.addEventListener('keydown', onKeydownCapture, { capture: true });
   await syncVimMode();
   rendererLog.info('editor.monaco.init.done', {
     lineCount: monacoEditor.getModel()?.getLineCount() ?? 0,
@@ -489,7 +546,8 @@ onBeforeUnmount(() => {
   stopVimMode();
   disposables.forEach((disposable) => disposable.dispose());
   disposables = [];
-  container.value?.removeEventListener('paste', onPasteCapture);
+  container.value?.removeEventListener('paste', onPasteCapture, { capture: true });
+  container.value?.removeEventListener('keydown', onKeydownCapture, { capture: true });
   monacoEditor?.dispose();
   monacoEditor = null;
 });
@@ -560,6 +618,7 @@ defineExpose({
       @focus="emitFocusLineChange"
       @input="onFallbackInput"
       @keyup="emitFocusLineChange"
+      @keydown.capture="onKeydownCapture"
       @paste="onFallbackPaste"
       @scroll="$emit('scroll', $event)"
       @select="emitFocusLineChange"

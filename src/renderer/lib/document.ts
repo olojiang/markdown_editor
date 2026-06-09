@@ -80,6 +80,198 @@ function isUnsafeUrl(value: string): boolean {
   return /^\s*javascript:/i.test(value);
 }
 
+function markdownText(value: string): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .replace(/\\/g, '\\\\')
+    .replace(/([`*_[\]])/g, '\\$1');
+}
+
+function normalizeInlineWhitespace(value: string): string {
+  return value.replace(/[ \t\r\n]+/g, ' ');
+}
+
+function trimMarkdownBlock(value: string): string {
+  return value
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .trim();
+}
+
+function escapeMarkdownUrl(value: string): string {
+  return value.replace(/\s/g, '%20').replace(/\)/g, '%29');
+}
+
+function codeFenceFor(value: string): string {
+  const longestFence = value.match(/`{3,}/g)?.reduce((max, fence) => Math.max(max, fence.length), 2) ?? 2;
+  return '`'.repeat(longestFence + 1);
+}
+
+function inlineMarkdownForNode(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return markdownText(node.textContent ?? '');
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return '';
+  }
+
+  const element = node as HTMLElement;
+  const tagName = element.tagName.toLowerCase();
+  if (tagName === 'br') {
+    return '  \n';
+  }
+  if (tagName === 'script' || tagName === 'style' || tagName === 'meta') {
+    return '';
+  }
+  if (tagName === 'img') {
+    const src = element.getAttribute('src')?.trim() ?? '';
+    if (!src || isUnsafeUrl(src)) {
+      return markdownText(element.getAttribute('alt') ?? '');
+    }
+    const alt = (element.getAttribute('alt') ?? '').replace(/]/g, '\\]');
+    return `![${alt}](${escapeMarkdownUrl(src)})`;
+  }
+
+  const children = normalizeInlineWhitespace(Array.from(element.childNodes).map(inlineMarkdownForNode).join(''));
+  if (!children.trim()) {
+    return '';
+  }
+  if (tagName === 'strong' || tagName === 'b') {
+    return `**${children.trim()}**`;
+  }
+  if (tagName === 'em' || tagName === 'i') {
+    return `*${children.trim()}*`;
+  }
+  if (tagName === 'code') {
+    const content = (element.textContent ?? '').replace(/`/g, '\\`');
+    return `\`${content}\``;
+  }
+  if (tagName === 'a') {
+    const href = element.getAttribute('href')?.trim() ?? '';
+    if (!href || isUnsafeUrl(href)) {
+      return children;
+    }
+    return `[${children.trim().replace(/]/g, '\\]')}](${escapeMarkdownUrl(href)})`;
+  }
+
+  return children;
+}
+
+function inlineMarkdownForElement(element: Element): string {
+  return normalizeInlineWhitespace(Array.from(element.childNodes).map(inlineMarkdownForNode).join('')).trim();
+}
+
+function tableMarkdownForElement(table: Element): string {
+  const rows = Array.from(table.querySelectorAll('tr'))
+    .map((row) => Array.from(row.children)
+      .filter((cell) => ['td', 'th'].includes(cell.tagName.toLowerCase()))
+      .map((cell) => inlineMarkdownForElement(cell).replace(/\|/g, '\\|')));
+  if (rows.length === 0 || rows[0].length === 0) {
+    return '';
+  }
+
+  const columnCount = Math.max(...rows.map((row) => row.length));
+  const normalizedRows = rows.map((row) => Array.from({ length: columnCount }, (_, index) => row[index] ?? ''));
+  const header = normalizedRows[0];
+  const divider = Array.from({ length: columnCount }, () => '---');
+  const body = normalizedRows.slice(1);
+  return [header, divider, ...body].map((row) => `| ${row.join(' | ')} |`).join('\n');
+}
+
+function listMarkdownForElement(list: Element, depth: number): string {
+  const ordered = list.tagName.toLowerCase() === 'ol';
+  const items = Array.from(list.children).filter((child) => child.tagName.toLowerCase() === 'li');
+  return items.map((item, index) => {
+    const nestedLists: Element[] = [];
+    const parts = Array.from(item.childNodes).map((child) => {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const childElement = child as Element;
+        const tagName = childElement.tagName.toLowerCase();
+        if (tagName === 'ul' || tagName === 'ol') {
+          nestedLists.push(childElement);
+          return '';
+        }
+        if (['p', 'div'].includes(tagName)) {
+          return inlineMarkdownForElement(childElement);
+        }
+      }
+      return inlineMarkdownForNode(child);
+    });
+    const marker = ordered ? `${index + 1}.` : '-';
+    const indent = '  '.repeat(depth);
+    const text = normalizeInlineWhitespace(parts.join('')).trim();
+    const nested = nestedLists.map((nestedList) => listMarkdownForElement(nestedList, depth + 1)).filter(Boolean).join('\n');
+    return [`${indent}${marker} ${text}`, nested].filter(Boolean).join('\n');
+  }).join('\n');
+}
+
+function blockMarkdownForElement(element: Element, depth = 0): string {
+  const tagName = element.tagName.toLowerCase();
+  if (tagName === 'script' || tagName === 'style' || tagName === 'meta') {
+    return '';
+  }
+  if (/^h[1-6]$/.test(tagName)) {
+    const level = Number(tagName.slice(1));
+    return `${'#'.repeat(level)} ${inlineMarkdownForElement(element)}`;
+  }
+  if (tagName === 'p') {
+    return inlineMarkdownForElement(element);
+  }
+  if (tagName === 'blockquote') {
+    return blockMarkdownForNodes(Array.from(element.childNodes), depth)
+      .split('\n')
+      .map((line) => line ? `> ${line}` : '>')
+      .join('\n');
+  }
+  if (tagName === 'pre') {
+    const code = element.textContent?.replace(/\n+$/g, '') ?? '';
+    const fence = codeFenceFor(code);
+    return `${fence}\n${code}\n${fence}`;
+  }
+  if (tagName === 'ul' || tagName === 'ol') {
+    return listMarkdownForElement(element, depth);
+  }
+  if (tagName === 'table') {
+    return tableMarkdownForElement(element);
+  }
+  if (tagName === 'hr') {
+    return '---';
+  }
+  if (tagName === 'img') {
+    return inlineMarkdownForNode(element);
+  }
+  if (['div', 'section', 'article', 'main', 'body'].includes(tagName)) {
+    return blockMarkdownForNodes(Array.from(element.childNodes), depth);
+  }
+
+  return inlineMarkdownForElement(element);
+}
+
+function blockMarkdownForNodes(nodes: Node[], depth = 0): string {
+  return nodes.map((node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return markdownText(node.textContent ?? '').trim();
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return '';
+    }
+    return blockMarkdownForElement(node as Element, depth);
+  }).map(trimMarkdownBlock).filter(Boolean).join('\n\n');
+}
+
+export function htmlToMarkdown(source: string): string {
+  if (!source.trim()) {
+    return '';
+  }
+  if (typeof DOMParser === 'undefined') {
+    return source.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+  }
+
+  const document = new DOMParser().parseFromString(source, 'text/html');
+  return trimMarkdownBlock(blockMarkdownForElement(document.body));
+}
+
 function headingLineNumber(source: string, level: number, text: string, index: number): number {
   const lines = source.split('\n');
   const escapedText = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
