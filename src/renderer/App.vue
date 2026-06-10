@@ -208,6 +208,7 @@ const icons = {
   bookmark: 'M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
   bookOpen: 'M2 4.5A3 3 0 0 1 5 3h5v18H5a3 3 0 0 0-3 3V4.5z M22 4.5A3 3 0 0 0 19 3h-5v18h5a3 3 0 0 1 3 3V4.5z',
   chevronDown: 'm6 9 6 6 6-6',
+  chevronUp: 'm18 15-6-6-6 6',
   chevronRight: 'm9 18 6-6-6-6',
   code: 'm16 18 6-6-6-6 M8 6l-6 6 6 6',
   columns: 'M3 5h18 M3 12h18 M3 19h18 M8 5v14 M16 5v14',
@@ -290,6 +291,7 @@ const isTocPanelCollapsed = ref(false);
 const draggedTabId = ref<string | null>(null);
 const activeResize = ref<'toc' | 'editor' | null>(null);
 const cursorHistory = ref<CursorHistoryEntry[]>([]);
+const scrollBackToTopVisible = ref(false);
 let sessionSaveTimer: number | undefined;
 let untitledCounter = 1;
 const untitledDraftNamePattern = /^未命名-\d+\.md$/;
@@ -297,6 +299,7 @@ let cursorHistoryIndex = -1;
 let isNavigatingCursorHistory = false;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
+let isRestoringDocumentScroll = false;
 let removeExternalOpenListener: (() => void) | undefined;
 let removeMarkdownFileChangedListener: (() => void) | undefined;
 let removeToggleEditorShortcutListener: (() => void) | undefined;
@@ -1099,6 +1102,30 @@ function activeTocScrollTop(): number {
   return tocPanel.value?.scrollTop ?? activeTab.value?.tocScrollTop ?? 0;
 }
 
+function activeDocumentHasScrollableTop(): boolean {
+  if (hasPreviewPane.value && !isPreviewHidden.value && preview.value) {
+    return preview.value.scrollTop > 0 && maxScrollTop(preview.value) > 0;
+  }
+  if (isEditorVisible.value && editor.value) {
+    return editorScrollTop() > 0 && editor.value.getMaxScrollTop() > 0;
+  }
+  return false;
+}
+
+function updateScrollBackToTopVisibility(): void {
+  scrollBackToTopVisible.value = !isRestoringDocumentScroll && activeDocumentHasScrollableTop();
+}
+
+function beginDocumentScrollRestore(): void {
+  isRestoringDocumentScroll = true;
+  scrollBackToTopVisible.value = false;
+}
+
+function finishDocumentScrollRestore(): void {
+  isRestoringDocumentScroll = false;
+  updateScrollBackToTopVisibility();
+}
+
 function syncActiveTabState(): void {
   const tab = activeTab.value;
   if (!tab || !currentFile.value) {
@@ -1615,6 +1642,10 @@ function persistOpenedFile(file: MarkdownFile, scrollTop: number, tabId = file.p
 }
 
 function rememberScroll(scrollTop: number): void {
+  if (isRestoringDocumentScroll) {
+    updateScrollBackToTopVisibility();
+    return;
+  }
   const filePath = currentFile.value?.path ?? null;
   if (activeTab.value) {
     activeTab.value.scrollTop = scrollTop;
@@ -1628,9 +1659,13 @@ function rememberScroll(scrollTop: number): void {
       ? addFileScrollPosition(session.value.fileScrollPositions, filePath, scrollTop)
       : session.value.fileScrollPositions,
   }, { deferred: true });
+  updateScrollBackToTopVisibility();
 }
 
 function onTocScroll(): void {
+  if (isRestoringDocumentScroll) {
+    return;
+  }
   rememberScroll(activeScrollTop());
 }
 
@@ -1948,6 +1983,9 @@ function syncScroll(from: 'editor' | 'preview', lock = true): void {
 }
 
 function onEditorScroll(): void {
+  if (isRestoringDocumentScroll) {
+    return;
+  }
   syncScroll('editor');
   updateActiveHeadingFromPreview();
   rememberScroll(activeScrollTop());
@@ -1960,6 +1998,9 @@ function onEditorFocusLineChange(): void {
     activeEditorLine.value = Math.min(sourceLineCount(), Math.max(1, line));
     activeEditorColumn.value = Math.max(1, position?.column ?? 1);
     rememberCursorPosition();
+    if (isRestoringDocumentScroll) {
+      return;
+    }
     syncPreviewToLine(line);
     updateActiveHeadingFromSourceLine(line);
     rememberScroll(activeScrollTop());
@@ -1967,6 +2008,9 @@ function onEditorFocusLineChange(): void {
 }
 
 function onPreviewScroll(event: Event): void {
+  if (isRestoringDocumentScroll) {
+    return;
+  }
   updateActiveHeadingFromPreview();
   syncScroll('preview');
   rememberScroll((event.target as HTMLElement).scrollTop);
@@ -2059,6 +2103,9 @@ function restoreTocScroll(scrollTop: number): void {
 }
 
 function restoreDocumentScroll(tab: Pick<OpenTab, 'editorScrollTop' | 'previewScrollTop' | 'scrollTop' | 'tocScrollTop'>): void {
+  if (!isRestoringDocumentScroll) {
+    beginDocumentScrollRestore();
+  }
   const editorTop = tab.editorScrollTop ?? tab.scrollTop;
   const previewTop = tab.previewScrollTop ?? tab.scrollTop;
   if (preview.value) {
@@ -2067,6 +2114,24 @@ function restoreDocumentScroll(tab: Pick<OpenTab, 'editorScrollTop' | 'previewSc
   setEditorScrollTop(editorTop);
   restoreTocScroll(tab.tocScrollTop ?? 0);
   updateActiveHeadingFromPreview();
+  finishDocumentScrollRestore();
+}
+
+function scrollActiveDocumentToTop(): void {
+  if (hasPreviewPane.value && !isPreviewHidden.value && preview.value) {
+    preview.value.scrollTop = 0;
+    syncScroll('preview', false);
+    updateActiveHeadingFromPreview();
+    rememberScroll(0);
+    return;
+  }
+
+  if (isEditorVisible.value && editor.value) {
+    setEditorScrollTop(0);
+    syncScroll('editor', false);
+    updateActiveHeadingFromSourceLine(1);
+    rememberScroll(0);
+  }
 }
 
 function tabSwitchShortcut(index: number): string | null {
@@ -2086,6 +2151,7 @@ function activateTab(tabId: string): void {
     return;
   }
 
+  beginDocumentScrollRestore();
   activeTabId.value = tab.id;
   currentFile.value = tab.file;
   source.value = tab.source;
@@ -2155,6 +2221,7 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
       ...tabViewStateForFile(normalizedFile),
     });
   }
+  beginDocumentScrollRestore();
   activeTabId.value = tabId;
   currentFile.value = normalizedFile;
   source.value = normalizedFile.content;
@@ -2420,6 +2487,7 @@ function createNewMarkdownTab(content = '', name?: string): void {
     previewFullscreen: false,
   };
   openTabs.value.push(tab);
+  beginDocumentScrollRestore();
   activeTabId.value = tab.id;
   currentFile.value = tab.file;
   source.value = tab.source;
@@ -2430,6 +2498,7 @@ function createNewMarkdownTab(content = '', name?: string): void {
   status.value = '未保存的新 Markdown 文件';
   persistTabSession({ editorVisible: true, previewHidden: false }, { syncActive: false });
   void nextTick(() => {
+    restoreDocumentScroll(tab);
     editor.value?.focus();
     updateActiveHeadingFromPreview();
     void renderMermaid();
@@ -2478,6 +2547,7 @@ function applyFreshFileContent(file: MarkdownFile, message: string): void {
     return;
   }
 
+  beginDocumentScrollRestore();
   currentFile.value = freshFile;
   lastSavedContent.value = freshFile.content;
   source.value = freshFile.content;
@@ -3574,7 +3644,12 @@ function toggleEditor(): void {
     previewHidden: false,
   });
   if (willShowEditor) {
-    void nextTick(() => syncScroll('preview', false));
+    void nextTick(() => {
+      syncScroll('preview', false);
+      updateScrollBackToTopVisibility();
+    });
+  } else {
+    updateScrollBackToTopVisibility();
   }
 }
 
@@ -3590,7 +3665,12 @@ function togglePreview(): void {
     editorVisible: true,
   });
   if (willShowPreview) {
-    void nextTick(() => syncScroll('editor', false));
+    void nextTick(() => {
+      syncScroll('editor', false);
+      updateScrollBackToTopVisibility();
+    });
+  } else {
+    updateScrollBackToTopVisibility();
   }
 }
 
@@ -3603,6 +3683,7 @@ function togglePreviewFullscreen(): void {
     editorVisible: isEditorVisible.value,
     previewHidden: isPreviewHidden.value,
   });
+  void nextTick(updateScrollBackToTopVisibility);
 }
 
 function toggleTocPanel(): void {
@@ -4647,6 +4728,7 @@ async function restoreSessionTabs(): Promise<boolean> {
   const active = restoredTabs.find((tab) => tab.id === desired?.id)
     ?? restoredTabs.find((tab) => tab.file.path === desired?.filePath)
     ?? restoredTabs[0];
+  beginDocumentScrollRestore();
   activeTabId.value = active.id;
   currentFile.value = active.file;
   source.value = active.source;
@@ -5342,6 +5424,18 @@ onBeforeUnmount(() => {
         />
       </section>
     </section>
+
+    <button
+      v-if="scrollBackToTopVisible"
+      class="scroll-top-button"
+      data-testid="scroll-to-top"
+      type="button"
+      aria-label="回到顶部"
+      title="回到顶部"
+      @click="scrollActiveDocumentToTop"
+    >
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.chevronUp" /></svg>
+    </button>
 
     <div
       v-if="bookmarkManagerOpen"

@@ -809,6 +809,55 @@ describe('App', () => {
     expect(editor.scrollTop).toBe(500);
   });
 
+  it('keeps live preview scroll positions isolated while switching tabs', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(preview, 2200, 200);
+
+    preview.scrollTop = 420;
+    await wrapper.find('[data-testid="preview"]').trigger('scroll');
+
+    await openRecentFileFromMenu(wrapper, recentFile.name);
+    await vi.dynamicImportSettled();
+    expect(wrapper.find<HTMLElement>('[data-testid="preview"]').element.scrollTop).toBe(0);
+
+    const recentPreview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(recentPreview, 2200, 200);
+    recentPreview.scrollTop = 80;
+    await wrapper.find('[data-testid="preview"]').trigger('scroll');
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(wrapper.find<HTMLElement>('[data-testid="preview"]').element.scrollTop).toBe(420);
+
+    await wrapper.find('[data-testid="tab-recent.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(wrapper.find<HTMLElement>('[data-testid="preview"]').element.scrollTop).toBe(80);
+  });
+
+  it('shows a floating scroll-to-top button only when the active document is scrolled', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(preview, 2200, 200);
+    expect(wrapper.find('[data-testid="scroll-to-top"]').exists()).toBe(false);
+
+    preview.scrollTop = 360;
+    await wrapper.find('[data-testid="preview"]').trigger('scroll');
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="scroll-to-top"]').exists()).toBe(true);
+
+    await wrapper.find('[data-testid="scroll-to-top"]').trigger('click');
+    await nextTick();
+
+    expect(preview.scrollTop).toBe(0);
+    expect(wrapper.find('[data-testid="scroll-to-top"]').exists()).toBe(false);
+  });
+
   it('toggles fullscreen preview mode', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
