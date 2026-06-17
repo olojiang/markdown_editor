@@ -108,6 +108,7 @@ interface MarkdownSession {
   editorPreferences?: {
     vimEnabled: boolean;
     configText: string;
+    richTextPasteEnabled?: boolean;
   };
   theme: 'light' | 'dark' | 'eye';
 }

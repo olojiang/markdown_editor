@@ -1252,6 +1252,7 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
     editorPreferences: {
       vimEnabled: normalized.editorPreferences.vimEnabled,
       configText: normalized.editorPreferences.configText,
+      richTextPasteEnabled: normalized.editorPreferences.richTextPasteEnabled,
     },
     theme: normalized.theme,
   };
@@ -2865,8 +2866,45 @@ function insertRemoteImageMarkdown(url: string, name: string, range: EditorInser
   replaceEditorRange(`![${altText}](${url})`, range);
 }
 
+function clipboardHtmlLooksLikeCodeBlock(html: string): boolean {
+  if (!html.trim() || typeof DOMParser === 'undefined') {
+    return false;
+  }
+
+  const document = new DOMParser().parseFromString(html, 'text/html');
+  const body = document.body;
+  if (!body.querySelector('pre, code')) {
+    return false;
+  }
+
+  if (body.querySelector('a, img, table, ul, ol, li, blockquote, h1, h2, h3, h4, h5, h6, p')) {
+    return false;
+  }
+
+  const allowedTags = new Set(['pre', 'code', 'span', 'div', 'br']);
+  return Array.from(body.querySelectorAll('*')).every((element) => allowedTags.has(element.tagName.toLowerCase()));
+}
+
+function richClipboardConversionSkipReason(html: string): 'code-block-source' | 'disabled' | 'missing-text-html' | null {
+  if (!html.trim()) {
+    return 'missing-text-html';
+  }
+  if (!session.value.editorPreferences.richTextPasteEnabled) {
+    return 'disabled';
+  }
+  if (clipboardHtmlLooksLikeCodeBlock(html)) {
+    return 'code-block-source';
+  }
+  return null;
+}
+
 function insertRichClipboardMarkdown(html: string, sourceName: 'clipboard' | 'paste-event'): boolean {
-  if (!isMarkdownDocument.value || !html.trim()) {
+  if (!isMarkdownDocument.value) {
+    return false;
+  }
+
+  const skipReason = richClipboardConversionSkipReason(html);
+  if (skipReason) {
     return false;
   }
 
@@ -2890,7 +2928,12 @@ function replaceRangeWithRichClipboardMarkdown(
   sourceName: 'clipboard' | 'monaco-paste-event',
   range: EditorInsertionRange,
 ): boolean {
-  if (!isMarkdownDocument.value || !html.trim()) {
+  if (!isMarkdownDocument.value) {
+    return false;
+  }
+
+  const skipReason = richClipboardConversionSkipReason(html);
+  if (skipReason) {
     return false;
   }
 
@@ -3140,6 +3183,7 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
     const richHtml = clipboardData?.getData('text/html') ?? '';
     const plainText = clipboardData?.getData('text/plain') ?? '';
     const fallbackClipboard = richHtml.trim() ? null : readBridgeClipboardHtml();
+    const conversionHtml = richHtml.trim() ? richHtml : fallbackClipboard?.html ?? '';
     debugLog('editor.paste.detected', {
       currentDocumentKind: currentDocumentKind.value,
       fallbackFormats: fallbackClipboard?.formats ?? [],
@@ -3160,7 +3204,8 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
     } else if (isMarkdownDocument.value) {
       debugLog('editor.paste.richText.skipped', {
         fallbackFormats: fallbackClipboard?.formats ?? [],
-        reason: richHtml.trim() || fallbackClipboard?.html.trim() ? 'empty-conversion' : 'missing-text-html',
+        reason: richClipboardConversionSkipReason(conversionHtml)
+          ?? (conversionHtml.trim() ? 'empty-conversion' : 'missing-text-html'),
         types: clipboardTypes,
       });
     }
@@ -3222,6 +3267,7 @@ function onEditorMonacoPaste(event: MonacoPasteEvent): void {
   const richHtml = event.clipboardEvent?.clipboardData?.getData('text/html') ?? '';
   const plainText = event.clipboardEvent?.clipboardData?.getData('text/plain') ?? '';
   const fallbackClipboard = richHtml.trim() ? null : readBridgeClipboardHtml();
+  const conversionHtml = richHtml.trim() ? richHtml : fallbackClipboard?.html ?? '';
   const range = {
     start: event.range.start,
     end: event.range.end,
@@ -3251,7 +3297,8 @@ function onEditorMonacoPaste(event: MonacoPasteEvent): void {
   if (isMarkdownDocument.value) {
     debugLog('editor.paste.richText.skipped', {
       fallbackFormats: fallbackClipboard?.formats ?? [],
-      reason: richHtml.trim() || fallbackClipboard?.html.trim() ? 'empty-conversion' : 'missing-text-html',
+      reason: richClipboardConversionSkipReason(conversionHtml)
+        ?? (conversionHtml.trim() ? 'empty-conversion' : 'missing-text-html'),
       source: 'monaco-did-paste',
     });
   }
@@ -3277,7 +3324,8 @@ function onEditorPasteShortcut(event: PasteShortcutEvent): void {
   } else if (isMarkdownDocument.value) {
     debugLog('editor.paste.richText.skipped', {
       formats: clipboard.formats,
-      reason: clipboard.html.trim() ? 'empty-conversion' : 'missing-clipboard-html',
+      reason: richClipboardConversionSkipReason(clipboard.html)
+        ?? (clipboard.html.trim() ? 'empty-conversion' : 'missing-clipboard-html'),
     });
   }
 }
@@ -3492,8 +3540,11 @@ function transformJsonSource(compact: boolean): void {
   }
 }
 
-function showEditorSearch(): void {
+function showEditorSearch(searchText = selectedEditorText()): void {
   editorSearchVisible.value = true;
+  if (searchText) {
+    editorSearch.value = searchText;
+  }
   if (!isEditorVisible.value && isPreviewHidden.value) {
     persistSession({
       editorVisible: true,
@@ -3529,6 +3580,7 @@ function persistEditorPreferences(patch: Partial<MarkdownSession['editorPreferen
   persistSession({ editorPreferences });
   rendererLog.info('editor.preferences.persisted', {
     configLength: editorPreferences.configText.length,
+    richTextPasteEnabled: editorPreferences.richTextPasteEnabled,
     vimEnabled: editorPreferences.vimEnabled,
   });
 }
@@ -3537,6 +3589,15 @@ function toggleVimMode(): void {
   const vimEnabled = !session.value.editorPreferences.vimEnabled;
   persistEditorPreferences({ vimEnabled });
   status.value = vimEnabled ? 'Vim 模式已开启' : 'Vim 模式已关闭';
+}
+
+function setRichTextPasteEnabled(enabled: boolean): void {
+  if (session.value.editorPreferences.richTextPasteEnabled === enabled) {
+    return;
+  }
+
+  persistEditorPreferences({ richTextPasteEnabled: enabled });
+  status.value = enabled ? '富文本粘贴转 Markdown 已开启' : '富文本粘贴转 Markdown 已关闭';
 }
 
 function openEditorConfigDialog(): void {
@@ -5213,6 +5274,30 @@ onBeforeUnmount(() => {
             >
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.settings" /></svg>
             </button>
+            <div class="image-upload-mode" role="group" aria-label="富文本粘贴转换">
+              <button
+                data-testid="rich-paste-off"
+                class="mode-button"
+                type="button"
+                :class="{ active: !session.editorPreferences.richTextPasteEnabled }"
+                aria-label="关闭富文本转 Markdown"
+                title="关闭富文本转 Markdown，按原样粘贴纯文本"
+                @click="setRichTextPasteEnabled(false)"
+              >
+                纯文本
+              </button>
+              <button
+                data-testid="rich-paste-on"
+                class="mode-button"
+                type="button"
+                :class="{ active: session.editorPreferences.richTextPasteEnabled }"
+                aria-label="开启富文本转 Markdown"
+                title="开启富文本转 Markdown；代码块复制内容会尽量保持纯文本"
+                @click="setRichTextPasteEnabled(true)"
+              >
+                转 Markdown
+              </button>
+            </div>
             <button data-testid="import-image" class="icon-button" type="button" :disabled="!currentFilePath()" aria-label="导入图片" title="选择图片并复制到资源目录" @click="importImageAsset">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.image" /></svg>
             </button>
@@ -5325,6 +5410,7 @@ onBeforeUnmount(() => {
             @scroll="onEditorScroll"
             @paste="onEditorPaste"
             @paste-shortcut="onEditorPasteShortcut"
+            @show-search-shortcut="showEditorSearch"
             @vim-command="onVimCommand"
             @vim-status="onVimStatus"
           />

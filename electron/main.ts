@@ -215,6 +215,7 @@ let htmlPreviewCounter = 0;
 const htmlPreviewEntries = new Map<string, HtmlPreviewEntry>();
 const htmlPreviewMaxEntries = 40;
 const htmlPreviewIdSearchParam = 'markdown-preview-id';
+const legacySessionUserDataNames = ['markdown-editor'];
 
 function mainLog(event: string, payload: Record<string, unknown> = {}): void {
   const record = {
@@ -636,32 +637,82 @@ function sessionFilePath(): string {
   return path.join(app.getPath('userData'), 'markdown-session.json');
 }
 
+function normalizeParsedSession(parsed: Partial<MarkdownSession>): MarkdownSession {
+  const filePath = typeof parsed.filePath === 'string' ? normalizeRecentFilePath(parsed.filePath) : null;
+  const tabs = normalizeSessionTabs(parsed.tabs);
+  const recentFiles = normalizeRecentFiles(parsed.recentFiles);
+  const recoveredRecentFiles = recentFiles.length === 0 && filePath ? normalizeRecentFiles([filePath]) : recentFiles;
+  logRecentFilesDiagnostics('read-session', parsed.recentFiles, recoveredRecentFiles);
+  return {
+    filePath,
+    tabs,
+    activeTabId: typeof parsed.activeTabId === 'string' && tabs.some((tab) => tab.id === parsed.activeTabId)
+      ? parsed.activeTabId
+      : tabs[0]?.id ?? null,
+    bookmarks: normalizeBookmarks(parsed.bookmarks),
+    bookmarkViewMode: normalizeBookmarkViewMode(parsed.bookmarkViewMode),
+    recentFiles: recoveredRecentFiles,
+    fileScrollPositions: normalizeFileScrollPositions(parsed.fileScrollPositions),
+    scrollTop: typeof parsed.scrollTop === 'number' ? parsed.scrollTop : 0,
+    tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
+    editorWidth: typeof parsed.editorWidth === 'number' ? parsed.editorWidth : 560,
+    previewHidden: parsed.previewHidden === true,
+    editorVisible: parsed.editorVisible === true,
+    theme: normalizeTheme(parsed.theme),
+  };
+}
+
+function sessionHasRestorableData(session: MarkdownSession): boolean {
+  return Boolean(session.filePath)
+    || session.tabs.length > 0
+    || session.recentFiles.length > 0
+    || session.bookmarks.length > 0
+    || session.fileScrollPositions.length > 0;
+}
+
+function sessionCanUseLegacyFallback(session: MarkdownSession): boolean {
+  return !sessionHasRestorableData(session) && session.scrollTop === 0;
+}
+
+async function readLegacySessionFallback(currentSession: MarkdownSession): Promise<MarkdownSession> {
+  if (!sessionCanUseLegacyFallback(currentSession)) {
+    return currentSession;
+  }
+
+  const currentSessionPath = sessionFilePath();
+  for (const userDataName of legacySessionUserDataNames) {
+    const legacySessionPath = path.join(app.getPath('appData'), userDataName, 'markdown-session.json');
+    if (legacySessionPath === currentSessionPath) {
+      continue;
+    }
+    try {
+      const raw = await fs.readFile(legacySessionPath, 'utf8');
+      const legacySession = normalizeParsedSession(JSON.parse(raw) as Partial<MarkdownSession>);
+      if (!sessionHasRestorableData(legacySession)) {
+        continue;
+      }
+      mainLog('session.legacy-fallback.loaded', {
+        legacySessionPath,
+        restoredFilePath: legacySession.filePath,
+        tabCount: legacySession.tabs.length,
+        recentFileCount: legacySession.recentFiles.length,
+      });
+      return legacySession;
+    } catch {
+      // Missing or invalid legacy sessions are expected on fresh installs.
+    }
+  }
+
+  return currentSession;
+}
+
 async function readSession(): Promise<MarkdownSession> {
   try {
     const raw = await fs.readFile(sessionFilePath(), 'utf8');
     const parsed = JSON.parse(raw) as Partial<MarkdownSession>;
-    const tabs = normalizeSessionTabs(parsed.tabs);
-    const recentFiles = normalizeRecentFiles(parsed.recentFiles);
-    logRecentFilesDiagnostics('read-session', parsed.recentFiles, recentFiles);
-    return {
-      filePath: typeof parsed.filePath === 'string' ? parsed.filePath : null,
-      tabs,
-      activeTabId: typeof parsed.activeTabId === 'string' && tabs.some((tab) => tab.id === parsed.activeTabId)
-        ? parsed.activeTabId
-        : tabs[0]?.id ?? null,
-      bookmarks: normalizeBookmarks(parsed.bookmarks),
-      bookmarkViewMode: normalizeBookmarkViewMode(parsed.bookmarkViewMode),
-      recentFiles,
-      fileScrollPositions: normalizeFileScrollPositions(parsed.fileScrollPositions),
-      scrollTop: typeof parsed.scrollTop === 'number' ? parsed.scrollTop : 0,
-      tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
-      editorWidth: typeof parsed.editorWidth === 'number' ? parsed.editorWidth : 560,
-      previewHidden: parsed.previewHidden === true,
-      editorVisible: parsed.editorVisible === true,
-      theme: normalizeTheme(parsed.theme),
-    };
+    return readLegacySessionFallback(normalizeParsedSession(parsed));
   } catch {
-    return createDefaultSession();
+    return readLegacySessionFallback(createDefaultSession());
   }
 }
 

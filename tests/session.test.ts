@@ -32,6 +32,7 @@ describe('session helpers', () => {
       editorPreferences: {
         vimEnabled: false,
         configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
+        richTextPasteEnabled: false,
       },
       theme: 'light',
     });
@@ -56,6 +57,7 @@ describe('session helpers', () => {
       editorPreferences: {
         vimEnabled: false,
         configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
+        richTextPasteEnabled: false,
       },
       theme: 'light',
     });
@@ -202,12 +204,14 @@ describe('session helpers', () => {
       editorPreferences: {
         vimEnabled: true,
         configText: '{ "tabSize": 4, "wordWrap": "off", "minimap": true }',
+        richTextPasteEnabled: false,
       },
     }, {})).toEqual(
       expect.objectContaining({
         editorPreferences: {
           vimEnabled: true,
           configText: '{ "tabSize": 4, "wordWrap": "off", "minimap": true }',
+          richTextPasteEnabled: false,
         },
       }),
     );
@@ -216,12 +220,14 @@ describe('session helpers', () => {
       editorPreferences: {
         vimEnabled: 'yes',
         configText: 42,
+        richTextPasteEnabled: 'no',
       },
     } as never, {})).toEqual(
       expect.objectContaining({
         editorPreferences: {
           vimEnabled: false,
           configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
+          richTextPasteEnabled: false,
         },
       }),
     );

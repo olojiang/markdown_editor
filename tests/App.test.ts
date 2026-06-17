@@ -94,6 +94,11 @@ async function openRecentFileFromMenu(wrapper: ReturnType<typeof mount>, label: 
   await vi.dynamicImportSettled();
 }
 
+async function enableRichPasteConversion(wrapper: ReturnType<typeof mount>): Promise<void> {
+  await wrapper.find('[data-testid="rich-paste-on"]').trigger('click');
+  await nextTick();
+}
+
 describe('App', () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -276,6 +281,49 @@ describe('App', () => {
     );
   });
 
+  it('defaults rich text paste conversion off and persists the selected mode', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="rich-paste-off"]').classes()).toContain('active');
+    expect(wrapper.find('[data-testid="rich-paste-on"]').classes()).not.toContain('active');
+
+    await wrapper.find('[data-testid="rich-paste-on"]').trigger('click');
+
+    expect(wrapper.find('[data-testid="rich-paste-on"]').classes()).toContain('active');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        editorPreferences: expect.objectContaining({ richTextPasteEnabled: true }),
+      }),
+    );
+  });
+
+  it('restores the persisted rich text paste conversion mode on launch', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [],
+      activeTabId: null,
+      recentFiles: [],
+      scrollTop: 12,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      editorPreferences: {
+        vimEnabled: false,
+        configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
+        richTextPasteEnabled: true,
+      },
+      theme: 'light',
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="rich-paste-on"]').classes()).toContain('active');
+    expect(wrapper.find('[data-testid="rich-paste-off"]').classes()).not.toContain('active');
+  });
+
   it('edits and validates custom Monaco and Vim configuration JSON', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -444,6 +492,7 @@ describe('App', () => {
   it('converts rich text clipboard HTML to Markdown when pasting into a Markdown file', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
+    await enableRichPasteConversion(wrapper);
 
     const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
     editor.setSelectionRange(editor.value.length, editor.value.length);
@@ -479,6 +528,7 @@ describe('App', () => {
     });
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
+    await enableRichPasteConversion(wrapper);
 
     const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
     editor.setSelectionRange(editor.value.length, editor.value.length);
@@ -515,6 +565,7 @@ describe('App', () => {
     });
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
+    await enableRichPasteConversion(wrapper);
 
     const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
     const plainText = 'Why Impeccable?\nUse 7 files and source.\npolish';
@@ -549,6 +600,7 @@ describe('App', () => {
     });
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
+    await enableRichPasteConversion(wrapper);
 
     const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
     editor.setSelectionRange(editor.value.length, editor.value.length);
@@ -567,6 +619,60 @@ describe('App', () => {
     expect(preventDefault).toHaveBeenCalled();
     expect(stopPropagation).toHaveBeenCalled();
     expect(editor.value).toContain('## Clipboard Heading\n\nUse **rich** text.');
+  });
+
+  it('leaves rich HTML paste alone when Markdown conversion is disabled', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    const originalValue = editor.value;
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [],
+        getData: vi.fn((type: string) => (type === 'text/html'
+          ? '<h2>Clipboard Heading</h2><p>Use <strong>rich</strong> text.</p>'
+          : 'Clipboard Heading\nUse rich text.')),
+      },
+    });
+
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(editor.value).toBe(originalValue);
+  });
+
+  it('does not convert clipboard HTML that clearly comes from a code block', async () => {
+    vi.mocked(window.markdownBridge!.readClipboard!).mockReturnValue({
+      formats: ['text/html', 'text/plain'],
+      html: '<pre><code>node ./bin/novel-main-character.js \'/Users/hunter/Downloads/Novel\' --top 5</code></pre>',
+      text: 'node ./bin/novel-main-character.js \'/Users/hunter/Downloads/Novel\' --top 5',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await enableRichPasteConversion(wrapper);
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const plainText = 'node ./bin/novel-main-character.js \'/Users/hunter/Downloads/Novel\' --top 5';
+    const pasteStart = editor.value.length;
+    editor.value = `${editor.value}${plainText}`;
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+
+    wrapper.findComponent(MarkdownMonacoEditor).vm.$emit('monaco-paste', {
+      range: {
+        start: pasteStart,
+        end: pasteStart + plainText.length,
+      },
+    });
+    await nextTick();
+
+    expect(editor.value).toContain(plainText);
+    expect(editor.value).not.toContain(`\`\`\`\n${plainText}`);
   });
 
   it('opens a cloud upload dialog for pasted images and inserts the uploaded URL', async () => {
@@ -1784,6 +1890,59 @@ describe('App', () => {
     await nextTick();
 
     expect(wrapper.find('[data-testid="editor-search"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('routes the source editor find shortcut to the custom search bar', async () => {
+    const wrapper = mount(App, { attachTo: document.body });
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await nextTick();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: 'f',
+    });
+    editor.dispatchEvent(event);
+    await nextTick();
+
+    const searchInput = wrapper.find<HTMLInputElement>('[data-testid="editor-search"]');
+    expect(event.defaultPrevented).toBe(true);
+    expect(searchInput.exists()).toBe(true);
+    expect(document.activeElement).toBe(searchInput.element);
+    wrapper.unmount();
+  });
+
+  it('uses the selected source text when opening search from the editor shortcut', async () => {
+    const wrapper = mount(App, { attachTo: document.body });
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await nextTick();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const selectedText = 'Beta';
+    const start = openFile.content.indexOf(selectedText);
+    editor.setSelectionRange(start, start + selectedText.length);
+    editor.dispatchEvent(new Event('select', { bubbles: true }));
+
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: 'f',
+    });
+    editor.dispatchEvent(event);
+    await nextTick();
+
+    const searchInput = wrapper.find<HTMLInputElement>('[data-testid="editor-search"]');
+    expect(event.defaultPrevented).toBe(true);
+    expect(searchInput.element.value).toBe(selectedText);
+    expect(document.activeElement).toBe(searchInput.element);
     wrapper.unmount();
   });
 

@@ -105,6 +105,15 @@ describe('Electron build configuration', () => {
     expect(mainSource).not.toContain("const appTitle = 'Markdown Editor'");
   });
 
+  it('keeps a legacy session fallback for pre-renamed app data', () => {
+    const mainSource = fs.readFileSync('electron/main.ts', 'utf8');
+
+    expect(mainSource).toContain("const legacySessionUserDataNames = ['markdown-editor'];");
+    expect(mainSource).toContain('readLegacySessionFallback');
+    expect(mainSource).toContain('session.legacy-fallback.loaded');
+    expect(mainSource).toContain("app.getPath('appData')");
+  });
+
   it('keeps GUI-launched cloud uploads compatible with shell-defined tokens', () => {
     const mainSource = fs.readFileSync('electron/main.ts', 'utf8');
 

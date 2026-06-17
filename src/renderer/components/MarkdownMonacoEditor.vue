@@ -48,6 +48,7 @@ const emit = defineEmits<{
   (event: 'paste', value: ClipboardEvent): void;
   (event: 'paste-shortcut', value: PasteShortcutEvent): void;
   (event: 'scroll', value: Event): void;
+  (event: 'show-search-shortcut', value: string): void;
   (event: 'update:modelValue', value: string): void;
   (event: 'vim-command', value: 'write' | 'write-quit' | 'quit' | 'force-quit'): void;
   (event: 'vim-status', value: string): void;
@@ -245,13 +246,32 @@ function isPasteShortcut(event: KeyboardEvent): boolean {
   return event.key.toLowerCase() === 'v' && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
 }
 
+function isSearchShortcut(event: KeyboardEvent | Monaco.IKeyboardEvent): boolean {
+  const isDomSearchKey = 'key' in event && event.key.toLowerCase() === 'f';
+  const isMonacoSearchKey = monacoModule !== null && 'keyCode' in event && event.keyCode === monacoModule.KeyCode.KeyF;
+
+  return (isDomSearchKey || isMonacoSearchKey) && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
+}
+
+function interceptSearchShortcut(event: KeyboardEvent | Monaco.IKeyboardEvent): void {
+  if (!isSearchShortcut(event)) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  emit('show-search-shortcut', selectedText());
+}
+
 function onKeydownCapture(event: KeyboardEvent): void {
+  interceptSearchShortcut(event);
   if (isPasteShortcut(event)) {
     emit('paste-shortcut', event);
   }
 }
 
 function onMonacoKeyDown(event: Monaco.IKeyboardEvent): void {
+  interceptSearchShortcut(event);
   if (event.keyCode === monacoModule?.KeyCode.KeyV && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
     emit('paste-shortcut', event);
   }
@@ -275,6 +295,12 @@ function onMonacoPaste(event: Monaco.editor.IPasteEvent): void {
         lineNumber: event.range.endLineNumber,
       }),
     },
+  });
+}
+
+function registerSearchShortcutOverride(monaco: typeof Monaco, editor: Monaco.editor.IStandaloneCodeEditor): void {
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {
+    emit('show-search-shortcut', selectedText());
   });
 }
 
@@ -343,6 +369,7 @@ async function createMonacoEditor(): Promise<void> {
   monacoModule = await loadMonacoEditor();
   defineMonacoThemes(monacoModule);
   monacoEditor = monacoModule.editor.create(container.value, monacoOptions(parsedConfig.value));
+  registerSearchShortcutOverride(monacoModule, monacoEditor);
   syncBookmarkDecorations();
   disposables = [
     monacoEditor.onDidChangeModelContent(() => {
@@ -412,6 +439,13 @@ function getSelectionRange(): SelectionRange {
     start: model.getOffsetAt(selection.getStartPosition()),
     end: model.getOffsetAt(selection.getEndPosition()),
   };
+}
+
+function selectedText(): string {
+  const range = getSelectionRange();
+  const start = Math.min(Math.max(0, range.start), props.modelValue.length);
+  const end = Math.min(Math.max(start, range.end), props.modelValue.length);
+  return props.modelValue.slice(start, end);
 }
 
 function cursorPositionFromOffset(value: string, offset: number): CursorPosition {

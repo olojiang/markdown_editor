@@ -1,6 +1,7 @@
 export interface EditorPreferences {
   vimEnabled: boolean;
   configText: string;
+  richTextPasteEnabled: boolean;
 }
 
 export interface ParsedEditorConfig {
@@ -29,6 +30,7 @@ export const defaultEditorConfigText = JSON.stringify({
 export const defaultEditorPreferences: EditorPreferences = {
   vimEnabled: false,
   configText: defaultEditorConfigText,
+  richTextPasteEnabled: false,
 };
 
 function stringOption<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
@@ -77,6 +79,7 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     configText: typeof candidate.configText === 'string' && candidate.configText.trim()
       ? candidate.configText
       : defaultEditorConfigText,
+    richTextPasteEnabled: candidate.richTextPasteEnabled === true,
   };
 }
 
