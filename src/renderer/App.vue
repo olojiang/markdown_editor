@@ -141,6 +141,7 @@ interface EditorSurface {
   focus(): void;
   getCursorPosition(): CursorPosition;
   getElement(): HTMLElement | null;
+  getLineScrollTop(lineNumber: number): number | null;
   getMaxScrollTop(): number;
   getScrollTop(): number;
   getSelectionRange(): { start: number; end: number };
@@ -1846,8 +1847,10 @@ function syncEditorToLine(line: number): void {
     return;
   }
 
-  const anchors = editorAnchors();
-  const targetTop = anchors.length > 0 ? interpolateTopFromAnchors(line, anchors) : (line - 1) * editorLineHeight();
+  const exactLineTop = editor.value.getLineScrollTop(line);
+  const anchors = exactLineTop === null ? editorAnchors() : [];
+  const targetTop = exactLineTop
+    ?? (anchors.length > 0 ? interpolateTopFromAnchors(line, anchors) : (line - 1) * editorLineHeight());
   setEditorScrollTop(Math.min(editor.value.getMaxScrollTop(), Math.max(0, targetTop)));
 }
 
@@ -2020,7 +2023,11 @@ function onPreviewScroll(event: Event): void {
 function updateActiveHeadingFromSourceLine(line: number): void {
   const container = preview.value;
   if (!container) {
-    activeHeadingId.value = '';
+    const headings = flattenHeadingNodes(headingTree.value)
+      .filter((node) => Number.isFinite(node.sourceLine))
+      .sort((first, second) => (first.sourceLine ?? 0) - (second.sourceLine ?? 0));
+    const current = headings.filter((node) => (node.sourceLine ?? 0) <= line).at(-1) ?? headings[0];
+    activeHeadingId.value = current?.id ?? '';
     return;
   }
 
@@ -2051,6 +2058,24 @@ function updateActiveHeadingFromPreview(): void {
   activeHeadingId.value = current?.id ?? '';
 }
 
+function flattenHeadingNodes(nodes: HeadingNode[]): HeadingNode[] {
+  return nodes.flatMap((node) => [node, ...flattenHeadingNodes(node.children)]);
+}
+
+function findHeadingNode(nodes: HeadingNode[], id: string): HeadingNode | null {
+  for (const node of nodes) {
+    if (node.id === id) {
+      return node;
+    }
+    const child = findHeadingNode(node.children, id);
+    if (child) {
+      return child;
+    }
+  }
+
+  return null;
+}
+
 function persistSession(patch: Partial<MarkdownSession>, options: { deferred?: boolean } = {}): void {
   applyActiveTabViewState({
     editorVisible: patch.editorVisible,
@@ -2068,6 +2093,12 @@ function jumpToHeading(id: string): void {
   const container = preview.value;
   const heading = container?.querySelector<HTMLElement>(`#${escapeCssIdentifier(id)}`);
   if (!container || !heading) {
+    const node = findHeadingNode(headingTree.value, id);
+    if (node?.sourceLine) {
+      syncEditorToLine(node.sourceLine);
+      activeHeadingId.value = id;
+      rememberScroll(activeScrollTop());
+    }
     return;
   }
 

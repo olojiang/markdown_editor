@@ -103,6 +103,29 @@ function escapeMarkdownUrl(value: string): string {
   return value.replace(/\s/g, '%20').replace(/\)/g, '%29');
 }
 
+function slugifyTextHeading(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return slug || 'chapter';
+}
+
+function createTextHeadingSlugger(): (value: string) => string {
+  const seen = new Map<string, number>();
+
+  return (value: string) => {
+    const base = slugifyTextHeading(value);
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    return count === 0 ? base : `${base}-${count}`;
+  };
+}
+
 function codeFenceFor(value: string): string {
   const longestFence = value.match(/`{3,}/g)?.reduce((max, fence) => Math.max(max, fence.length), 2) ?? 2;
   return '`'.repeat(longestFence + 1);
@@ -346,9 +369,51 @@ function nestHeadingNodes(nodes: HeadingNode[]): HeadingNode[] {
   return roots;
 }
 
+const chineseChapterNumber = '[零〇一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟萬]+';
+const arabicChapterNumber = '[0-9０-９]+';
+const chapterNumber = `(?:${arabicChapterNumber}|${chineseChapterNumber})`;
+const explicitChapterPattern = new RegExp(`^第\\s*${chapterNumber}\\s*(?:章节|章|节|回|卷|部|篇|集)`, 'u');
+const numberedChapterPattern = new RegExp(`^${chapterNumber}\\s*(?:[、.．,，:：)）-]|\\s+)`, 'u');
+const bareChapterNumberPattern = new RegExp(`^${chapterNumber}$`, 'u');
+const surroundingQuotePattern = /^[\s'"‘’“”「」『』《》【】([{（]+|[\s'"‘’“”「」『』《》【】)\]}）]+$/gu;
+
+function normalizeTextChapterLine(line: string): string {
+  return line.replace(surroundingQuotePattern, '').trim();
+}
+
+function isTextChapterLine(line: string): boolean {
+  const title = normalizeTextChapterLine(line);
+  if (!title || title.length > 80) {
+    return false;
+  }
+
+  return explicitChapterPattern.test(title)
+    || numberedChapterPattern.test(title)
+    || bareChapterNumberPattern.test(title);
+}
+
+export function buildTextHeadingTree(source: string): HeadingNode[] {
+  const slug = createTextHeadingSlugger();
+  return source
+    .split('\n')
+    .map((line, index) => ({ index, title: normalizeTextChapterLine(line) }))
+    .filter(({ title }) => isTextChapterLine(title))
+    .map(({ index, title }) => ({
+      id: slug(title),
+      level: 1,
+      sourceLine: index + 1,
+      title,
+      collapsed: false,
+      children: [],
+    }));
+}
+
 export function buildDocumentHeadingTree(source: string, kind: DocumentKind): HeadingNode[] {
   if (kind === 'markdown') {
     return buildHeadingTree(source);
+  }
+  if (kind === 'text') {
+    return buildTextHeadingTree(source);
   }
   if (kind !== 'html' || typeof DOMParser === 'undefined') {
     return [];

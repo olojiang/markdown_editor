@@ -5,6 +5,7 @@ import type Token from 'markdown-it/lib/token.mjs';
 export interface HeadingNode {
   id: string;
   level: number;
+  sourceLine?: number;
   title: string;
   collapsed: boolean;
   children: HeadingNode[];

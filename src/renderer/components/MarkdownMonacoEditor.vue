@@ -523,6 +523,31 @@ function getScrollTop(): number {
   return fallbackEditor.value?.scrollTop ?? monacoEditor?.getScrollTop() ?? 0;
 }
 
+function fallbackLineHeight(element: HTMLElement): number {
+  const lineHeight = Number.parseFloat(window.getComputedStyle(element).lineHeight);
+  return Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 22.4;
+}
+
+function getLineScrollTop(lineNumber: number): number | null {
+  const requestedLineNumber = Number.isFinite(lineNumber) ? Math.trunc(lineNumber) : 1;
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    return (Math.max(1, requestedLineNumber) - 1) * fallbackLineHeight(fallback);
+  }
+
+  if (!monacoEditor) {
+    return null;
+  }
+
+  const model = getModel();
+  if (!model) {
+    return null;
+  }
+
+  const safeLineNumber = Math.min(Math.max(1, requestedLineNumber), model.getLineCount());
+  return monacoEditor.getTopForLineNumber(safeLineNumber);
+}
+
 function getMaxScrollTop(): number {
   const fallback = fallbackEditor.value;
   if (fallback) {
@@ -626,6 +651,7 @@ defineExpose({
   focus,
   getCursorPosition,
   getElement,
+  getLineScrollTop,
   getMaxScrollTop,
   getScrollTop,
   getSelectionRange,

@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { nextTick } from 'vue';
+import { defineComponent, h, nextTick, ref } from 'vue';
 import App from '@/renderer/App.vue';
 import MarkdownMonacoEditor from '@/renderer/components/MarkdownMonacoEditor.vue';
 
@@ -865,6 +865,108 @@ describe('App', () => {
     expect(preview.scrollTop).toBeGreaterThan(0);
     const betaLink = wrapper.findAll('.toc-link').find((link) => link.text() === 'Beta');
     expect(betaLink?.classes()).toContain('active');
+  });
+
+  it('builds a clickable table of contents for text chapters without a preview pane', async () => {
+    vi.mocked(window.markdownBridge!.readLastMarkdownFile).mockResolvedValue({
+      path: '/docs/story.txt',
+      name: 'story.txt',
+      content: [
+        '序言',
+        '',
+        '’  第一章 差点迟到‘',
+        '正文',
+        '1. 数字章节',
+        '一、中文数字章节',
+      ].join('\n'),
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="preview"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="toc"]').text()).toContain('第一章 差点迟到');
+    expect(wrapper.find('[data-testid="toc"]').text()).toContain('1. 数字章节');
+    expect(wrapper.find('[data-testid="toc"]').text()).toContain('一、中文数字章节');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    const targetLink = wrapper.findAll('.toc-link').find((link) => link.text() === '一、中文数字章节');
+    await targetLink?.trigger('click');
+
+    const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 22.4;
+    expect(editor.scrollTop).toBeCloseTo(5 * lineHeight);
+    expect(targetLink?.classes()).toContain('active');
+  });
+
+  it('uses editor-provided line positions when jumping through a text table of contents', async () => {
+    vi.mocked(window.markdownBridge!.readLastMarkdownFile).mockResolvedValue({
+      path: '/docs/story.txt',
+      name: 'story.txt',
+      content: [
+        '第一章 开始',
+        '正文',
+        '正文',
+        '正文',
+        '第二章 目标',
+        '正文',
+      ].join('\n'),
+    });
+    const getLineScrollTop = vi.fn(() => 876);
+    const EditorStub = defineComponent({
+      name: 'MarkdownMonacoEditor',
+      props: {
+        modelValue: {
+          type: String,
+          default: '',
+        },
+      },
+      setup(props, { expose }) {
+        const element = ref<HTMLTextAreaElement | null>(null);
+        expose({
+          focus: vi.fn(),
+          getCursorPosition: vi.fn(() => ({ column: 1, lineNumber: 1 })),
+          getElement: vi.fn(() => element.value),
+          getLineScrollTop,
+          getMaxScrollTop: vi.fn(() => 1200),
+          getScrollTop: vi.fn(() => element.value?.scrollTop ?? 0),
+          getSelectionRange: vi.fn(() => ({ end: 0, start: 0 })),
+          redo: vi.fn(),
+          setCursorPosition: vi.fn(),
+          setScrollTop: vi.fn((value: number) => {
+            if (element.value) {
+              element.value.scrollTop = value;
+            }
+          }),
+          setSelectionRange: vi.fn(),
+          undo: vi.fn(),
+        });
+        return () => h('textarea', {
+          ref: element,
+          class: 'source-editor',
+          'data-testid': 'editor',
+          value: props.modelValue,
+        });
+      },
+    });
+
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          MarkdownMonacoEditor: EditorStub,
+        },
+      },
+    });
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    setScrollMetrics(editor, 1200, 200);
+
+    const targetLink = wrapper.findAll('.toc-link').find((link) => link.text() === '第二章 目标');
+    await targetLink?.trigger('click');
+
+    expect(getLineScrollTop).toHaveBeenCalledWith(5);
+    expect(editor.scrollTop).toBe(876);
   });
 
   it('debounces persisted scroll positions and keeps the latest value', async () => {

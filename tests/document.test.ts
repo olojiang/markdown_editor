@@ -59,6 +59,23 @@ describe('document helpers', () => {
     ]);
   });
 
+  it('builds a text heading tree from common chapter markers', () => {
+    const tree = buildDocumentHeadingTree([
+      '序',
+      '',
+      '’  第一章 差点迟到‘',
+      '正文',
+      '1. 数字章节',
+      '一、中文数字章节',
+    ].join('\n'), 'text');
+
+    expect(tree).toEqual([
+      expect.objectContaining({ level: 1, sourceLine: 3, title: '第一章 差点迟到' }),
+      expect.objectContaining({ level: 1, sourceLine: 5, title: '1. 数字章节' }),
+      expect.objectContaining({ level: 1, sourceLine: 6, title: '一、中文数字章节' }),
+    ]);
+  });
+
   it('formats JSON with two spaces or a compact single line', () => {
     expect(formatJsonDocument('{"b":1,"a":{"c":2}}')).toBe('{\n  "b": 1,\n  "a": {\n    "c": 2\n  }\n}');
     expect(formatJsonDocument('{"b":1,"a":{"c":2}}', true)).toBe('{"b":1,"a":{"c":2}}');
