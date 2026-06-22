@@ -31,6 +31,7 @@ interface MarkdownSession {
   bookmarks: MarkdownBookmark[];
   bookmarkViewMode: 'all' | 'current';
   recentFiles: string[];
+  fileEncodings: FileEncodingPreference[];
   fileScrollPositions: FileScrollPosition[];
   scrollTop: number;
   tocWidth: number;
@@ -55,6 +56,13 @@ interface MarkdownBookmark {
 interface FileScrollPosition {
   filePath: string;
   scrollTop: number;
+  updatedAt: number;
+}
+
+interface FileEncodingPreference {
+  filePath: string;
+  encoding: TextEncoding;
+  customized: boolean;
   updatedAt: number;
 }
 
@@ -417,6 +425,7 @@ function createDefaultSession(): MarkdownSession {
     bookmarks: [],
     bookmarkViewMode: 'all',
     recentFiles: [],
+    fileEncodings: [],
     fileScrollPositions: [],
     scrollTop: 0,
     tocWidth: 260,
@@ -473,6 +482,35 @@ function normalizeFileScrollPositions(positions: unknown): FileScrollPosition[] 
       updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
     }];
   }).slice(0, 20);
+}
+
+function normalizeFileEncodings(encodings: unknown): FileEncodingPreference[] {
+  if (!Array.isArray(encodings)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return encodings.flatMap((encoding): FileEncodingPreference[] => {
+    if (!encoding || typeof encoding !== 'object') {
+      return [];
+    }
+    const candidate = encoding as Partial<FileEncodingPreference>;
+    if (typeof candidate.filePath !== 'string' || typeof candidate.encoding !== 'string') {
+      return [];
+    }
+    const filePath = normalizeRecentFilePath(candidate.filePath);
+    const key = recentFileKey(filePath);
+    if (!filePath || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [{
+      filePath,
+      encoding: normalizeTextEncoding(candidate.encoding),
+      customized: candidate.customized === true,
+      updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
+    }];
+  }).slice(0, 100);
 }
 
 function recentFileKey(filePath: string): string {
@@ -652,6 +690,7 @@ function normalizeParsedSession(parsed: Partial<MarkdownSession>): MarkdownSessi
     bookmarks: normalizeBookmarks(parsed.bookmarks),
     bookmarkViewMode: normalizeBookmarkViewMode(parsed.bookmarkViewMode),
     recentFiles: recoveredRecentFiles,
+    fileEncodings: normalizeFileEncodings(parsed.fileEncodings),
     fileScrollPositions: normalizeFileScrollPositions(parsed.fileScrollPositions),
     scrollTop: typeof parsed.scrollTop === 'number' ? parsed.scrollTop : 0,
     tocWidth: typeof parsed.tocWidth === 'number' ? parsed.tocWidth : 260,
@@ -720,6 +759,7 @@ async function saveSession(session: MarkdownSession): Promise<void> {
   await fs.mkdir(path.dirname(sessionFilePath()), { recursive: true });
   const recentFiles = normalizeRecentFiles(session.recentFiles);
   const bookmarks = normalizeBookmarks(session.bookmarks);
+  const fileEncodings = normalizeFileEncodings(session.fileEncodings);
   const fileScrollPositions = normalizeFileScrollPositions(session.fileScrollPositions);
   logRecentFilesDiagnostics('save-session', session.recentFiles, recentFiles);
   await fs.writeFile(sessionFilePath(), JSON.stringify({
@@ -727,6 +767,7 @@ async function saveSession(session: MarkdownSession): Promise<void> {
     bookmarks,
     bookmarkViewMode: normalizeBookmarkViewMode(session.bookmarkViewMode),
     recentFiles,
+    fileEncodings,
     fileScrollPositions,
   }, null, 2), 'utf8');
 }
@@ -735,6 +776,7 @@ function saveSessionSync(session: MarkdownSession): void {
   fsSync.mkdirSync(path.dirname(sessionFilePath()), { recursive: true });
   const recentFiles = normalizeRecentFiles(session.recentFiles);
   const bookmarks = normalizeBookmarks(session.bookmarks);
+  const fileEncodings = normalizeFileEncodings(session.fileEncodings);
   const fileScrollPositions = normalizeFileScrollPositions(session.fileScrollPositions);
   logRecentFilesDiagnostics('save-session-sync', session.recentFiles, recentFiles);
   fsSync.writeFileSync(sessionFilePath(), JSON.stringify({
@@ -742,6 +784,7 @@ function saveSessionSync(session: MarkdownSession): void {
     bookmarks,
     bookmarkViewMode: normalizeBookmarkViewMode(session.bookmarkViewMode),
     recentFiles,
+    fileEncodings,
     fileScrollPositions,
   }, null, 2), 'utf8');
 }

@@ -8,6 +8,7 @@ export type ThemeMode = 'light' | 'dark' | 'eye';
 export type BookmarkViewMode = 'all' | 'current';
 export const maxRecentFiles = 20;
 export const maxFileScrollPositions = 20;
+export const maxFileEncodings = 100;
 export const maxBookmarks = 500;
 
 export interface MarkdownBookmark {
@@ -44,6 +45,13 @@ export interface FileScrollPosition {
   updatedAt: number;
 }
 
+export interface FileEncodingPreference {
+  filePath: string;
+  encoding: string;
+  customized: boolean;
+  updatedAt: number;
+}
+
 export interface MarkdownSession {
   filePath: string | null;
   tabs: MarkdownSessionTab[];
@@ -51,6 +59,7 @@ export interface MarkdownSession {
   bookmarks: MarkdownBookmark[];
   bookmarkViewMode: BookmarkViewMode;
   recentFiles: string[];
+  fileEncodings: FileEncodingPreference[];
   fileScrollPositions: FileScrollPosition[];
   scrollTop: number;
   tocWidth: number;
@@ -69,6 +78,7 @@ export function createDefaultSession(): MarkdownSession {
     bookmarks: [],
     bookmarkViewMode: 'all',
     recentFiles: [],
+    fileEncodings: [],
     fileScrollPositions: [],
     scrollTop: 0,
     tocWidth: 260,
@@ -169,6 +179,65 @@ export function addFileScrollPosition(
 export function findFileScrollPosition(positions: unknown, filePath: string): FileScrollPosition | null {
   const key = recentFileKey(filePath);
   return normalizeFileScrollPositions(positions).find((position) => recentFileKey(position.filePath) === key) ?? null;
+}
+
+export function normalizeFileEncodings(encodings: unknown): FileEncodingPreference[] {
+  if (!Array.isArray(encodings)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return encodings.flatMap((encoding): FileEncodingPreference[] => {
+    if (!encoding || typeof encoding !== 'object') {
+      return [];
+    }
+    const candidate = encoding as Partial<FileEncodingPreference>;
+    if (typeof candidate.filePath !== 'string' || typeof candidate.encoding !== 'string') {
+      return [];
+    }
+    const filePath = normalizeRecentFilePath(candidate.filePath);
+    const normalizedEncoding = candidate.encoding.trim().toLowerCase().replace(/_/g, '-');
+    const key = recentFileKey(filePath);
+    if (!filePath || !normalizedEncoding || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [{
+      filePath,
+      encoding: normalizedEncoding,
+      customized: candidate.customized === true,
+      updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : Date.now(),
+    }];
+  }).slice(0, maxFileEncodings);
+}
+
+export function rememberFileEncoding(
+  encodings: unknown,
+  filePath: string,
+  encoding: string,
+  customized: boolean,
+  updatedAt = Date.now(),
+): FileEncodingPreference[] {
+  const normalizedFilePath = normalizeRecentFilePath(filePath);
+  const normalizedEncoding = encoding.trim().toLowerCase().replace(/_/g, '-');
+  if (!normalizedFilePath || !normalizedEncoding) {
+    return normalizeFileEncodings(encodings);
+  }
+
+  return normalizeFileEncodings([
+    {
+      filePath: normalizedFilePath,
+      encoding: normalizedEncoding,
+      customized,
+      updatedAt,
+    },
+    ...normalizeFileEncodings(encodings),
+  ]);
+}
+
+export function findFileEncoding(encodings: unknown, filePath: string): FileEncodingPreference | null {
+  const key = recentFileKey(filePath);
+  return normalizeFileEncodings(encodings).find((encoding) => recentFileKey(encoding.filePath) === key) ?? null;
 }
 
 export function normalizeRecentFilePath(filePath: string): string {
@@ -318,6 +387,7 @@ export function normalizeSession(session: Partial<MarkdownSession> | null | unde
     bookmarks: normalizeBookmarks(session?.bookmarks),
     bookmarkViewMode: normalizeBookmarkViewMode(session?.bookmarkViewMode),
     recentFiles: normalizeRecentFiles(session?.recentFiles),
+    fileEncodings: normalizeFileEncodings(session?.fileEncodings),
     fileScrollPositions: normalizeFileScrollPositions(session?.fileScrollPositions),
     scrollTop: typeof session?.scrollTop === 'number' ? session.scrollTop : 0,
     tocWidth: Math.max(180, Math.min(520, typeof session?.tocWidth === 'number' ? session.tocWidth : 260)),
@@ -350,6 +420,9 @@ export function mergeSession(
       ? normalized.bookmarkViewMode
       : normalizeBookmarkViewMode(patch.bookmarkViewMode),
     recentFiles: patch.recentFiles === undefined ? normalized.recentFiles : normalizeRecentFiles(patch.recentFiles),
+    fileEncodings: patch.fileEncodings === undefined
+      ? normalized.fileEncodings
+      : normalizeFileEncodings(patch.fileEncodings),
     fileScrollPositions: patch.fileScrollPositions === undefined
       ? normalized.fileScrollPositions
       : normalizeFileScrollPositions(patch.fileScrollPositions),

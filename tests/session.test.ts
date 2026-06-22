@@ -3,11 +3,14 @@ import {
   addFileScrollPosition,
   addRecentFile,
   createDefaultSession,
+  findFileEncoding,
   findFileScrollPosition,
+  rememberFileEncoding,
   maxFileScrollPositions,
   maxRecentFiles,
   mergeSession,
   normalizeBookmarks,
+  normalizeFileEncodings,
   normalizeFileScrollPositions,
   normalizeSession,
   normalizeSessionTabs,
@@ -23,6 +26,7 @@ describe('session helpers', () => {
       bookmarks: [],
       bookmarkViewMode: 'all',
       recentFiles: [],
+      fileEncodings: [],
       fileScrollPositions: [],
       scrollTop: 0,
       tocWidth: 260,
@@ -48,6 +52,7 @@ describe('session helpers', () => {
       bookmarks: [],
       bookmarkViewMode: 'all',
       recentFiles: [],
+      fileEncodings: [],
       fileScrollPositions: [],
       scrollTop: 42,
       tocWidth: 260,
@@ -262,6 +267,32 @@ describe('session helpers', () => {
       'file:///docs/REMOTE%20IMAGE.md',
     ], 'file:///docs/remote%20image.md')).toEqual([
       '/docs/other.md',
+    ]);
+  });
+
+  it('remembers customized encodings by normalized file path', () => {
+    const encodings = rememberFileEncoding([
+      { filePath: 'file:///docs/readme.md', encoding: 'utf8', customized: false, updatedAt: 1 },
+      { filePath: '/docs/other.md', encoding: 'utf8', customized: false, updatedAt: 2 },
+    ], '/DOCS/readme.md', 'gbk', true, 3);
+
+    expect(encodings).toEqual([
+      { filePath: '/DOCS/readme.md', encoding: 'gbk', customized: true, updatedAt: 3 },
+      { filePath: '/docs/other.md', encoding: 'utf8', customized: false, updatedAt: 2 },
+    ]);
+    expect(findFileEncoding(encodings, 'file:///docs/readme.md')).toEqual(
+      expect.objectContaining({ encoding: 'gbk', customized: true }),
+    );
+  });
+
+  it('drops invalid persisted file encoding records', () => {
+    expect(normalizeFileEncodings([
+      { filePath: '/docs/readme.md', encoding: 'gb18030', customized: true, updatedAt: 2 },
+      { filePath: '/docs/readme.md', encoding: 'gbk', customized: true, updatedAt: 3 },
+      { filePath: '', encoding: 'gbk' },
+      { filePath: '/docs/invalid.md', encoding: '' },
+    ])).toEqual([
+      { filePath: '/docs/readme.md', encoding: 'gb18030', customized: true, updatedAt: 2 },
     ]);
   });
 

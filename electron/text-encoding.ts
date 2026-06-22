@@ -59,7 +59,67 @@ export function detectTextEncoding(buffer: Buffer): TextEncoding {
   if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
     return 'utf16-be';
   }
+
+  const evenNulls = countNullBytes(buffer, 0);
+  const oddNulls = countNullBytes(buffer, 1);
+  const halfLength = Math.max(1, Math.floor(buffer.length / 2));
+  if (oddNulls / halfLength > 0.35 && evenNulls / halfLength < 0.1) {
+    return 'utf16-le';
+  }
+  if (evenNulls / halfLength > 0.35 && oddNulls / halfLength < 0.1) {
+    return 'utf16-be';
+  }
+
+  if (isValidUtf8(buffer)) {
+    return defaultTextEncoding;
+  }
+
+  const candidates: TextEncoding[] = ['gbk', 'gb18030', 'big5', 'shift_jis', 'windows1252', 'latin1'];
+  const best = candidates
+    .map((encoding) => ({ encoding, score: scoreDecodedText(iconv.decode(buffer, encoding)) }))
+    .sort((a, b) => b.score - a.score)[0];
+  if (best && best.score > 0) {
+    return best.encoding;
+  }
   return defaultTextEncoding;
+}
+
+function countNullBytes(buffer: Buffer, parity: 0 | 1): number {
+  let count = 0;
+  for (let index = parity; index < buffer.length; index += 2) {
+    if (buffer[index] === 0) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function isValidUtf8(buffer: Buffer): boolean {
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function scoreDecodedText(value: string): number {
+  let score = 0;
+  for (const char of value) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (/[\u4e00-\u9fff]/u.test(char)) {
+      score += 4;
+    } else if (/[\u3000-\u303f\uff00-\uffef]/u.test(char)) {
+      score += 2;
+    } else if (/[\p{L}\p{N}\s.,;:!?()[\]{}'"`~@#$%^&*_+=/\\|-]/u.test(char)) {
+      score += 1;
+    } else if (char === '\ufffd' || (codePoint < 32 && !'\n\r\t'.includes(char))) {
+      score -= 8;
+    } else {
+      score -= 1;
+    }
+  }
+  return score;
 }
 
 export function decodeTextBuffer(buffer: Buffer, requestedEncoding?: unknown): { content: string; encoding: TextEncoding } {

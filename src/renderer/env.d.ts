@@ -95,6 +95,12 @@ interface MarkdownSession {
   }[];
   bookmarkViewMode: 'all' | 'current';
   recentFiles: string[];
+  fileEncodings: {
+    filePath: string;
+    encoding: string;
+    customized: boolean;
+    updatedAt: number;
+  }[];
   fileScrollPositions: {
     filePath: string;
     scrollTop: number;
