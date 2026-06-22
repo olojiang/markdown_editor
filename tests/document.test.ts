@@ -76,6 +76,35 @@ describe('document helpers', () => {
     ]);
   });
 
+  it('includes Markdown-style headings in text document tables of contents', () => {
+    const tree = buildDocumentHeadingTree([
+      '# “人母”前篇',
+      '正文',
+      '## 第二节',
+      '### 细节',
+      '# C#',
+    ].join('\n'), 'text');
+
+    expect(tree).toEqual([
+      expect.objectContaining({
+        level: 1,
+        sourceLine: 1,
+        title: '“人母”前篇',
+        children: [
+          expect.objectContaining({
+            level: 2,
+            sourceLine: 3,
+            title: '第二节',
+            children: [
+              expect.objectContaining({ level: 3, sourceLine: 4, title: '细节' }),
+            ],
+          }),
+        ],
+      }),
+      expect.objectContaining({ level: 1, sourceLine: 5, title: 'C#' }),
+    ]);
+  });
+
   it('formats JSON with two spaces or a compact single line', () => {
     expect(formatJsonDocument('{"b":1,"a":{"c":2}}')).toBe('{\n  "b": 1,\n  "a": {\n    "c": 2\n  }\n}');
     expect(formatJsonDocument('{"b":1,"a":{"c":2}}', true)).toBe('{"b":1,"a":{"c":2}}');

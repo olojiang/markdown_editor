@@ -1301,6 +1301,163 @@ describe('App', () => {
     expect(editor.scrollTop).toBeCloseTo(6 * lineHeight);
   });
 
+  it('keeps the clicked adjacent heading active instead of the next one', async () => {
+    const adjacentHeadingsFile = {
+      path: '/docs/adjacent-headings.md',
+      name: 'adjacent-headings.md',
+      content: [
+        '# Honeywell',
+        '',
+        '## 3Top:',
+        '',
+        '3top content',
+        '',
+        '## SpaceBuilder:',
+        '',
+        'spacebuilder content',
+      ].join('\n'),
+      size: 256,
+      modifiedAt: new Date('2026-06-08T04:34:00.000Z').getTime(),
+    };
+    vi.mocked(window.markdownBridge!.readLastMarkdownFile).mockResolvedValue(adjacentHeadingsFile);
+    vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValue(adjacentHeadingsFile);
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(preview, 2200, 600);
+    preview.scrollTop = 0;
+
+    const threeTopHeading = preview.querySelector<HTMLElement>('[id="3top"]');
+    const spaceBuilderHeading = preview.querySelector<HTMLElement>('[id="spacebuilder"]');
+    expect(threeTopHeading).toBeTruthy();
+    expect(spaceBuilderHeading).toBeTruthy();
+
+    setElementTop(preview, 500);
+    setElementTop(threeTopHeading!, 900);
+    setElementTop(spaceBuilderHeading!, 1020);
+
+    const threeTopLink = wrapper.findAll('.toc-link').find((link) => link.text() === '3Top:');
+    await threeTopLink?.trigger('click');
+    await nextTick();
+
+    expect(preview.scrollTop).toBe(384);
+    expect(threeTopLink?.classes()).toContain('active');
+    expect(wrapper.findAll('.toc-link').find((link) => link.text() === 'SpaceBuilder:')?.classes()).not.toContain('active');
+  });
+
+  it('does not let stale editor cursor overwrite toc jump highlight', async () => {
+    const adjacentHeadingsFile = {
+      path: '/docs/toc-race.md',
+      name: 'toc-race.md',
+      content: [
+        '# Doc',
+        '',
+        '## Bug 表',
+        '',
+        'bug content',
+        '',
+        '## Code Agent 需求表',
+        '',
+        'agent content',
+      ].join('\n'),
+      size: 256,
+      modifiedAt: new Date('2026-06-08T04:34:00.000Z').getTime(),
+    };
+    vi.mocked(window.markdownBridge!.readLastMarkdownFile).mockResolvedValue(adjacentHeadingsFile);
+    vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValue(adjacentHeadingsFile);
+
+    const cursorPosition = { column: 1, lineNumber: 3 };
+    const setCursorPosition = vi.fn((position: { column: number; lineNumber: number }) => {
+      cursorPosition.lineNumber = position.lineNumber;
+      cursorPosition.column = position.column;
+    });
+    const EditorStub = defineComponent({
+      name: 'MarkdownMonacoEditor',
+      props: {
+        modelValue: {
+          type: String,
+          default: '',
+        },
+      },
+      emits: ['focus-line-change', 'scroll', 'update:modelValue', 'paste'],
+      setup(props, { expose, emit }) {
+        const element = ref<HTMLTextAreaElement | null>(null);
+        expose({
+          focus: vi.fn(),
+          getCursorPosition: vi.fn(() => ({ ...cursorPosition })),
+          getElement: vi.fn(() => element.value),
+          getLineScrollTop: vi.fn(() => null),
+          getMaxScrollTop: vi.fn(() => 1200),
+          getScrollTop: vi.fn(() => element.value?.scrollTop ?? 0),
+          getSelectionRange: vi.fn(() => ({ end: 0, start: 0 })),
+          redo: vi.fn(),
+          setCursorPosition,
+          setScrollTop: vi.fn((value: number) => {
+            if (element.value) {
+              element.value.scrollTop = value;
+            }
+          }),
+          setSelectionRange: vi.fn(),
+          undo: vi.fn(),
+        });
+        return () => h('textarea', {
+          ref: element,
+          class: 'source-editor',
+          'data-testid': 'editor',
+          value: props.modelValue,
+          onFocus: () => emit('focus-line-change'),
+        });
+      },
+    });
+
+    const wrapper = mount(App, {
+      global: {
+        stubs: {
+          MarkdownMonacoEditor: EditorStub,
+        },
+      },
+    });
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await nextTick();
+
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(preview, 2200, 600);
+    preview.scrollTop = 0;
+
+    const codeAgentLink = wrapper.findAll('.toc-link').find((link) => link.text() === 'Code Agent 需求表');
+    const bugLink = wrapper.findAll('.toc-link').find((link) => link.text() === 'Bug 表');
+    expect(codeAgentLink).toBeTruthy();
+    expect(bugLink).toBeTruthy();
+
+    const bugHeading = preview.querySelector<HTMLElement>(`[id="${bugLink!.attributes('data-toc-id')}"]`);
+    const codeAgentHeading = preview.querySelector<HTMLElement>(`[id="${codeAgentLink!.attributes('data-toc-id')}"]`);
+    expect(bugHeading).toBeTruthy();
+    expect(codeAgentHeading).toBeTruthy();
+
+    setElementTop(preview, 500);
+    setElementTop(bugHeading!, 820);
+    setElementTop(codeAgentHeading!, 960);
+
+    await codeAgentLink!.trigger('click');
+    await wrapper.find('[data-testid="editor"]').trigger('focus');
+    await nextTick();
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    });
+
+    expect(setCursorPosition).toHaveBeenCalledWith(expect.objectContaining({
+      lineNumber: Number(codeAgentHeading!.dataset.sourceLine),
+      column: 1,
+    }));
+    expect(codeAgentLink?.classes()).toContain('active');
+    expect(bugLink?.classes()).not.toContain('active');
+  });
+
   it('opens a recent file and moves it to the front of the LRU list', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -1403,6 +1560,23 @@ describe('App', () => {
       expect.objectContaining({ recentFiles: [openFile.path] }),
     );
     expect(wrapper.findAll('.recent-file-row').some((item) => item.text().includes(recentFile.name))).toBe(false);
+  });
+
+  it('keeps an open file in the recent menu when delete is clicked', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="recent-files"]').trigger('click');
+    await nextTick();
+    const row = wrapper.findAll('.recent-file-row').find((item) => item.text().includes(openFile.name));
+    expect(row).toBeTruthy();
+
+    await row!.find('.recent-file-delete').trigger('click');
+    await nextTick();
+
+    const savedSession = vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0];
+    expect(savedSession?.recentFiles).toContain(openFile.path);
+    expect(wrapper.findAll('.recent-file-row').some((item) => item.text().includes(openFile.name))).toBe(true);
   });
 
   it('removes an unreadable recent file by normalized path', async () => {
@@ -1516,6 +1690,31 @@ describe('App', () => {
         ]),
       }),
     );
+  });
+
+  it('adds restored open tabs back to recent files when they are missing', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: secondFile.path,
+      tabs: [
+        { id: `file:${openFile.path}`, filePath: openFile.path, name: openFile.name, scrollTop: 10 },
+        { id: `file:${secondFile.path}`, filePath: secondFile.path, name: secondFile.name, scrollTop: 24 },
+      ],
+      activeTabId: `file:${secondFile.path}`,
+      recentFiles: [],
+      scrollTop: 24,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
+
+    const savedSession = vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0];
+    expect(savedSession?.recentFiles).toEqual(expect.arrayContaining([openFile.path, secondFile.path]));
   });
 
   it('restores editor, preview, and table-of-contents scroll independently when switching tabs', async () => {
@@ -2464,6 +2663,47 @@ describe('App', () => {
     await wrapper.get('[data-testid="save-file"]').trigger('click');
     await vi.dynamicImportSettled();
     expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalledWith('/docs/readme.md', '# Changed', 'gbk');
+  });
+
+  it('remembers a customized encoding for later opens of the same file', async () => {
+    vi.mocked(window.markdownBridge!.readMarkdownFile).mockImplementation(async (filePath: string, encoding?: string) => ({
+      ...openFile,
+      path: filePath,
+      name: filePath.split('/').pop() ?? 'file.md',
+      encoding,
+    }));
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.get('[data-testid="encoding-select"]').setValue('gbk');
+    await wrapper.get('[data-testid="reopen-with-encoding"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0].fileEncodings).toContainEqual(
+      expect.objectContaining({ filePath: openFile.path, encoding: 'gbk', customized: true }),
+    );
+
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [],
+      activeTabId: null,
+      recentFiles: [recentFile.path],
+      fileEncodings: [{ filePath: recentFile.path, encoding: 'gbk', customized: true, updatedAt: 5 }],
+      scrollTop: 0,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+    vi.mocked(window.markdownBridge!.readMarkdownFile).mockClear();
+    wrapper.unmount();
+
+    const restored = mount(App);
+    await vi.dynamicImportSettled();
+    await openRecentFileFromMenu(restored, recentFile.name);
+
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(recentFile.path, 'gbk');
   });
 
   it('keeps JSON and text documents editor-only without opening preview', async () => {

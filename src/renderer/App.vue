@@ -15,6 +15,13 @@ import {
   type DocumentKind,
 } from '@/renderer/lib/document';
 import { parseEditorConfig } from '@/renderer/lib/editorConfig';
+import {
+  headingElementSelector,
+  previewHeadingScrollTarget,
+  resolveActiveHeadingId,
+  resolveActiveHeadingIdFromSourceLine,
+  shouldBlockActiveHeadingUpdate,
+} from '@/renderer/lib/heading-scroll';
 import { rendererLog } from '@/renderer/lib/logger';
 import {
   filterHeadingTree,
@@ -24,11 +31,14 @@ import {
   addFileScrollPosition,
   addRecentFile,
   createDefaultSession,
+  findFileEncoding,
   findFileScrollPosition,
   mergeSession,
   normalizeBookmarks,
+  normalizeFileEncodings,
   normalizeRecentFiles,
   normalizeSession,
+  rememberFileEncoding,
   removeRecentFile,
   tabIdForPath,
   type BookmarkViewMode,
@@ -314,6 +324,8 @@ let lastRecentFilesDiagnosticSignature = '';
 let htmlPreviewTimer: number | undefined;
 const queuedOpenRequests: MarkdownOpenRequest[] = [];
 const previewScrollOffset = -50;
+let lockedActiveHeadingId = '';
+let headingNavigationFrame: number | undefined;
 const sessionSaveDelay = 200;
 const previewZoomStep = 0.1;
 const previewZoomMin = 0.7;
@@ -707,7 +719,8 @@ function encodingIpcArgument(encoding: unknown): string | undefined {
 }
 
 function readMarkdownFileWithEncoding(filePath: string, encoding?: unknown): Promise<MarkdownFile> {
-  const normalized = encodingIpcArgument(encoding);
+  const rememberedEncoding = encoding === undefined ? rememberedCustomizedEncodingForFile(filePath) : undefined;
+  const normalized = encodingIpcArgument(encoding ?? rememberedEncoding);
   return normalized === undefined
     ? bridge!.readMarkdownFile(filePath)
     : bridge!.readMarkdownFile(filePath, normalized);
@@ -732,6 +745,11 @@ function setFileEncoding(file: MarkdownFile, encoding: unknown): MarkdownFile {
     ...file,
     encoding: normalizeTextEncoding(encoding),
   };
+}
+
+function rememberedCustomizedEncodingForFile(filePath: string): string | undefined {
+  const remembered = findFileEncoding(session.value.fileEncodings, filePath);
+  return remembered?.customized === true ? remembered.encoding : undefined;
 }
 
 function currentFileSize(): number {
@@ -1164,13 +1182,40 @@ function serializedOpenTabs(): MarkdownSession['tabs'] {
 }
 
 function tabSessionPatch(patch: Partial<MarkdownSession> = {}): Partial<MarkdownSession> {
+  const tabs = patch.tabs ?? serializedOpenTabs();
   return {
     filePath: currentFilePath(),
-    tabs: serializedOpenTabs(),
+    tabs,
     activeTabId: activeTabId.value,
     scrollTop: activeScrollTop(),
     ...patch,
+    recentFiles: protectOpenFilesInRecentFiles(patch.recentFiles ?? session.value.recentFiles, tabs),
   };
+}
+
+function protectOpenFilesInRecentFiles(
+  recentFiles: unknown,
+  tabs: MarkdownSession['tabs'] = serializedOpenTabs(),
+): string[] {
+  return tabs
+    .map((tab) => tab.filePath)
+    .filter((filePath): filePath is string => typeof filePath === 'string' && filePath.length > 0)
+    .reduce((current, filePath) => (
+      recentFilePathIncluded(current, filePath) ? current : addRecentFile(current, filePath)
+    ), normalizeRecentFiles(recentFiles));
+}
+
+function isOpenFilePath(filePath: string): boolean {
+  const target = tabIdForPath(filePath).toLocaleLowerCase();
+  return openTabs.value.some((tab) => tab.file.path && tabIdForPath(tab.file.path).toLocaleLowerCase() === target);
+}
+
+function recentFilePathIncluded(recentFiles: unknown, filePath: string): boolean {
+  const [normalizedTarget] = normalizeRecentFiles([filePath]);
+  if (!normalizedTarget) {
+    return false;
+  }
+  return normalizeRecentFiles(recentFiles).some((recent) => recent.toLocaleLowerCase() === normalizedTarget.toLocaleLowerCase());
 }
 
 function documentKindForFile(file: MarkdownFile): DocumentKind {
@@ -1244,6 +1289,7 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
     bookmarks: normalized.bookmarks.map((bookmark) => ({ ...bookmark })),
     bookmarkViewMode: normalized.bookmarkViewMode,
     recentFiles: [...normalized.recentFiles],
+    fileEncodings: normalizeFileEncodings(normalized.fileEncodings).map((encoding) => ({ ...encoding })),
     fileScrollPositions: normalized.fileScrollPositions.map((position) => ({ ...position })),
     scrollTop: normalized.scrollTop,
     tocWidth: normalized.tocWidth,
@@ -1638,6 +1684,12 @@ function persistOpenedFile(file: MarkdownFile, scrollTop: number, tabId = file.p
     })),
     activeTabId: tabId,
     recentFiles: addRecentFile(session.value.recentFiles, file.path),
+    fileEncodings: rememberFileEncoding(
+      session.value.fileEncodings,
+      file.path,
+      normalizeTextEncoding(file.encoding),
+      findFileEncoding(session.value.fileEncodings, file.path)?.customized === true,
+    ),
     fileScrollPositions: addFileScrollPosition(session.value.fileScrollPositions, file.path, scrollTop),
     scrollTop,
   }, { syncActive: false });
@@ -2020,42 +2072,94 @@ function onPreviewScroll(event: Event): void {
   rememberScroll((event.target as HTMLElement).scrollTop);
 }
 
+function lockActiveHeading(id: string, source: string): void {
+  lockedActiveHeadingId = id;
+  activeHeadingId.value = id;
+  rendererLog.debug('heading.navigation.lock', { id, source });
+}
+
+function setActiveHeadingId(id: string, source: string): void {
+  if (shouldBlockActiveHeadingUpdate(lockedActiveHeadingId, id)) {
+    rendererLog.debug('heading.active.blocked', {
+      lockedId: lockedActiveHeadingId,
+      attemptedId: id,
+      source,
+    });
+    return;
+  }
+
+  if (activeHeadingId.value !== id) {
+    rendererLog.debug('heading.active.update', {
+      from: activeHeadingId.value,
+      to: id,
+      source,
+    });
+  }
+  activeHeadingId.value = id;
+}
+
+function scheduleHeadingNavigationCompletion(id: string): void {
+  if (headingNavigationFrame !== undefined) {
+    window.cancelAnimationFrame(headingNavigationFrame);
+    headingNavigationFrame = undefined;
+  }
+
+  void nextTick(() => {
+    window.requestAnimationFrame(() => {
+      finishDocumentScrollRestore();
+      headingNavigationFrame = window.requestAnimationFrame(() => {
+        if (lockedActiveHeadingId === id) {
+          lockedActiveHeadingId = '';
+          rendererLog.debug('heading.navigation.unlock', { id });
+        }
+        headingNavigationFrame = undefined;
+      });
+    });
+  });
+}
+
 function updateActiveHeadingFromSourceLine(line: number): void {
   const container = preview.value;
   if (!container) {
     const headings = flattenHeadingNodes(headingTree.value)
       .filter((node) => Number.isFinite(node.sourceLine))
-      .sort((first, second) => (first.sourceLine ?? 0) - (second.sourceLine ?? 0));
-    const current = headings.filter((node) => (node.sourceLine ?? 0) <= line).at(-1) ?? headings[0];
-    activeHeadingId.value = current?.id ?? '';
+      .map((node) => ({
+        id: node.id,
+        line: node.sourceLine ?? 0,
+      }));
+    setActiveHeadingId(resolveActiveHeadingIdFromSourceLine(headings, line), 'source-line-tree');
     return;
   }
 
   const headings = Array.from(container.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]'))
     .map((heading) => ({
-      heading,
+      id: heading.id,
       line: Number(heading.dataset.sourceLine),
     }))
-    .filter((item) => Number.isFinite(item.line))
-    .sort((first, second) => first.line - second.line);
-  const current = headings.filter((item) => item.line <= line).at(-1) ?? headings[0];
-  activeHeadingId.value = current?.heading.id ?? '';
+    .filter((item) => item.id.length > 0 && Number.isFinite(item.line));
+  setActiveHeadingId(resolveActiveHeadingIdFromSourceLine(headings, line), 'source-line-preview');
+}
+
+function previewHeadingAnchors(container: HTMLElement): Array<{ id: string; top: number }> {
+  return Array.from(container.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]'))
+    .map((heading) => ({
+      id: heading.id,
+      top: previewNodeScrollTop(heading, container),
+    }))
+    .filter((heading) => heading.id.length > 0);
 }
 
 function updateActiveHeadingFromPreview(): void {
   const container = preview.value;
   if (!container) {
-    activeHeadingId.value = '';
+    setActiveHeadingId('', 'preview-missing');
     return;
   }
 
-  const headings = Array.from(container.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]'));
-  const containerTop = container.getBoundingClientRect().top;
-  const activationOffset = Math.min(240, Math.max(32, container.clientHeight * 0.35));
-  const current = headings
-    .filter((heading) => heading.getBoundingClientRect().top - containerTop <= activationOffset)
-    .at(-1) ?? headings[0];
-  activeHeadingId.value = current?.id ?? '';
+  setActiveHeadingId(
+    resolveActiveHeadingId(previewHeadingAnchors(container), container.scrollTop),
+    'preview-scroll',
+  );
 }
 
 function flattenHeadingNodes(nodes: HeadingNode[]): HeadingNode[] {
@@ -2090,25 +2194,30 @@ function persistSession(patch: Partial<MarkdownSession>, options: { deferred?: b
 }
 
 function jumpToHeading(id: string): void {
+  beginDocumentScrollRestore();
+  lockActiveHeading(id, 'toc-jump');
+
   const container = preview.value;
-  const heading = container?.querySelector<HTMLElement>(`#${escapeCssIdentifier(id)}`);
+  const heading = container?.querySelector<HTMLElement>(headingElementSelector(id));
   if (!container || !heading) {
     const node = findHeadingNode(headingTree.value, id);
     if (node?.sourceLine) {
+      editor.value?.setCursorPosition({ lineNumber: node.sourceLine, column: 1 });
       syncEditorToLine(node.sourceLine);
-      activeHeadingId.value = id;
       rememberScroll(activeScrollTop());
     }
+    scheduleHeadingNavigationCompletion(id);
     return;
   }
 
-  container.scrollTop = Math.max(0, previewNodeScrollTop(heading, container) - 16);
+  container.scrollTop = previewHeadingScrollTarget(previewNodeScrollTop(heading, container));
   const sourceLine = Number(heading.dataset.sourceLine);
   if (Number.isFinite(sourceLine)) {
+    editor.value?.setCursorPosition({ lineNumber: sourceLine, column: 1 });
     syncEditorToLine(sourceLine);
   }
-  activeHeadingId.value = id;
   rememberScroll(container.scrollTop);
+  scheduleHeadingNavigationCompletion(id);
 }
 
 function rememberedFileScrollTop(filePath: string | null): number | null {
@@ -2644,7 +2753,12 @@ function setCurrentFileEncoding(encoding: unknown): void {
   const nextFile = setFileEncoding(currentFile.value, normalized);
   currentFile.value = nextFile;
   tab.file = nextFile;
-  persistTabSession({ tabs: serializedOpenTabs() }, { syncActive: false, deferred: true });
+  persistTabSession({
+    tabs: serializedOpenTabs(),
+    fileEncodings: currentFile.value.path
+      ? rememberFileEncoding(session.value.fileEncodings, currentFile.value.path, normalized, true)
+      : session.value.fileEncodings,
+  }, { syncActive: false });
   status.value = `当前编码 ${textEncodingLabel(normalized)}；保存时将使用该编码`;
 }
 
@@ -2692,6 +2806,14 @@ async function openRecentFilePath(filePath: string): Promise<void> {
 }
 
 function deleteRecentFile(filePath: string): void {
+  if (isOpenFilePath(filePath)) {
+    persistSession({
+      recentFiles: protectOpenFilesInRecentFiles(session.value.recentFiles),
+    });
+    recentFilesOpen.value = true;
+    status.value = `已打开的文件会保留在最近文件中：${recentFileName(filePath)}`;
+    return;
+  }
   persistSession({
     recentFiles: removeRecentFile(session.value.recentFiles, filePath),
   });
@@ -4827,24 +4949,26 @@ async function restoreSessionTabs(): Promise<boolean> {
   lastSavedContent.value = active.lastSavedContent;
   isPreviewFullscreen.value = hasPreviewPane.value && active.previewFullscreen;
   status.value = active.file.path ?? '未保存的新文档';
+  const restoredSessionTabs = restoredTabs.map((tab) => ({
+    id: tab.id,
+    filePath: tab.file.path,
+    name: tab.file.name,
+    scrollTop: tab.scrollTop,
+    editorScrollTop: tab.editorScrollTop,
+    previewScrollTop: tab.previewScrollTop,
+    tocScrollTop: tab.tocScrollTop,
+    editorVisible: tab.editorVisible,
+    previewHidden: tab.previewHidden,
+    previewFullscreen: tab.previewFullscreen,
+    content: tab.file.path ? undefined : tab.source,
+    lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
+    encoding: normalizeTextEncoding(tab.file.encoding),
+  }));
   session.value = mergeSession(session.value, {
     filePath: active.file.path,
-    tabs: restoredTabs.map((tab) => ({
-      id: tab.id,
-      filePath: tab.file.path,
-      name: tab.file.name,
-      scrollTop: tab.scrollTop,
-      editorScrollTop: tab.editorScrollTop,
-      previewScrollTop: tab.previewScrollTop,
-      tocScrollTop: tab.tocScrollTop,
-      editorVisible: tab.editorVisible,
-      previewHidden: tab.previewHidden,
-      previewFullscreen: tab.previewFullscreen,
-      content: tab.file.path ? undefined : tab.source,
-      lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
-      encoding: normalizeTextEncoding(tab.file.encoding),
-    })),
+    tabs: restoredSessionTabs,
     activeTabId: active.id,
+    recentFiles: protectOpenFilesInRecentFiles(session.value.recentFiles, restoredSessionTabs),
     scrollTop: active.scrollTop,
     editorVisible: active.editorVisible,
     previewHidden: active.previewHidden,

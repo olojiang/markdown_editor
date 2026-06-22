@@ -375,6 +375,7 @@ const chapterNumber = `(?:${arabicChapterNumber}|${chineseChapterNumber})`;
 const explicitChapterPattern = new RegExp(`^第\\s*${chapterNumber}\\s*(?:章节|章|节|回|卷|部|篇|集)`, 'u');
 const numberedChapterPattern = new RegExp(`^${chapterNumber}\\s*(?:[、.．,，:：)）-]|\\s+)`, 'u');
 const bareChapterNumberPattern = new RegExp(`^${chapterNumber}$`, 'u');
+const markdownTextHeadingPattern = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/u;
 const surroundingQuotePattern = /^[\s'"‘’“”「」『』《》【】([{（]+|[\s'"‘’“”「」『』《》【】)\]}）]+$/gu;
 
 function normalizeTextChapterLine(line: string): string {
@@ -394,18 +395,39 @@ function isTextChapterLine(line: string): boolean {
 
 export function buildTextHeadingTree(source: string): HeadingNode[] {
   const slug = createTextHeadingSlugger();
-  return source
+  const headings = source
     .split('\n')
-    .map((line, index) => ({ index, title: normalizeTextChapterLine(line) }))
-    .filter(({ title }) => isTextChapterLine(title))
-    .map(({ index, title }) => ({
-      id: slug(title),
-      level: 1,
-      sourceLine: index + 1,
-      title,
-      collapsed: false,
-      children: [],
-    }));
+    .flatMap((line, index) => {
+      const markdownHeading = normalizeTextChapterLine(line).match(markdownTextHeadingPattern);
+      if (markdownHeading) {
+        const title = markdownHeading[2].trim();
+        return title
+          ? [{
+            id: slug(title),
+            level: markdownHeading[1].length,
+            sourceLine: index + 1,
+            title,
+            collapsed: false,
+            children: [],
+          }]
+          : [];
+      }
+
+      const title = normalizeTextChapterLine(line);
+      if (!isTextChapterLine(title)) {
+        return [];
+      }
+      return [{
+        id: slug(title),
+        level: 1,
+        sourceLine: index + 1,
+        title,
+        collapsed: false,
+        children: [],
+      }];
+    });
+
+  return nestHeadingNodes(headings);
 }
 
 export function buildDocumentHeadingTree(source: string, kind: DocumentKind): HeadingNode[] {
