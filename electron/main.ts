@@ -1,5 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, shell, type MenuItemConstructorOptions } from 'electron';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -144,6 +144,7 @@ type AppMenuCommand =
   | 'undo'
   | 'redo'
   | 'show-search'
+  | 'show-file-search'
   | 'find-next'
   | 'replace-current'
   | 'replace-all'
@@ -296,6 +297,7 @@ function buildApplicationMenu(): void {
         { role: 'selectAll', label: '全选' },
         { type: 'separator' },
         commandMenuItem('查找...', 'show-search', 'CmdOrCtrl+F'),
+        commandMenuItem('在文件中搜索...', 'show-file-search', 'CmdOrCtrl+Shift+F'),
         commandMenuItem('查找下一个', 'find-next', 'CmdOrCtrl+G'),
         commandMenuItem('替换当前匹配', 'replace-current'),
         commandMenuItem('全部替换', 'replace-all'),
@@ -1856,6 +1858,273 @@ ipcMain.on('app:read-clipboard-sync', (event) => {
       message: error instanceof Error ? error.message : String(error),
     });
     event.returnValue = { formats: [], html: '', text: '' };
+  }
+});
+
+ipcMain.handle('app:read-clipboard-image', () => {
+  try {
+    const image = clipboard.readImage();
+    if (image.isEmpty()) {
+      return null;
+    }
+    const pngBuffer = image.toPNG();
+    return {
+      data: pngBuffer.buffer.slice(pngBuffer.byteOffset, pngBuffer.byteOffset + pngBuffer.byteLength),
+      mimeType: 'image/png',
+    };
+  } catch (error) {
+    mainLog('ipc.app.read-clipboard-image.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+});
+
+interface FileSearchRequest {
+  query: string;
+  isRegex: boolean;
+  searchDir: string;
+  excludeFolders: string[];
+  maxResults: number;
+}
+
+interface FileSearchMatch {
+  filePath: string;
+  fileName: string;
+  lineNumber: number;
+  column: number;
+  lineContent: string;
+  matchLength: number;
+}
+
+const defaultExcludeFolders = ['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.DS_Store'];
+const searchTextExtensions = new Set([
+  '.md', '.markdown', '.mdown', '.txt', '.text', '.html', '.htm',
+  '.json', '.js', '.ts', '.jsx', '.tsx', '.css', '.less', '.scss',
+  '.vue', '.svelte', '.xml', '.yaml', '.yml', '.toml', '.ini',
+  '.sh', '.bash', '.zsh', '.py', '.rb', '.go', '.rs', '.java',
+  '.c', '.cpp', '.h', '.hpp', '.cs', '.swift', '.kt', '.lua',
+  '.sql', '.graphql', '.env', '.gitignore', '.editorconfig',
+  '.dockerfile', '.makefile', '.cmake',
+]);
+const searchMaxFileSize = 2 * 1024 * 1024;
+
+function isSearchableFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  if (searchTextExtensions.has(ext)) {
+    return true;
+  }
+  const base = path.basename(filePath).toLowerCase();
+  return ['makefile', 'dockerfile', 'readme', 'license', 'changelog'].includes(base);
+}
+
+let cachedRgPath: string | null | undefined;
+
+function findRipgrepPath(): string | null {
+  if (cachedRgPath !== undefined) {
+    return cachedRgPath;
+  }
+  try {
+    const rgPath = execFileSync(process.platform === 'win32' ? 'where' : 'which', ['rg'], {
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim().split('\n')[0];
+    cachedRgPath = rgPath || null;
+  } catch {
+    cachedRgPath = null;
+  }
+  mainLog('search.ripgrep.detect', { path: cachedRgPath });
+  return cachedRgPath;
+}
+
+function parseRipgrepJsonLine(line: string): FileSearchMatch | null {
+  try {
+    const parsed = JSON.parse(line) as {
+      type: string;
+      data?: {
+        path?: { text?: string };
+        lines?: { text?: string };
+        line_number?: number;
+        submatches?: { start: number; end: number }[];
+      };
+    };
+    if (parsed.type !== 'match' || !parsed.data) {
+      return null;
+    }
+    const { data } = parsed;
+    const filePath = data.path?.text ?? '';
+    const lineContent = (data.lines?.text ?? '').replace(/\n$/, '');
+    const lineNumber = data.line_number ?? 0;
+    const submatch = data.submatches?.[0];
+    const column = submatch ? submatch.start + 1 : 1;
+    const matchLength = submatch ? submatch.end - submatch.start : 0;
+    return {
+      filePath: path.resolve(filePath),
+      fileName: path.basename(filePath),
+      lineNumber,
+      column,
+      lineContent,
+      matchLength,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function searchWithRipgrep(request: FileSearchRequest): Promise<FileSearchMatch[]> {
+  const rgPath = findRipgrepPath();
+  if (!rgPath) {
+    return Promise.reject(new Error('ripgrep not found'));
+  }
+
+  return new Promise((resolve, reject) => {
+    const args = [
+      '--json',
+      '--max-count', '50',
+      '--max-filesize', `${searchMaxFileSize}`,
+    ];
+
+    if (!request.isRegex) {
+      args.push('--fixed-strings');
+    }
+
+    const allExcludes = [...defaultExcludeFolders, ...request.excludeFolders];
+    for (const folder of allExcludes) {
+      const normalized = folder.replace(/\/+$/, '');
+      args.push('--glob', `!${normalized}/`);
+    }
+
+    args.push('--', request.query, request.searchDir);
+
+    mainLog('search.ripgrep.start', {
+      query: request.query,
+      isRegex: request.isRegex,
+      searchDir: request.searchDir,
+      excludeCount: allExcludes.length,
+    });
+
+    execFile(rgPath, args, {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 30000,
+    }, (error, stdout, stderr) => {
+      const execError = error as (NodeJS.ErrnoException & { status?: number; code?: string | number }) | null;
+      const exitCode = execError?.status ?? execError?.code;
+      const isNoMatch = exitCode === 1 || exitCode === '1';
+      if (error && exitCode === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+        mainLog('search.ripgrep.truncated', { stderr: String(stderr).slice(0, 200) });
+      } else if (error && !isNoMatch && exitCode !== undefined) {
+        mainLog('search.ripgrep.error', { message: error.message, exitCode });
+        reject(error);
+        return;
+      }
+
+      const results: FileSearchMatch[] = [];
+      for (const line of String(stdout).split('\n')) {
+        if (!line.trim()) {
+          continue;
+        }
+        const match = parseRipgrepJsonLine(line);
+        if (match && results.length < request.maxResults) {
+          results.push(match);
+        }
+      }
+
+      mainLog('search.ripgrep.complete', { resultCount: results.length });
+      resolve(results);
+    });
+  });
+}
+
+async function searchWithNodeFs(request: FileSearchRequest): Promise<FileSearchMatch[]> {
+  const results: FileSearchMatch[] = [];
+  const allExcludes = new Set([...defaultExcludeFolders, ...request.excludeFolders].map(f => f.toLowerCase()));
+
+  let regex: RegExp;
+  try {
+    const pattern = request.isRegex ? request.query : request.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    regex = new RegExp(pattern, request.isRegex ? 'gm' : 'gi');
+  } catch {
+    return [];
+  }
+
+  async function walk(dir: string): Promise<void> {
+    if (results.length >= request.maxResults) {
+      return;
+    }
+
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (results.length >= request.maxResults) {
+        return;
+      }
+
+      const fullPath = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (!allExcludes.has(entry.name.toLowerCase())) {
+          await walk(fullPath);
+        }
+        continue;
+      }
+
+      if (!entry.isFile() || !isSearchableFile(fullPath)) {
+        continue;
+      }
+
+      try {
+        const stat = await fs.stat(fullPath);
+        if (stat.size > searchMaxFileSize) {
+          continue;
+        }
+        const content = await fs.readFile(fullPath, 'utf8');
+        const lines = content.split('\n');
+
+        for (let i = 0; i < lines.length && results.length < request.maxResults; i++) {
+          regex.lastIndex = 0;
+          let match: RegExpExecArray | null;
+          while ((match = regex.exec(lines[i])) !== null && results.length < request.maxResults) {
+            results.push({
+              filePath: fullPath,
+              fileName: path.basename(fullPath),
+              lineNumber: i + 1,
+              column: match.index + 1,
+              lineContent: lines[i],
+              matchLength: match[0].length,
+            });
+            if (match[0].length === 0) {
+              regex.lastIndex++;
+            }
+          }
+        }
+      } catch {
+        // Skip unreadable files
+      }
+    }
+  }
+
+  mainLog('search.node-fs.start', { searchDir: request.searchDir, query: request.query });
+  await walk(request.searchDir);
+  mainLog('search.node-fs.complete', { resultCount: results.length });
+  return results;
+}
+
+ipcMain.handle('search:in-files', async (_event, request: FileSearchRequest) => {
+  if (!request.query) {
+    return [];
+  }
+
+  try {
+    return await searchWithRipgrep(request);
+  } catch {
+    mainLog('search.ripgrep.fallback', { reason: 'ripgrep unavailable, using Node.js fs' });
+    return searchWithNodeFs(request);
   }
 });
 

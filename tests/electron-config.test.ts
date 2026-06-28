@@ -117,7 +117,8 @@ describe('Electron build configuration', () => {
   it('keeps GUI-launched cloud uploads compatible with shell-defined tokens', () => {
     const mainSource = fs.readFileSync('electron/main.ts', 'utf8');
 
-    expect(mainSource).toContain("import { execFileSync } from 'node:child_process';");
+    expect(mainSource).toContain("from 'node:child_process';");
+    expect(mainSource).toContain('execFileSync');
     expect(mainSource).toContain('readPfSessionTokenFromShell');
     expect(mainSource).toContain("process.env.PF_SESSION_TOKEN?.trim() || readPfSessionTokenFromShell()");
   });

@@ -208,6 +208,14 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   confirmClose: () => ipcRenderer.invoke('app:confirm-close'),
   confirmCloseSync: () => ipcRenderer.sendSync('app:confirm-close-sync'),
   readClipboard: () => ipcRenderer.sendSync('app:read-clipboard-sync'),
+  readClipboardImage: () => ipcRenderer.invoke('app:read-clipboard-image'),
+  searchInFiles: (request: {
+    query: string;
+    isRegex: boolean;
+    searchDir: string;
+    excludeFolders: string[];
+    maxResults: number;
+  }) => ipcRenderer.invoke('search:in-files', request),
   debugLog: (event: string, payload: Record<string, unknown> = {}) =>
     ipcRenderer.invoke('app:debug-log', event, payload),
 });

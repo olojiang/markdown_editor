@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import MarkdownMonacoEditor from '@/renderer/components/MarkdownMonacoEditor.vue';
+import SearchPanel from '@/renderer/components/SearchPanel.vue';
 import TocTree from '@/renderer/components/TocTree.vue';
 import {
   buildDocumentHeadingTree,
@@ -156,6 +157,7 @@ interface EditorSurface {
   getScrollTop(): number;
   getSelectionRange(): { start: number; end: number };
   redo(): void;
+  replaceRange(replacement: string, options: { end: number; scrollTop: number; start: number; selectionEndOffset: number; selectionStartOffset: number }): void;
   setCursorPosition(position: CursorPosition): void;
   setScrollTop(value: number): void;
   setSelectionRange(start: number, end: number): void;
@@ -295,6 +297,8 @@ const editorConfigError = ref('');
 const closeConfirmationVisible = ref(false);
 const closeConfirmationBusy = ref(false);
 const closeConfirmationTargetTabId = ref<string | null>(null);
+const fileSearchVisible = ref(false);
+const fileSearchPanel = ref<InstanceType<typeof SearchPanel> | null>(null);
 const helpPopoverPinned = ref(false);
 const htmlPreviewSrc = ref('');
 const recentFilesOpen = ref(false);
@@ -382,6 +386,19 @@ const isPreviewSearchMode = computed(() => (
   && !isPreviewHidden.value
   && (!isEditorVisible.value || isPreviewFullscreen.value)
 ));
+const fileSearchTabs = computed(() => openTabs.value.map((tab) => ({
+  filePath: tab.file.path,
+  fileName: tab.file.name,
+  content: tab.id === activeTabId.value ? source.value : tab.source,
+})));
+const fileSearchDir = computed(() => {
+  const filePath = currentFile.value?.path;
+  if (!filePath) {
+    return null;
+  }
+  const lastSep = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  return lastSep > 0 ? filePath.slice(0, lastSep) : null;
+});
 const hasUnsavedChanges = computed(() => currentFile.value !== null && source.value !== lastSavedContent.value);
 const unsavedTabCount = computed(() => openTabs.value.filter((tab) => tab.source !== tab.lastSavedContent).length);
 const closeConfirmationTargetTab = computed(() =>
@@ -2970,6 +2987,17 @@ function replaceEditorRange(
     return;
   }
 
+  if (typeof element.replaceRange === 'function') {
+    element.replaceRange(replacement, {
+      end: range.end,
+      scrollTop: range.scrollTop,
+      start: range.start,
+      selectionEndOffset,
+      selectionStartOffset,
+    });
+    return;
+  }
+
   const start = Math.min(Math.max(0, range.start), source.value.length);
   const end = Math.min(Math.max(start, range.end), source.value.length);
   source.value = `${source.value.slice(0, start)}${replacement}${source.value.slice(end)}`;
@@ -3328,49 +3356,11 @@ async function deleteSelectedAsset(): Promise<void> {
   status.value = '已删除资源文件';
 }
 
-async function onEditorPaste(event: ClipboardEvent): Promise<void> {
-  const clipboardData = event.clipboardData;
-  const clipboardTypes = Array.from(clipboardData?.types ?? []);
-  const imageFile = Array.from(event.clipboardData?.files ?? []).find((file) => file.type.startsWith('image/'));
-  if (!imageFile) {
-    const richHtml = clipboardData?.getData('text/html') ?? '';
-    const plainText = clipboardData?.getData('text/plain') ?? '';
-    const fallbackClipboard = richHtml.trim() ? null : readBridgeClipboardHtml();
-    const conversionHtml = richHtml.trim() ? richHtml : fallbackClipboard?.html ?? '';
-    debugLog('editor.paste.detected', {
-      currentDocumentKind: currentDocumentKind.value,
-      fallbackFormats: fallbackClipboard?.formats ?? [],
-      fallbackHtmlLength: fallbackClipboard?.html.length ?? 0,
-      fallbackPlainTextLength: fallbackClipboard?.textLength ?? 0,
-      fileCount: clipboardData?.files.length ?? 0,
-      htmlLength: richHtml.length,
-      isMarkdownDocument: isMarkdownDocument.value,
-      plainTextLength: plainText.length,
-      types: clipboardTypes,
-    });
-    if (isMarkdownDocument.value && richHtml.trim()) {
-      if (insertRichClipboardMarkdown(richHtml, 'paste-event')) {
-        event.preventDefault();
-      }
-    } else if (fallbackClipboard && insertRichClipboardMarkdown(fallbackClipboard.html, 'clipboard')) {
-      event.preventDefault();
-    } else if (isMarkdownDocument.value) {
-      debugLog('editor.paste.richText.skipped', {
-        fallbackFormats: fallbackClipboard?.formats ?? [],
-        reason: richClipboardConversionSkipReason(conversionHtml)
-          ?? (conversionHtml.trim() ? 'empty-conversion' : 'missing-text-html'),
-        types: clipboardTypes,
-      });
-    }
-    return;
-  }
-
-  event.preventDefault();
+async function pasteImageFromFile(imageFile: File): Promise<void> {
   debugLog('editor.paste.image.detected', {
     fileName: imageFile.name,
     mode: imageUploadMode.value,
     type: imageFile.type,
-    types: clipboardTypes,
   });
   if (imageUploadMode.value === 'cloud') {
     if (!bridge?.saveTempImageAsset || !bridge.uploadCloudImage) {
@@ -3414,6 +3404,48 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
   await refreshImageAssets();
   selectedAssetPath.value = asset.relativePath;
   insertImageMarkdown(asset);
+}
+
+async function onEditorPaste(event: ClipboardEvent): Promise<void> {
+  const clipboardData = event.clipboardData;
+  const clipboardTypes = Array.from(clipboardData?.types ?? []);
+  const imageFile = Array.from(event.clipboardData?.files ?? []).find((file) => file.type.startsWith('image/'));
+  if (!imageFile) {
+    const richHtml = clipboardData?.getData('text/html') ?? '';
+    const plainText = clipboardData?.getData('text/plain') ?? '';
+    const fallbackClipboard = richHtml.trim() ? null : readBridgeClipboardHtml();
+    const conversionHtml = richHtml.trim() ? richHtml : fallbackClipboard?.html ?? '';
+    debugLog('editor.paste.detected', {
+      currentDocumentKind: currentDocumentKind.value,
+      fallbackFormats: fallbackClipboard?.formats ?? [],
+      fallbackHtmlLength: fallbackClipboard?.html.length ?? 0,
+      fallbackPlainTextLength: fallbackClipboard?.textLength ?? 0,
+      fileCount: clipboardData?.files.length ?? 0,
+      htmlLength: richHtml.length,
+      isMarkdownDocument: isMarkdownDocument.value,
+      plainTextLength: plainText.length,
+      types: clipboardTypes,
+    });
+    if (isMarkdownDocument.value && richHtml.trim()) {
+      if (insertRichClipboardMarkdown(richHtml, 'paste-event')) {
+        event.preventDefault();
+      }
+    } else if (fallbackClipboard && insertRichClipboardMarkdown(fallbackClipboard.html, 'clipboard')) {
+      event.preventDefault();
+    } else if (isMarkdownDocument.value) {
+      debugLog('editor.paste.richText.skipped', {
+        fallbackFormats: fallbackClipboard?.formats ?? [],
+        reason: richClipboardConversionSkipReason(conversionHtml)
+          ?? (conversionHtml.trim() ? 'empty-conversion' : 'missing-text-html'),
+        types: clipboardTypes,
+      });
+    }
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  await pasteImageFromFile(imageFile);
 }
 
 function onEditorMonacoPaste(event: MonacoPasteEvent): void {
@@ -3463,6 +3495,14 @@ function onEditorPasteShortcut(event: PasteShortcutEvent): void {
     return;
   }
 
+  if (clipboard.formats.some((format) => format.startsWith('image/'))) {
+    event.preventDefault();
+    event.stopPropagation();
+    debugLog('editor.paste.shortcut.image-detected', { formats: clipboard.formats });
+    void pasteClipboardImage();
+    return;
+  }
+
   debugLog('editor.paste.shortcut.detected', {
     currentDocumentKind: currentDocumentKind.value,
     formats: clipboard.formats,
@@ -3481,6 +3521,21 @@ function onEditorPasteShortcut(event: PasteShortcutEvent): void {
         ?? (clipboard.html.trim() ? 'empty-conversion' : 'missing-clipboard-html'),
     });
   }
+}
+
+async function pasteClipboardImage(): Promise<void> {
+  if (!bridge?.readClipboardImage) {
+    debugLog('editor.paste.shortcut.image-unavailable', { reason: 'missing-bridge' });
+    return;
+  }
+  const image = await bridge.readClipboardImage();
+  if (!image) {
+    debugLog('editor.paste.shortcut.image-unavailable', { reason: 'empty-clipboard-image' });
+    return;
+  }
+  debugLog('editor.paste.shortcut.image-fetched', { mimeType: image.mimeType, size: image.data.byteLength });
+  const imageFile = new File([image.data], `clipboard-${Date.now()}.png`, { type: image.mimeType });
+  await pasteImageFromFile(imageFile);
 }
 
 function scheduleSave(): void {
@@ -3691,6 +3746,60 @@ function transformJsonSource(compact: boolean): void {
       message: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function showFileSearch(): void {
+  syncActiveTabState();
+  if (editorSearchVisible.value) {
+    hideEditorSearch();
+  }
+  if (isTocPanelCollapsed.value) {
+    isTocPanelCollapsed.value = false;
+  }
+  fileSearchVisible.value = true;
+  void nextTick(() => fileSearchPanel.value?.focusInput());
+}
+
+function hideFileSearch(): void {
+  fileSearchVisible.value = false;
+}
+
+function toggleFileSearch(): void {
+  if (fileSearchVisible.value) {
+    hideFileSearch();
+  } else {
+    showFileSearch();
+  }
+}
+
+async function navigateToSearchResult(match: FileSearchMatch): Promise<void> {
+  const openedTab = openTabs.value.find(
+    (tab) => tab.file.path && tab.file.path === match.filePath,
+  );
+
+  if (openedTab) {
+    activateTab(openedTab.id);
+  } else if (match.filePath) {
+    await openFilePath(match.filePath);
+  } else {
+    status.value = `navigateToSearchResult: file not found ${match.fileName}`;
+    return;
+  }
+
+  await nextTick();
+  if (!isEditorVisible.value) {
+    persistSession({ editorVisible: true, previewHidden: false });
+    await nextTick();
+  }
+  editor.value?.setCursorPosition({ lineNumber: match.lineNumber, column: match.column });
+  syncPreviewToLine(match.lineNumber);
+  updateActiveHeadingFromSourceLine(match.lineNumber);
+  status.value = `${match.fileName}:${match.lineNumber}:${match.column}`;
+  rendererLog.info('search.navigate', {
+    filePath: match.filePath,
+    lineNumber: match.lineNumber,
+    column: match.column,
+  });
 }
 
 function showEditorSearch(searchText = selectedEditorText()): void {
@@ -4012,6 +4121,10 @@ function executeAppMenuCommand(command: AppMenuCommand): void {
     showEditorSearch();
     return;
   }
+  if (command === 'show-file-search') {
+    toggleFileSearch();
+    return;
+  }
   if (command === 'find-next') {
     findNext();
     return;
@@ -4138,6 +4251,11 @@ function onKeyDown(event: KeyboardEvent): void {
     event.preventDefault();
     return;
   }
+  if (event.key === 'Escape' && fileSearchVisible.value) {
+    hideFileSearch();
+    event.preventDefault();
+    return;
+  }
   if (event.key === 'Escape' && bookmarkManagerOpen.value) {
     closeBookmarkManager();
     event.preventDefault();
@@ -4207,9 +4325,15 @@ function onKeyDown(event: KeyboardEvent): void {
     resetPreviewZoom();
     return;
   }
-  if (key === 'f') {
+  if (key === 'f' && event.shiftKey && !event.altKey) {
+    event.preventDefault();
+    toggleFileSearch();
+    return;
+  }
+  if (key === 'f' && !event.shiftKey && !event.altKey) {
     event.preventDefault();
     showEditorSearch();
+    return;
   }
   if (key === 'o') {
     event.preventDefault();
@@ -5337,38 +5461,48 @@ onBeforeUnmount(() => {
 
     <section class="workspace" :style="gridStyle">
       <aside ref="tocPanel" class="toc-panel" data-testid="toc" @scroll="onTocScroll">
-        <div class="panel-toolbar">
-          <div class="toc-toolbar-row">
-            <h2>目录</h2>
-            <div class="toc-actions">
-              <button
-                data-testid="toggle-toc-panel"
-                class="icon-button toc-panel-toggle"
-                type="button"
-                :aria-label="isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'"
-                :title="isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'"
-                @click="toggleTocPanel"
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="isTocPanelCollapsed ? icons.sidebarShow : icons.sidebarHide" /></svg>
-              </button>
-              <button data-testid="expand-toc" class="icon-button" type="button" aria-label="展开全部标题" title="展开全部标题" @click="expandAllHeadings">
-                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocExpandAll" /></svg>
-              </button>
-              <button data-testid="collapse-toc" class="icon-button" type="button" aria-label="收起全部标题" title="收起全部标题" @click="collapseAllHeadings">
-                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocCollapseAll" /></svg>
-              </button>
-            </div>
-          </div>
-          <input v-model="tocSearch" data-testid="toc-search" type="search" placeholder="搜索目录" />
-        </div>
-        <TocTree
-          v-if="visibleHeadingTree.length"
-          :nodes="visibleHeadingTree"
-          :active-id="activeHeadingId"
-          @toggle="toggleNode"
-          @jump="jumpToHeading"
+        <SearchPanel
+          v-show="fileSearchVisible"
+          ref="fileSearchPanel"
+          :opened-tabs="fileSearchTabs"
+          :current-file-dir="fileSearchDir"
+          @navigate="navigateToSearchResult"
+          @close="hideFileSearch"
         />
-        <p v-else class="empty">暂无标题</p>
+        <div v-show="!fileSearchVisible" class="toc-content">
+          <div class="panel-toolbar">
+            <div class="toc-toolbar-row">
+              <h2>目录</h2>
+              <div class="toc-actions">
+                <button
+                  data-testid="toggle-toc-panel"
+                  class="icon-button toc-panel-toggle"
+                  type="button"
+                  :aria-label="isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'"
+                  :title="isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'"
+                  @click="toggleTocPanel"
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="isTocPanelCollapsed ? icons.sidebarShow : icons.sidebarHide" /></svg>
+                </button>
+                <button data-testid="expand-toc" class="icon-button" type="button" aria-label="展开全部标题" title="展开全部标题" @click="expandAllHeadings">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocExpandAll" /></svg>
+                </button>
+                <button data-testid="collapse-toc" class="icon-button" type="button" aria-label="收起全部标题" title="收起全部标题" @click="collapseAllHeadings">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocCollapseAll" /></svg>
+                </button>
+              </div>
+            </div>
+            <input v-model="tocSearch" data-testid="toc-search" type="search" placeholder="搜索目录" />
+          </div>
+          <TocTree
+            v-if="visibleHeadingTree.length"
+            :nodes="visibleHeadingTree"
+            :active-id="activeHeadingId"
+            @toggle="toggleNode"
+            @jump="jumpToHeading"
+          />
+          <p v-else class="empty">暂无标题</p>
+        </div>
       </aside>
 
       <div

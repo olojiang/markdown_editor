@@ -593,6 +593,73 @@ function redo(): void {
   monacoEditor?.trigger('keyboard', 'redo', null);
 }
 
+interface ReplaceRangeOptions {
+  end: number;
+  scrollTop: number;
+  start: number;
+  selectionEndOffset: number;
+  selectionStartOffset: number;
+}
+
+function replaceRange(replacement: string, options: ReplaceRangeOptions): void {
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    const total = fallback.value.length;
+    const start = Math.min(Math.max(0, options.start), total);
+    const end = Math.min(Math.max(start, options.end), total);
+    fallback.focus();
+    fallback.setSelectionRange(start, end);
+    const inserted = document.execCommand?.('insertText', false, replacement) ?? false;
+    if (!inserted) {
+      fallback.value = `${fallback.value.slice(0, start)}${replacement}${fallback.value.slice(end)}`;
+    }
+    fallback.setSelectionRange(start + options.selectionStartOffset, start + options.selectionEndOffset);
+    fallback.scrollTop = options.scrollTop;
+    emit('update:modelValue', fallback.value);
+    return;
+  }
+
+  const model = getModel();
+  if (!model || !monacoEditor || !monacoModule) {
+    return;
+  }
+
+  const total = model.getValueLength();
+  const start = Math.min(Math.max(0, options.start), total);
+  const end = Math.min(Math.max(start, options.end), total);
+  const startPos = model.getPositionAt(start);
+  const endPos = model.getPositionAt(end);
+  const editRange = new monacoModule.Range(
+    startPos.lineNumber,
+    startPos.column,
+    endPos.lineNumber,
+    endPos.column,
+  );
+
+  monacoEditor.pushUndoStop();
+  monacoEditor.executeEdits('markdown-editor.replaceRange', [{
+    range: editRange,
+    text: replacement,
+    forceMoveMarkers: true,
+  }]);
+  monacoEditor.pushUndoStop();
+
+  const selStartPos = model.getPositionAt(start + options.selectionStartOffset);
+  const selEndPos = model.getPositionAt(start + options.selectionEndOffset);
+  monacoEditor.setSelection(new monacoModule.Selection(
+    selStartPos.lineNumber,
+    selStartPos.column,
+    selEndPos.lineNumber,
+    selEndPos.column,
+  ));
+  monacoEditor.setScrollTop(options.scrollTop);
+  rendererLog.info('editor.replaceRange.applied', {
+    replacementLength: replacement.length,
+    rangeEnd: end,
+    rangeStart: start,
+  });
+}
+
 function getElement(): HTMLElement | null {
   return fallbackEditor.value ?? monacoEditor?.getDomNode() ?? null;
 }
@@ -656,6 +723,7 @@ defineExpose({
   getScrollTop,
   getSelectionRange,
   redo,
+  replaceRange,
   setCursorPosition,
   setScrollTop,
   setSelectionRange,

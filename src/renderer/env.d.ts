@@ -21,6 +21,23 @@ interface MarkdownOpenRequest {
   external: boolean;
 }
 
+interface FileSearchRequest {
+  query: string;
+  isRegex: boolean;
+  searchDir: string;
+  excludeFolders: string[];
+  maxResults: number;
+}
+
+interface FileSearchMatch {
+  filePath: string;
+  fileName: string;
+  lineNumber: number;
+  column: number;
+  lineContent: string;
+  matchLength: number;
+}
+
 type AppMenuCommand =
   | 'new-file'
   | 'open-file'
@@ -39,6 +56,7 @@ type AppMenuCommand =
   | 'undo'
   | 'redo'
   | 'show-search'
+  | 'show-file-search'
   | 'find-next'
   | 'replace-current'
   | 'replace-all'
@@ -187,6 +205,8 @@ interface MarkdownBridge {
   confirmClose(): Promise<void>;
   confirmCloseSync?(): boolean;
   readClipboard?(): { formats: string[]; html: string; text: string };
+  readClipboardImage?(): Promise<{ data: ArrayBuffer; mimeType: string } | null>;
+  searchInFiles?(request: FileSearchRequest): Promise<FileSearchMatch[]>;
   debugLog?(event: string, payload?: Record<string, unknown>): Promise<void>;
 }
 

@@ -179,6 +179,8 @@ describe('App', () => {
       confirmClose: vi.fn().mockResolvedValue(undefined),
       confirmCloseSync: vi.fn().mockReturnValue(true),
       readClipboard: vi.fn().mockReturnValue({ formats: [], html: '', text: '' }),
+      readClipboardImage: vi.fn().mockResolvedValue(null),
+      searchInFiles: vi.fn().mockResolvedValue([]),
       debugLog: vi.fn().mockResolvedValue(undefined),
     };
   });
@@ -621,6 +623,104 @@ describe('App', () => {
     expect(editor.value).toContain('## Clipboard Heading\n\nUse **rich** text.');
   });
 
+  it('saves clipboard images on Cmd+V when Monaco suppresses the DOM paste event', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-06T08:00:00.000Z'));
+    const close = vi.fn();
+    const createImageBitmap = vi.fn().mockResolvedValue({ width: 8, height: 6, close });
+    vi.stubGlobal('createImageBitmap', createImageBitmap);
+    Object.defineProperty(window, 'createImageBitmap', { configurable: true, value: createImageBitmap });
+    window.createImageBitmap = createImageBitmap as unknown as typeof window.createImageBitmap;
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ drawImage: vi.fn() }),
+    });
+    Object.defineProperty(HTMLCanvasElement.prototype, 'toBlob', {
+      configurable: true,
+      value: vi.fn((callback: BlobCallback) => {
+        const webpBlob = new Blob(['webp'], { type: 'image/webp' });
+        Object.defineProperty(webpBlob, 'arrayBuffer', {
+          configurable: true,
+          value: vi.fn().mockResolvedValue(new ArrayBuffer(4)),
+        });
+        callback(webpBlob);
+      }),
+    });
+    vi.mocked(window.markdownBridge!.readClipboard!).mockReturnValue({
+      formats: ['image/png'],
+      html: '',
+      text: '',
+    });
+    const imageBuffer = new ArrayBuffer(8);
+    vi.mocked(window.markdownBridge!.readClipboardImage!).mockResolvedValue({
+      data: imageBuffer,
+      mimeType: 'image/png',
+    });
+    const pastedAsset = {
+      name: '1778054400000.webp',
+      relativePath: 'assets/images/1778054400000.webp',
+      absolutePath: '/docs/assets/images/1778054400000.webp',
+      size: 4,
+    };
+    vi.mocked(window.markdownBridge!.saveImageAsset).mockResolvedValue(pastedAsset);
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'v',
+      metaKey: true,
+    });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    const stopPropagation = vi.spyOn(event, 'stopPropagation');
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    expect(preventDefault).toHaveBeenCalledBefore(stopPropagation);
+    expect(window.markdownBridge?.readClipboardImage).toHaveBeenCalled();
+    expect(window.markdownBridge?.saveImageAsset).toHaveBeenCalledTimes(1);
+    expect(window.markdownBridge?.saveImageAsset).toHaveBeenCalledWith(
+      openFile.path,
+      '1778054400000.webp',
+      expect.any(ArrayBuffer),
+      'image/webp',
+    );
+    expect(editor.value).toContain('![1778054400000](assets/images/1778054400000.webp)');
+  });
+
+  it('does not insert anything when the clipboard reports an image but readClipboardImage returns null', async () => {
+    vi.mocked(window.markdownBridge!.readClipboard!).mockReturnValue({
+      formats: ['image/png'],
+      html: '',
+      text: '',
+    });
+    vi.mocked(window.markdownBridge!.readClipboardImage!).mockResolvedValue(null);
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const originalValue = editor.value;
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'v',
+      metaKey: true,
+    });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(window.markdownBridge?.saveImageAsset).not.toHaveBeenCalled();
+    expect(editor.value).toBe(originalValue);
+  });
+
   it('leaves rich HTML paste alone when Markdown conversion is disabled', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -766,6 +866,90 @@ describe('App', () => {
     expect(editor.value.slice(insertionPoint, insertionPoint + inserted.length)).toBe(inserted);
     expect(editor.selectionStart).toBe(insertionPoint + inserted.length);
     expect(editor.scrollTop).toBe(42);
+  });
+
+  it('routes editor insertions through the undoable replaceRange path', async () => {
+    const replaceRangeSpy = vi.fn();
+    const EditorStub = defineComponent({
+      name: 'MarkdownMonacoEditor',
+      props: {
+        modelValue: { type: String, default: '' },
+      },
+      emits: ['update:modelValue'],
+      setup(props, { emit, expose }) {
+        const element = ref<HTMLTextAreaElement | null>(null);
+        function replaceRange(
+          replacement: string,
+          range: { start: number; end: number },
+          selectionStartOffset: number,
+          selectionEndOffset: number,
+        ): void {
+          replaceRangeSpy({ replacement, range, selectionStartOffset, selectionEndOffset });
+          const next = props.modelValue.slice(0, range.start) + replacement + props.modelValue.slice(range.end);
+          emit('update:modelValue', next);
+        }
+        expose({
+          focus: vi.fn(),
+          getCursorPosition: vi.fn(() => ({ column: 1, lineNumber: 1 })),
+          getElement: vi.fn(() => element.value),
+          getLineScrollTop: vi.fn(() => 0),
+          getMaxScrollTop: vi.fn(() => 1200),
+          getScrollTop: vi.fn(() => 0),
+          getSelectionRange: vi.fn(() => ({ start: 0, end: 0 })),
+          redo: vi.fn(),
+          replaceRange,
+          setCursorPosition: vi.fn(),
+          setScrollTop: vi.fn(),
+          setSelectionRange: vi.fn(),
+          undo: vi.fn(),
+        });
+        return () => h('textarea', {
+          ref: element,
+          class: 'source-editor',
+          'data-testid': 'editor',
+          value: props.modelValue,
+        });
+      },
+    });
+
+    const wrapper = mount(App, {
+      global: { stubs: { MarkdownMonacoEditor: EditorStub } },
+    });
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="insert-table"]').trigger('click');
+
+    expect(replaceRangeSpy).toHaveBeenCalledTimes(1);
+    const call = replaceRangeSpy.mock.calls[0][0] as {
+      replacement: string;
+      range: { start: number; end: number };
+      selectionStartOffset: number;
+      selectionEndOffset: number;
+    };
+    expect(call.replacement).toContain('| 列 1 | 列 2 |');
+    expect(call.range.start).toBe(0);
+    expect(call.range.end).toBe(0);
+  });
+
+  it('exposes an undoable replaceRange method on the editor component', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    const editorWrapper = wrapper.findComponent(MarkdownMonacoEditor);
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    await nextTick();
+
+    editorWrapper.vm.replaceRange(' appended', {
+      end: editor.value.length,
+      scrollTop: 0,
+      start: editor.value.length,
+      selectionEndOffset: 9,
+      selectionStartOffset: 9,
+    });
+    await nextTick();
+
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toMatch(/ appended$/);
   });
 
   it('enables cloud image upload mode from the toolbar entry', async () => {
@@ -2955,5 +3139,219 @@ describe('App', () => {
     menuCallbacks[0]?.('show-help');
     await nextTick();
     expect(wrapper.find('.help-menu').classes()).toContain('is-open');
+  });
+
+  it('opens file search panel via menu command and closes with escape', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const searchPanel = () => wrapper.find('[data-testid="file-search-panel"]');
+    const isHidden = () => searchPanel().attributes('style')?.includes('display: none');
+
+    expect(isHidden()).toBe(true);
+
+    menuCallbacks[0]?.('show-file-search');
+    await nextTick();
+
+    expect(isHidden()).toBeFalsy();
+    expect(wrapper.find('[data-testid="file-search-input"]').exists()).toBe(true);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await nextTick();
+    expect(isHidden()).toBe(true);
+  });
+
+  it('searches across opened tabs and shows results', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    wrapper.unmount();
+
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.length = 0;
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper2 = mount(App);
+    await vi.dynamicImportSettled();
+
+    menuCallbacks[0]?.('show-file-search');
+    await nextTick();
+
+    const input = wrapper2.find<HTMLInputElement>('[data-testid="file-search-input"]');
+    expect(input.exists()).toBe(true);
+
+    await input.setValue('Title');
+    await wrapper2.find('[data-testid="file-search-run"]').trigger('click');
+    await nextTick();
+
+    const results = wrapper2.find('[data-testid="file-search-results"]');
+    expect(results.exists()).toBe(true);
+  });
+
+  it('toggles file search panel with repeated menu command', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const searchPanel = () => wrapper.find('[data-testid="file-search-panel"]');
+    const isHidden = () => searchPanel().attributes('style')?.includes('display: none');
+
+    menuCallbacks[0]?.('show-file-search');
+    await nextTick();
+    expect(isHidden()).toBeFalsy();
+
+    menuCallbacks[0]?.('show-file-search');
+    await nextTick();
+    expect(isHidden()).toBe(true);
+  });
+
+  it('shows empty state when file search yields no results', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    menuCallbacks[0]?.('show-file-search');
+    await nextTick();
+
+    const input = wrapper.find<HTMLInputElement>('[data-testid="file-search-input"]');
+    await input.setValue('zzz_nonexistent_zzz');
+    await wrapper.find('[data-testid="file-search-run"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="file-search-empty"]').exists()).toBe(true);
+  });
+
+  it('switches search scope between opened and folder', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    menuCallbacks[0]?.('show-file-search');
+    await nextTick();
+
+    const openedBtn = wrapper.find('[data-testid="file-search-scope-opened"]');
+    const folderBtn = wrapper.find('[data-testid="file-search-scope-folder"]');
+
+    expect(openedBtn.classes()).toContain('active');
+    expect(folderBtn.classes()).not.toContain('active');
+
+    await folderBtn.trigger('click');
+    await nextTick();
+    expect(folderBtn.classes()).toContain('active');
+  });
+
+  it('opens file search with Cmd+Shift+F and keeps editor search closed', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const modifier = navigator.platform.toLowerCase().includes('mac') ? { metaKey: true } : { ctrlKey: true };
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', shiftKey: true, ...modifier }));
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="file-search-panel"]').attributes('style')).not.toContain('display: none');
+    expect(wrapper.find('[data-testid="editor-search"]').exists()).toBe(false);
+  });
+
+  it('finds unsynced active tab content in file search', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await nextTick();
+    await wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').setValue('# Honeywell 迭代\n\nHoney content');
+    await nextTick();
+
+    menuCallbacks[0]?.('show-file-search');
+    await nextTick();
+
+    const input = wrapper.find<HTMLInputElement>('[data-testid="file-search-input"]');
+    await input.setValue('Honey');
+    await wrapper.find('[data-testid="file-search-run"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="file-search-empty"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="file-search-status"]').text()).toContain('2 个结果');
+  });
+
+  it('search panel stays open after navigating to a result', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await nextTick();
+    await wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').setValue('# First\n\nalpha beta');
+    await nextTick();
+
+    menuCallbacks[0]?.('show-file-search');
+    await nextTick();
+
+    const input = wrapper.find<HTMLInputElement>('[data-testid="file-search-input"]');
+    await input.setValue('alpha');
+    await wrapper.find('[data-testid="file-search-run"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="file-search-status"]').exists()).toBe(true);
+    const resultRows = wrapper.findAll('.file-search-result-row');
+    expect(resultRows.length).toBeGreaterThan(0);
+
+    await resultRows[0].trigger('click');
+    await nextTick();
+
+    expect(wrapper.find('[data-testid="file-search-panel"]').attributes('style')).not.toContain('display: none');
+    expect(wrapper.find('[data-testid="file-search-status"]').exists()).toBe(true);
+    expect(wrapper.findAll('.file-search-result-row').length).toBe(resultRows.length);
+  });
+
+  it('toggles regex mode in file search', async () => {
+    const menuCallbacks: Array<(command: AppMenuCommand) => void> = [];
+    vi.mocked(window.markdownBridge!.onAppMenuCommand!).mockImplementation((callback) => {
+      menuCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    menuCallbacks[0]?.('show-file-search');
+    await nextTick();
+
+    const regexBtn = wrapper.find('[data-testid="file-search-regex"]');
+    expect(regexBtn.classes()).not.toContain('active');
+
+    await regexBtn.trigger('click');
+    await nextTick();
+    expect(regexBtn.classes()).toContain('active');
   });
 });
