@@ -21,6 +21,8 @@
 - Extracted renderer-side encoding utilities into `src/renderer/lib/text-encoding.ts`.
 - Consolidated bookmark key functions into `session.ts` (DRY).
 - Per-tab view state now includes `editorWidth` alongside `editorVisible`, `previewHidden`, and `previewFullscreen`.
+- README rewritten to document previously-undocumented features: Save As / Save All, close tab, find next, insert link / insert table, reveal in folder, editor config dialog, TOC toggle, fullscreen preview (`F11`), help popover, auto file refresh, single-instance forwarding, bookmark gutter indicators, and rich-text paste toggle.
+- Expanded keyboard shortcuts reference to cover all menu-defined shortcuts.
 
 ### Fixed
 
