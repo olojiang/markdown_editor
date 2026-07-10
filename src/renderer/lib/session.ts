@@ -34,6 +34,7 @@ export interface MarkdownSessionTab {
   editorVisible: boolean;
   previewHidden: boolean;
   previewFullscreen: boolean;
+  editorWidth?: number;
   content?: string;
   lastSavedContent?: string;
   encoding?: string;
@@ -266,9 +267,13 @@ function normalizeScrollTop(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
-function bookmarkTargetKey(bookmark: Pick<MarkdownBookmark, 'column' | 'filePath' | 'lineNumber' | 'tabId'>): string {
+export function bookmarkFileKey(bookmark: Pick<MarkdownBookmark, 'filePath' | 'tabId'>): string {
   const target = bookmark.filePath ? normalizeRecentFilePath(bookmark.filePath) : bookmark.tabId;
-  return `${target.toLocaleLowerCase()}:${bookmark.lineNumber}:${bookmark.column}`;
+  return target.toLocaleLowerCase();
+}
+
+export function bookmarkTargetKey(bookmark: Pick<MarkdownBookmark, 'column' | 'filePath' | 'lineNumber' | 'tabId'>): string {
+  return `${bookmarkFileKey(bookmark)}:${bookmark.lineNumber}:${bookmark.column}`;
 }
 
 export function normalizeBookmarks(bookmarks: unknown): MarkdownBookmark[] {
@@ -363,6 +368,9 @@ export function normalizeSessionTabs(
       editorVisible,
       previewHidden,
       previewFullscreen: candidate.previewFullscreen === true,
+      editorWidth: typeof candidate.editorWidth === 'number' && Number.isFinite(candidate.editorWidth)
+        ? Math.max(320, Math.min(1200, Math.floor(candidate.editorWidth)))
+        : undefined,
       content: typeof candidate.content === 'string' ? candidate.content : undefined,
       lastSavedContent: typeof candidate.lastSavedContent === 'string' ? candidate.lastSavedContent : undefined,
       encoding: typeof candidate.encoding === 'string' ? candidate.encoding : undefined,

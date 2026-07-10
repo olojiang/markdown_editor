@@ -151,6 +151,8 @@ type AppMenuCommand =
   | 'insert-table'
   | 'insert-link'
   | 'insert-code'
+  | 'format-bold'
+  | 'format-code-block'
   | 'import-image'
   | 'image-upload-local'
   | 'image-upload-cloud'
@@ -317,6 +319,8 @@ function buildApplicationMenu(): void {
         commandMenuItem('表格', 'insert-table', 'CmdOrCtrl+Alt+T'),
         commandMenuItem('链接', 'insert-link', 'CmdOrCtrl+K'),
         commandMenuItem('代码块', 'insert-code', 'CmdOrCtrl+Alt+C'),
+        commandMenuItem('包裹代码', 'format-code-block', 'CmdOrCtrl+Alt+Shift+C'),
+        commandMenuItem('粗体', 'format-bold', 'CmdOrCtrl+Alt+Shift+D'),
         { type: 'separator' },
         commandMenuItem('导入本地图片...', 'import-image', 'Alt+Shift+I'),
         {

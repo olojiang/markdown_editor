@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   addFileScrollPosition,
   addRecentFile,
+  bookmarkFileKey,
+  bookmarkTargetKey,
   createDefaultSession,
   findFileEncoding,
   findFileScrollPosition,
@@ -142,6 +144,37 @@ describe('session helpers', () => {
         previewHidden: false,
         previewFullscreen: true,
       }),
+    ]);
+  });
+
+  it('preserves per-tab editor width when present', () => {
+    expect(normalizeSessionTabs([
+      {
+        id: 'file:/docs/a.md',
+        filePath: '/docs/a.md',
+        name: 'a.md',
+        scrollTop: 0,
+        editorWidth: 700,
+      },
+      {
+        id: 'file:/docs/b.md',
+        filePath: '/docs/b.md',
+        name: 'b.md',
+        scrollTop: 0,
+      },
+    ])).toEqual([
+      expect.objectContaining({ editorWidth: 700 }),
+      expect.objectContaining({ editorWidth: undefined }),
+    ]);
+  });
+
+  it('clamps per-tab editor width to [320, 1200]', () => {
+    expect(normalizeSessionTabs([
+      { id: 'file:/docs/small.md', filePath: '/docs/small.md', name: 'small.md', scrollTop: 0, editorWidth: 50 },
+      { id: 'file:/docs/big.md', filePath: '/docs/big.md', name: 'big.md', scrollTop: 0, editorWidth: 5000 },
+    ])).toEqual([
+      expect.objectContaining({ editorWidth: 320 }),
+      expect.objectContaining({ editorWidth: 1200 }),
     ]);
   });
 
@@ -321,5 +354,55 @@ describe('session helpers', () => {
 
     expect(positions).toEqual([{ filePath: '/docs/remote image.md', scrollTop: 42, updatedAt: 1 }]);
     expect(findFileScrollPosition(positions, '/docs/REMOTE IMAGE.md')).toMatchObject({ scrollTop: 42 });
+  });
+
+  describe('bookmarkFileKey', () => {
+    it('returns lowercase normalized file path for file-based bookmarks', () => {
+      expect(bookmarkFileKey({ filePath: '/Docs/README.md', tabId: 'file:/Docs/README.md' }))
+        .toBe('/docs/readme.md');
+    });
+
+    it('returns lowercase tabId for unsaved bookmarks', () => {
+      expect(bookmarkFileKey({ filePath: null, tabId: 'draft:123' }))
+        .toBe('draft:123');
+    });
+
+    it('normalizes file:// URIs', () => {
+      expect(bookmarkFileKey({ filePath: 'file:///docs/note.md', tabId: 'tab1' }))
+        .toBe('/docs/note.md');
+    });
+
+    it('normalizes backslashes to forward slashes', () => {
+      expect(bookmarkFileKey({ filePath: 'C:\\docs\\note.md', tabId: 'tab1' }))
+        .toBe('c:/docs/note.md');
+    });
+  });
+
+  describe('bookmarkTargetKey', () => {
+    it('combines file key with line and column', () => {
+      const key = bookmarkTargetKey({
+        filePath: '/docs/readme.md',
+        tabId: 'file:/docs/readme.md',
+        lineNumber: 10,
+        column: 5,
+      });
+      expect(key).toBe('/docs/readme.md:10:5');
+    });
+
+    it('uses tabId for unsaved bookmarks', () => {
+      const key = bookmarkTargetKey({
+        filePath: null,
+        tabId: 'draft:123',
+        lineNumber: 1,
+        column: 1,
+      });
+      expect(key).toBe('draft:123:1:1');
+    });
+
+    it('produces same key for case-different file paths', () => {
+      const key1 = bookmarkTargetKey({ filePath: '/Docs/A.md', tabId: 't1', lineNumber: 5, column: 3 });
+      const key2 = bookmarkTargetKey({ filePath: '/docs/a.md', tabId: 't2', lineNumber: 5, column: 3 });
+      expect(key1).toBe(key2);
+    });
   });
 });

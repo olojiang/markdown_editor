@@ -416,6 +416,294 @@ describe('App', () => {
     expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.value).toContain('```\n代码\n```');
   });
 
+  it('toggles bold, italic, and quote from format toolbar buttons', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = 'Hello world';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    editorEl.setSelectionRange(6, 11);
+    await wrapper.find('[data-testid="format-bold"]').trigger('click');
+    expect(editorEl.value).toContain('**world**');
+
+    editorEl.value = 'Hello world';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(6, 11);
+    await wrapper.find('[data-testid="format-italic"]').trigger('click');
+    expect(editorEl.value).toContain('*world*');
+
+    editorEl.value = 'Hello world';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, 11);
+    await wrapper.find('[data-testid="format-quote"]').trigger('click');
+    expect(editorEl.value).toBe('> Hello world');
+  });
+
+  it('toggles code block, ordered list, and unordered list from toolbar', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = 'some code';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    editorEl.setSelectionRange(0, 9);
+    await wrapper.find('[data-testid="format-code"]').trigger('click');
+    expect(editorEl.value).toBe('`some code`');
+
+    editorEl.value = 'Line 1\nLine 2';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, editorEl.value.length);
+    await wrapper.find('[data-testid="format-code"]').trigger('click');
+    expect(editorEl.value).toBe('```\nLine 1\nLine 2\n```');
+
+    editorEl.value = 'Apple\nBanana';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, 12);
+    await wrapper.find('[data-testid="format-ordered-list"]').trigger('click');
+    expect(editorEl.value).toContain('1. Apple');
+    expect(editorEl.value).toContain('2. Banana');
+
+    editorEl.value = 'Apple\nBanana';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, 12);
+    await wrapper.find('[data-testid="format-unordered-list"]').trigger('click');
+    expect(editorEl.value).toContain('- Apple');
+    expect(editorEl.value).toContain('- Banana');
+  });
+
+  it('changes heading level via heading select dropdown', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = 'Hello';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    editorEl.setSelectionRange(0, 0);
+    const select = wrapper.find<HTMLSelectElement>('[data-testid="heading-select"]');
+    await select.setValue('2');
+    expect(editorEl.value).toBe('## Hello');
+  });
+
+  it('matches Alt shortcuts via event.code even when event.key is a Mac special char', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', metaKey: true }));
+    await nextTick();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = 'Hello world';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    editorEl.setSelectionRange(6, 11);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '∂', code: 'KeyD', metaKey: true, altKey: true, shiftKey: true }));
+    await nextTick();
+    expect(editorEl.value).toContain('**world**');
+
+    editorEl.value = 'Test';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, 0);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '¡', code: 'Digit1', metaKey: true, altKey: true }));
+    await nextTick();
+    expect(editorEl.value).toBe('# Test');
+  });
+
+  it('applies bold from editor keydown when editor is focused', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', metaKey: true }));
+    await nextTick();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = 'Hello world';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(6, 11);
+    editorEl.focus();
+
+    editorEl.dispatchEvent(new KeyboardEvent('keydown', {
+      key: '∂',
+      code: 'KeyD',
+      metaKey: true,
+      altKey: true,
+      shiftKey: true,
+      bubbles: true,
+    }));
+    await nextTick();
+
+    expect(editorEl.value).toContain('**world**');
+  });
+
+  it('applies italic with Cmd+I keyboard shortcut', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', metaKey: true }));
+    await nextTick();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = 'Hello world';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    editorEl.setSelectionRange(6, 11);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', metaKey: true }));
+    await nextTick();
+
+    expect(editorEl.value).toContain('*world*');
+  });
+
+  it('toggles heading via Cmd+Alt+number shortcuts', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', metaKey: true }));
+    await nextTick();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = 'Hello';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    editorEl.setSelectionRange(0, 0);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1', metaKey: true, altKey: true }));
+    await nextTick();
+    expect(editorEl.value).toBe('# Hello');
+
+    editorEl.setSelectionRange(0, 0);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', code: 'Digit0', metaKey: true, altKey: true }));
+    await nextTick();
+    expect(editorEl.value).toBe('Hello');
+  });
+
+  it('applies quote with Cmd+Alt+Q and list with Cmd+Alt+L/O shortcuts', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', metaKey: true }));
+    await nextTick();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+
+    editorEl.value = 'Quote me';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, 8);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', code: 'KeyQ', metaKey: true, altKey: true }));
+    await nextTick();
+    expect(editorEl.value).toBe('> Quote me');
+
+    editorEl.value = 'Item';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, 4);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', code: 'KeyL', metaKey: true, altKey: true }));
+    await nextTick();
+    expect(editorEl.value).toBe('- Item');
+
+    editorEl.value = 'Item';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, 4);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', code: 'KeyO', metaKey: true, altKey: true }));
+    await nextTick();
+    expect(editorEl.value).toBe('1. Item');
+  });
+
+  it('Cmd+Alt+0 does not reset zoom but sets normal text heading', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '+', metaKey: true }));
+    await nextTick();
+    expect(wrapper.get('[data-testid="preview"]').attributes('style')).toContain('--preview-zoom: 1.1');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', metaKey: true }));
+    await nextTick();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = '## Heading';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, 0);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', code: 'Digit0', metaKey: true, altKey: true }));
+    await nextTick();
+
+    expect(editorEl.value).toBe('Heading');
+    expect(wrapper.get('[data-testid="preview"]').attributes('style')).toContain('--preview-zoom: 1.1');
+  });
+
+  it('does not trigger format shortcuts when editor is not visible', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.classes()).toContain('reader-mode');
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = 'Text';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+
+    editorEl.setSelectionRange(0, 4);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', code: 'KeyD', metaKey: true, altKey: true, shiftKey: true }));
+    await nextTick();
+    expect(editorEl.value).toBe('Text');
+  });
+
+  it('wraps selection with code shortcut Cmd+Alt+Shift+C', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', metaKey: true }));
+    await nextTick();
+
+    const editorEl = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editorEl.value = 'inline code';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, 11);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ç',
+      code: 'KeyC',
+      metaKey: true,
+      altKey: true,
+      shiftKey: true,
+    }));
+    await nextTick();
+    expect(editorEl.value).toBe('`inline code`');
+
+    editorEl.value = 'Line 1\nLine 2';
+    editorEl.dispatchEvent(new Event('input'));
+    await nextTick();
+    editorEl.setSelectionRange(0, editorEl.value.length);
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ç',
+      code: 'KeyC',
+      metaKey: true,
+      altKey: true,
+      shiftKey: true,
+    }));
+    await nextTick();
+    expect(editorEl.value).toBe('```\nLine 1\nLine 2\n```');
+  });
+
   it('imports image assets and inserts relative image markdown', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
@@ -1986,6 +2274,92 @@ describe('App', () => {
         ]),
       }),
     );
+  });
+
+  it('keeps editor width isolated per tab', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [
+        {
+          id: `file:${openFile.path}`,
+          filePath: openFile.path,
+          name: openFile.name,
+          scrollTop: 0,
+          editorVisible: true,
+          editorWidth: 700,
+        },
+        {
+          id: `file:${secondFile.path}`,
+          filePath: secondFile.path,
+          name: secondFile.name,
+          scrollTop: 0,
+          editorVisible: true,
+          editorWidth: 900,
+        },
+      ],
+      activeTabId: `file:${openFile.path}`,
+      recentFiles: [openFile.path, secondFile.path],
+      scrollTop: 0,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: true,
+      theme: 'light',
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const workspace = wrapper.find<HTMLElement>('.workspace');
+    expect(workspace.element.style.gridTemplateColumns).toContain('700px');
+
+    await wrapper.find('[data-testid="tab-second.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(wrapper.find<HTMLElement>('.workspace').element.style.gridTemplateColumns).toContain('900px');
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(wrapper.find<HTMLElement>('.workspace').element.style.gridTemplateColumns).toContain('700px');
+  });
+
+  it('falls back to default editor width for tabs without a saved width', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [
+        {
+          id: `file:${openFile.path}`,
+          filePath: openFile.path,
+          name: openFile.name,
+          scrollTop: 0,
+          editorVisible: true,
+          editorWidth: 700,
+        },
+        {
+          id: `file:${secondFile.path}`,
+          filePath: secondFile.path,
+          name: secondFile.name,
+          scrollTop: 0,
+          editorVisible: true,
+        },
+      ],
+      activeTabId: `file:${openFile.path}`,
+      recentFiles: [openFile.path, secondFile.path],
+      scrollTop: 0,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: true,
+      theme: 'light',
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find<HTMLElement>('.workspace').element.style.gridTemplateColumns).toContain('700px');
+
+    await wrapper.find('[data-testid="tab-second.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(wrapper.find<HTMLElement>('.workspace').element.style.gridTemplateColumns).toContain('640px');
   });
 
   it('shows editor line and cursor position in the editor status bar', async () => {

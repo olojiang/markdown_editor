@@ -6,6 +6,11 @@ import {
   parseEditorConfig,
   type ParsedEditorConfig,
 } from '@/renderer/lib/editorConfig';
+import {
+  resolveFormatShortcut,
+  resolveFormatShortcutFromMonacoKey,
+  type FormatShortcutAction,
+} from '@/renderer/lib/editor-shortcut';
 import { rendererLog } from '@/renderer/lib/logger';
 
 interface SelectionRange {
@@ -44,6 +49,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'focus-line-change'): void;
+  (event: 'format-shortcut', value: FormatShortcutAction): void;
   (event: 'monaco-paste', value: MonacoPasteEvent): void;
   (event: 'paste', value: ClipboardEvent): void;
   (event: 'paste-shortcut', value: PasteShortcutEvent): void;
@@ -263,18 +269,61 @@ function interceptSearchShortcut(event: KeyboardEvent | Monaco.IKeyboardEvent): 
   emit('show-search-shortcut', selectedText());
 }
 
+function editorDebugLog(event: string, payload: Record<string, unknown> = {}): void {
+  rendererLog.info(event, payload);
+  void window.markdownBridge?.debugLog?.(event, payload);
+}
+
 function onKeydownCapture(event: KeyboardEvent): void {
   interceptSearchShortcut(event);
   if (isPasteShortcut(event)) {
     emit('paste-shortcut', event);
+    return;
   }
+
+  const action = resolveFormatShortcut(event);
+  if (!action) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  editorDebugLog('editor.textarea.formatShortcut', { action });
+  emit('format-shortcut', action);
 }
 
 function onMonacoKeyDown(event: Monaco.IKeyboardEvent): void {
   interceptSearchShortcut(event);
   if (event.keyCode === monacoModule?.KeyCode.KeyV && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
     emit('paste-shortcut', event);
+    return;
   }
+
+  if (!monacoModule) {
+    return;
+  }
+
+  if ((event.metaKey || event.ctrlKey) && event.altKey && event.shiftKey
+    && (event.keyCode === monacoModule.KeyCode.KeyC || event.keyCode === monacoModule.KeyCode.KeyD)) {
+    editorDebugLog('formatShortcut.monacoKeyProbe', {
+      keyCode: event.keyCode,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      resolvedAction: resolveFormatShortcutFromMonacoKey(event, monacoModule.KeyCode),
+    });
+  }
+
+  const action = resolveFormatShortcutFromMonacoKey(event, monacoModule.KeyCode);
+  if (!action) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  editorDebugLog('editor.monaco.keydown.formatShortcut', { action });
+  emit('format-shortcut', action);
 }
 
 function onMonacoPaste(event: Monaco.editor.IPasteEvent): void {

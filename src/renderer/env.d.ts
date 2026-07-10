@@ -63,6 +63,17 @@ type AppMenuCommand =
   | 'insert-table'
   | 'insert-link'
   | 'insert-code'
+  | 'format-bold'
+  | 'format-italic'
+  | 'format-quote'
+  | 'format-code-block'
+  | 'format-ordered-list'
+  | 'format-unordered-list'
+  | 'format-heading-1'
+  | 'format-heading-2'
+  | 'format-heading-3'
+  | 'format-heading-4'
+  | 'format-heading-0'
   | 'import-image'
   | 'image-upload-local'
   | 'image-upload-cloud'
@@ -95,9 +106,13 @@ interface MarkdownSession {
     editorScrollTop?: number;
     previewScrollTop?: number;
     tocScrollTop?: number;
+    editorVisible?: boolean;
+    previewHidden?: boolean;
+    previewFullscreen?: boolean;
     content?: string;
     lastSavedContent?: string;
     encoding?: string;
+    editorWidth?: number;
   }[];
   activeTabId: string | null;
   bookmarks: {

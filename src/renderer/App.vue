@@ -15,7 +15,21 @@ import {
   supportedDocumentExtensions,
   type DocumentKind,
 } from '@/renderer/lib/document';
+import {
+  headingLevelOfLine,
+  setLineHeading,
+  toggleBold,
+  toggleCodeBlock,
+  toggleItalic,
+  toggleOrderedList,
+  toggleQuote,
+  toggleUnorderedList,
+  type FormatResult,
+  type HeadingLevel,
+} from '@/renderer/lib/editor-format';
+import { resolveFormatShortcut, type FormatShortcutAction } from '@/renderer/lib/editor-shortcut';
 import { parseEditorConfig } from '@/renderer/lib/editorConfig';
+import { formatFileModifiedTime, formatFileSize } from '@/renderer/lib/format';
 import {
   headingElementSelector,
   previewHeadingScrollTarget,
@@ -31,6 +45,8 @@ import {
 import {
   addFileScrollPosition,
   addRecentFile,
+  bookmarkFileKey,
+  bookmarkTargetKey,
   createDefaultSession,
   findFileEncoding,
   findFileScrollPosition,
@@ -47,6 +63,14 @@ import {
   type MarkdownSession,
   type ThemeMode,
 } from '@/renderer/lib/session';
+import {
+  defaultTextEncoding,
+  encodingIpcArgument,
+  normalizeTextEncoding,
+  textEncodingLabel,
+  textEncodingOptions,
+  type TextEncoding,
+} from '@/renderer/lib/text-encoding';
 
 interface MarkdownFile {
   path: string | null;
@@ -74,6 +98,7 @@ interface OpenTab {
   editorVisible: boolean;
   previewHidden: boolean;
   previewFullscreen: boolean;
+  editorWidth: number;
 }
 
 interface TabContextMenu {
@@ -192,30 +217,6 @@ interface ActiveImagePreview {
 
 type MermaidExportFormat = 'svg' | 'png' | 'webp';
 type ImageUploadMode = 'local' | 'cloud';
-type TextEncoding =
-  | 'utf8'
-  | 'utf16-le'
-  | 'utf16-be'
-  | 'gb18030'
-  | 'gbk'
-  | 'big5'
-  | 'shift_jis'
-  | 'windows1252'
-  | 'latin1';
-
-const defaultTextEncoding: TextEncoding = 'utf8';
-const textEncodingOptions: { label: string; value: TextEncoding }[] = [
-  { label: 'UTF-8', value: 'utf8' },
-  { label: 'UTF-16 LE', value: 'utf16-le' },
-  { label: 'UTF-16 BE', value: 'utf16-be' },
-  { label: 'GB18030', value: 'gb18030' },
-  { label: 'GBK', value: 'gbk' },
-  { label: 'Big5', value: 'big5' },
-  { label: 'Shift_JIS', value: 'shift_jis' },
-  { label: 'Windows-1252', value: 'windows1252' },
-  { label: 'Latin-1', value: 'latin1' },
-];
-
 const icons = {
   archive: 'M21 8v13H3V8 M1 3h22v5H1z M10 12h4',
   bookmark: 'M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
@@ -254,6 +255,12 @@ const icons = {
   x: 'M18 6 6 18 M6 6l12 12',
   eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   eyeOff: 'M3 3l18 18 M10.6 10.6A3 3 0 0 0 13.4 13.4 M9.9 4.2A10.7 10.7 0 0 1 12 4.9c6.5 0 10 7.1 10 7.1a18.4 18.4 0 0 1-3.2 4.2 M6.6 6.6C3.7 8.5 2 12 2 12s3.5 7.1 10 7.1a10.9 10.9 0 0 0 4.2-.8',
+  bold: 'M6 4h8a4 4 0 0 1 0 8H6zm0 8h9a4 4 0 0 1 0 8H6z',
+  italic: 'M19 4h-9 M14 20H5 M15 4L9 20',
+  heading: 'M6 12h12 M6 4v16 M18 4v16',
+  quote: 'M17 6H3 M21 12H8 M21 18H8 M3 12v6',
+  listOrdered: 'M10 6h11 M10 12h11 M10 18h11 M4 6h1v4 M4 10h2 M6 18H4c0-1 2-2 2-3s-1-1.5-2-1',
+  listUnordered: 'M8 6h13 M8 12h13 M8 18h13 M3 6h.01 M3 12h.01 M3 18h.01',
 } as const;
 
 const bridge = window.markdownBridge;
@@ -380,6 +387,7 @@ const isEditorVisible = computed(() => (
   || !currentFile.value
 ));
 const isPreviewHidden = computed(() => activeTab.value?.previewHidden ?? session.value.previewHidden);
+const editorColumnWidth = computed(() => activeTab.value?.editorWidth ?? session.value.editorWidth);
 const isPreviewSearchMode = computed(() => (
   editorSearchVisible.value
   && hasPreviewPane.value
@@ -451,6 +459,8 @@ const addBookmarkShortcutHint = computed(() => {
   return `${action} (${shortcutModifier.value}+Shift+B)${suffix}`;
 });
 const bookmarkManagerShortcutHint = computed(() => `显示书签列表 (${shortcutModifier.value}+B)，共 ${bookmarkTotalCount.value} 个书签`);
+const currentLineHeadingLevel = computed(() => headingLevelOfLine(source.value, activeEditorLine.value));
+const altModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Opt' : 'Alt'));
 const previewZoomPercent = computed(() => Math.round(previewZoom.value * 100));
 const previewZoomStyle = computed(() => ({
   '--preview-zoom': previewZoom.value,
@@ -538,9 +548,22 @@ const helpGroups = computed<HelpGroup[]>(() => [
     ],
   },
   {
+    title: '格式化',
+    items: [
+      { label: '标题 H1~H4 / 正文', shortcut: `${shortcutModifier.value}+${altModifier.value}+1~4/0`, detail: '光标所在行快速切换标题级别或恢复正文' },
+      { label: '粗体', shortcut: `${shortcutModifier.value}+${altModifier.value}+Shift+D`, detail: '选中文本加粗或取消加粗（避免 macOS Cmd+Opt+D 系统快捷键）' },
+      { label: '斜体', shortcut: `${shortcutModifier.value}+I`, detail: '选中文本斜体或取消斜体' },
+      { label: '引用', shortcut: `${shortcutModifier.value}+${altModifier.value}+Q`, detail: '切换引用块前缀' },
+      { label: '包裹代码', shortcut: `${shortcutModifier.value}+${altModifier.value}+Shift+C`, detail: '单行选区用行内 ` 包裹，跨行选区用 ``` 代码块包裹' },
+      { label: '插入代码块', shortcut: `${shortcutModifier.value}+${altModifier.value}+C`, detail: '插入 ``` 代码块模板（插入菜单 / 工具栏 + 按钮）' },
+      { label: '有序列表', shortcut: `${shortcutModifier.value}+${altModifier.value}+O`, detail: '切换有序列表编号' },
+      { label: '无序列表', shortcut: `${shortcutModifier.value}+${altModifier.value}+L`, detail: '切换无序列表前缀' },
+    ],
+  },
+  {
     title: '插入与资源',
     items: [
-      { label: '表格 / 链接 / 代码块', shortcut: `${shortcutModifier.value}+K`, detail: '从插入菜单或编辑器工具栏插入常用 Markdown 片段' },
+      { label: '表格 / 链接', shortcut: `${shortcutModifier.value}+K`, detail: '从插入菜单或编辑器工具栏插入表格、链接' },
       { label: '图片资源', shortcut: '', detail: '导入或粘贴图片到当前文档的 assets/images 目录' },
       { label: '云端图片', shortcut: '', detail: '切换粘贴图片上传方式，上传后插入远程图片链接' },
       { label: '图片预览', shortcut: '', detail: '在预览中查看、放大、拖拽和下载 Markdown 图片' },
@@ -584,7 +607,7 @@ const gridStyle = computed(() => {
   }
 
   return {
-    gridTemplateColumns: `${tocColumnWidth.value}px ${isTocPanelCollapsed.value ? 0 : 6}px minmax(0, ${session.value.editorWidth}px) 6px minmax(0, 1fr)`,
+    gridTemplateColumns: `${tocColumnWidth.value}px ${isTocPanelCollapsed.value ? 0 : 6}px minmax(0, ${editorColumnWidth.value}px) 6px minmax(0, 1fr)`,
   };
 });
 
@@ -705,35 +728,6 @@ function currentFilePath(): string | null {
   return currentFile.value?.path ?? null;
 }
 
-function normalizeTextEncoding(encoding: unknown): TextEncoding {
-  if (typeof encoding !== 'string') {
-    return defaultTextEncoding;
-  }
-  const normalized = encoding.trim().toLowerCase().replace(/_/g, '-');
-  if (normalized === 'utf-8' || normalized === 'utf8') {
-    return 'utf8';
-  }
-  if (normalized === 'utf-16le' || normalized === 'utf16le' || normalized === 'utf16-le') {
-    return 'utf16-le';
-  }
-  if (normalized === 'utf-16be' || normalized === 'utf16be' || normalized === 'utf16-be') {
-    return 'utf16-be';
-  }
-  if (normalized === 'windows-1252' || normalized === 'win1252' || normalized === 'cp1252') {
-    return 'windows1252';
-  }
-  return textEncodingOptions.some((option) => option.value === normalized) ? normalized as TextEncoding : defaultTextEncoding;
-}
-
-function textEncodingLabel(encoding: unknown): string {
-  const normalized = normalizeTextEncoding(encoding);
-  return textEncodingOptions.find((option) => option.value === normalized)?.label ?? 'UTF-8';
-}
-
-function encodingIpcArgument(encoding: unknown): string | undefined {
-  const normalized = normalizeTextEncoding(encoding);
-  return normalized === defaultTextEncoding ? undefined : normalized;
-}
 
 function readMarkdownFileWithEncoding(filePath: string, encoding?: unknown): Promise<MarkdownFile> {
   const rememberedEncoding = encoding === undefined ? rememberedCustomizedEncodingForFile(filePath) : undefined;
@@ -777,45 +771,8 @@ function currentFileSize(): number {
   return new TextEncoder().encode(source.value).byteLength;
 }
 
-function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) {
-    return '0 B';
-  }
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let value = bytes / 1024;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  const rounded = value >= 10 ? value.toFixed(0) : value.toFixed(1);
-  return `${rounded.replace(/\.0$/, '')} ${units[unitIndex]}`;
-}
-
-function formatFileModifiedTime(timestamp: unknown): string {
-  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
-    return '未保存';
-  }
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return '未保存';
-  }
-  const pad = (value: number) => value.toString().padStart(2, '0');
-  return [
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
-    `${pad(date.getHours())}:${pad(date.getMinutes())}`,
-  ].join(' ');
-}
-
 function tabPath(tab: OpenTab): string | null {
   return tab.file.path;
-}
-
-function bookmarkFileKey(bookmark: Pick<MarkdownBookmark, 'filePath' | 'tabId'>): string {
-  return (bookmark.filePath ?? bookmark.tabId).replace(/\\/g, '/').trim().toLocaleLowerCase();
 }
 
 function currentBookmarkFileKey(): string {
@@ -823,10 +780,6 @@ function currentBookmarkFileKey(): string {
     filePath: currentFile.value?.path ?? null,
     tabId: activeTabId.value ?? '',
   });
-}
-
-function bookmarkTargetKey(bookmark: Pick<MarkdownBookmark, 'column' | 'filePath' | 'lineNumber' | 'tabId'>): string {
-  return `${bookmarkFileKey(bookmark)}:${bookmark.lineNumber}:${bookmark.column}`;
 }
 
 function bookmarkExcerpt(lineNumber: number): string {
@@ -1192,6 +1145,7 @@ function serializedOpenTabs(): MarkdownSession['tabs'] {
     editorVisible: tab.editorVisible,
     previewHidden: tab.previewHidden,
     previewFullscreen: tab.previewFullscreen,
+    editorWidth: tab.editorWidth,
     content: tab.file.path ? undefined : tab.source,
     lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
     encoding: normalizeTextEncoding(tab.file.encoding),
@@ -1243,7 +1197,7 @@ function forcedEditorPatchForFile(file: MarkdownFile): Partial<MarkdownSession> 
   return documentKindForFile(file) === 'markdown' ? {} : { editorVisible: true };
 }
 
-function tabViewStateForFile(file: MarkdownFile): Pick<OpenTab, 'editorVisible' | 'previewHidden' | 'previewFullscreen'> {
+function tabViewStateForFile(file: MarkdownFile): Pick<OpenTab, 'editorVisible' | 'previewHidden' | 'previewFullscreen' | 'editorWidth'> {
   const fileHasPreview = isPreviewableDocumentKind(documentKindForFile(file));
   const editorVisible = documentKindForFile(file) === 'markdown'
     ? session.value.editorVisible
@@ -1252,6 +1206,7 @@ function tabViewStateForFile(file: MarkdownFile): Pick<OpenTab, 'editorVisible' 
     editorVisible,
     previewHidden: fileHasPreview ? session.value.previewHidden : true,
     previewFullscreen: false,
+    editorWidth: session.value.editorWidth,
   };
 }
 
@@ -1298,6 +1253,7 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
       editorVisible: tab.editorVisible,
       previewHidden: tab.previewHidden,
       previewFullscreen: tab.previewFullscreen,
+      editorWidth: tab.editorWidth,
       content: tab.content,
       lastSavedContent: tab.lastSavedContent,
       encoding: tab.encoding,
@@ -2643,6 +2599,7 @@ function createNewMarkdownTab(content = '', name?: string): void {
     editorVisible: true,
     previewHidden: false,
     previewFullscreen: false,
+    editorWidth: session.value.editorWidth,
   };
   openTabs.value.push(tab);
   beginDocumentScrollRestore();
@@ -3031,6 +2988,102 @@ function insertCodeBlock(): void {
   const text = selectedEditorText() || '代码';
   const snippet = `\`\`\`\n${text}\n\`\`\`\n`;
   replaceSelection(snippet, 4, 4 + text.length);
+}
+
+function applyFormatResult(result: FormatResult): void {
+  replaceEditorRange(
+    result.replacement,
+    { start: result.rangeStart, end: result.rangeEnd, scrollTop: editorScrollTop() },
+    result.cursorStart,
+    result.cursorEnd,
+  );
+}
+
+let formatShortcutGuard: { action: FormatShortcutAction; at: number } | null = null;
+
+function shouldSkipDuplicateFormatShortcut(action: FormatShortcutAction): boolean {
+  const now = Date.now();
+  if (formatShortcutGuard && formatShortcutGuard.action === action && now - formatShortcutGuard.at < 80) {
+    return true;
+  }
+  formatShortcutGuard = { action, at: now };
+  return false;
+}
+
+function executeFormatShortcut(action: FormatShortcutAction, source: 'window' | 'editor'): void {
+  if (shouldSkipDuplicateFormatShortcut(action)) {
+    debugLog('formatShortcut.duplicate', { action, source });
+    return;
+  }
+  if (!isMarkdownDocument.value) {
+    debugLog('formatShortcut.skipped', { action, reason: 'not-markdown', source });
+    return;
+  }
+  if (!isEditorVisible.value) {
+    debugLog('formatShortcut.skipped', { action, reason: 'editor-hidden', source });
+    return;
+  }
+
+  debugLog('formatShortcut.execute', { action, source });
+  switch (action) {
+    case 'heading-0': formatHeading(0); break;
+    case 'heading-1': formatHeading(1); break;
+    case 'heading-2': formatHeading(2); break;
+    case 'heading-3': formatHeading(3); break;
+    case 'heading-4': formatHeading(4); break;
+    case 'bold': formatBold(); break;
+    case 'italic': formatItalic(); break;
+    case 'quote': formatQuote(); break;
+    case 'code-block': formatCodeBlock(); break;
+    case 'ordered-list': formatOrderedList(); break;
+    case 'unordered-list': formatUnorderedList(); break;
+  }
+}
+
+function onFormatShortcut(action: FormatShortcutAction): void {
+  executeFormatShortcut(action, 'editor');
+}
+
+function formatHeading(level: HeadingLevel): void {
+  const selection = editorSelectionRange();
+  const cursorOffset = selection?.start ?? 0;
+  applyFormatResult(setLineHeading(source.value, cursorOffset, level));
+}
+
+function formatBold(): void {
+  const selection = editorSelectionRange();
+  applyFormatResult(toggleBold(source.value, selection?.start ?? 0, selection?.end ?? 0));
+}
+
+function formatItalic(): void {
+  const selection = editorSelectionRange();
+  applyFormatResult(toggleItalic(source.value, selection?.start ?? 0, selection?.end ?? 0));
+}
+
+function formatQuote(): void {
+  const selection = editorSelectionRange();
+  applyFormatResult(toggleQuote(source.value, selection?.start ?? 0, selection?.end ?? 0));
+}
+
+function formatCodeBlock(): void {
+  const selection = editorSelectionRange();
+  applyFormatResult(toggleCodeBlock(source.value, selection?.start ?? 0, selection?.end ?? 0));
+}
+
+function formatOrderedList(): void {
+  const selection = editorSelectionRange();
+  applyFormatResult(toggleOrderedList(source.value, selection?.start ?? 0, selection?.end ?? 0));
+}
+
+function formatUnorderedList(): void {
+  const selection = editorSelectionRange();
+  applyFormatResult(toggleUnorderedList(source.value, selection?.start ?? 0, selection?.end ?? 0));
+}
+
+function onHeadingSelectChange(event: Event): void {
+  const level = Number((event.target as HTMLSelectElement).value) as HeadingLevel;
+  formatHeading(level);
+  editor.value?.focus();
 }
 
 function insertImageMarkdown(asset: ImageAsset, altText = asset.name.replace(/\.[^.]+$/, '')): void {
@@ -4031,9 +4084,14 @@ function onResizeMove(event: PointerEvent): void {
     return;
   }
 
-  persistSession({
-    editorWidth: Math.max(320, Math.min(1200, event.clientX - tocColumnWidth.value - 6)),
-  }, { deferred: true });
+  const tab = activeTab.value;
+  const nextWidth = Math.max(320, Math.min(1200, event.clientX - tocColumnWidth.value - 6));
+  if (tab) {
+    tab.editorWidth = nextWidth;
+    scheduleSessionSave();
+  } else {
+    persistSession({ editorWidth: nextWidth }, { deferred: true });
+  }
 }
 
 function stopResize(): void {
@@ -4149,6 +4207,25 @@ function executeAppMenuCommand(command: AppMenuCommand): void {
     insertCodeBlock();
     return;
   }
+  if (command === 'format-bold') {
+    debugLog('formatShortcut.menuCommand', { command });
+    executeFormatShortcut('bold', 'window');
+    return;
+  }
+  if (command === 'format-italic') { formatItalic(); return; }
+  if (command === 'format-quote') { formatQuote(); return; }
+  if (command === 'format-code-block') {
+    debugLog('formatShortcut.menuCommand', { command });
+    executeFormatShortcut('code-block', 'window');
+    return;
+  }
+  if (command === 'format-ordered-list') { formatOrderedList(); return; }
+  if (command === 'format-unordered-list') { formatUnorderedList(); return; }
+  if (command === 'format-heading-0') { formatHeading(0); return; }
+  if (command === 'format-heading-1') { formatHeading(1); return; }
+  if (command === 'format-heading-2') { formatHeading(2); return; }
+  if (command === 'format-heading-3') { formatHeading(3); return; }
+  if (command === 'format-heading-4') { formatHeading(4); return; }
   if (command === 'import-image') {
     void importImageAsset();
     return;
@@ -4278,6 +4355,28 @@ function onKeyDown(event: KeyboardEvent): void {
   }
 
   const key = event.key.toLowerCase();
+
+  if (command && event.altKey && event.shiftKey && (event.code === 'KeyC' || event.code === 'KeyD')) {
+    debugLog('formatShortcut.keyProbe', {
+      code: event.code,
+      key: event.key,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      inEditor: eventTargetIsEditor(event.target),
+      isMarkdown: isMarkdownDocument.value,
+      editorVisible: isEditorVisible.value,
+      resolvedAction: resolveFormatShortcut(event),
+    });
+  }
+
+  const formatAction = resolveFormatShortcut(event);
+  if (formatAction && isMarkdownDocument.value && isEditorVisible.value) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    executeFormatShortcut(formatAction, eventTargetIsEditor(event.target) ? 'editor' : 'window');
+    return;
+  }
+
   if (!event.altKey && !event.shiftKey && /^[1-9]$/.test(key)) {
     const tab = openTabs.value[Number(key) - 1];
     if (tab) {
@@ -4320,7 +4419,7 @@ function onKeyDown(event: KeyboardEvent): void {
     zoomPreview(-previewZoomStep);
     return;
   }
-  if (key === '0') {
+  if (key === '0' && !event.altKey) {
     event.preventDefault();
     resetPreviewZoom();
     return;
@@ -4335,7 +4434,7 @@ function onKeyDown(event: KeyboardEvent): void {
     showEditorSearch();
     return;
   }
-  if (key === 'o') {
+  if (key === 'o' && !event.altKey) {
     event.preventDefault();
     void openFile();
   }
@@ -5035,6 +5134,7 @@ async function restoreSessionTabs(): Promise<boolean> {
         editorVisible: tab.editorVisible,
         previewHidden: tab.previewHidden,
         previewFullscreen: tab.previewFullscreen,
+        editorWidth: tab.editorWidth ?? session.value.editorWidth,
       } satisfies OpenTab;
     }
     try {
@@ -5051,6 +5151,7 @@ async function restoreSessionTabs(): Promise<boolean> {
         editorVisible: tab.editorVisible,
         previewHidden: tab.previewHidden,
         previewFullscreen: tab.previewFullscreen,
+        editorWidth: tab.editorWidth ?? session.value.editorWidth,
       } satisfies OpenTab;
     } catch {
       return null;
@@ -5084,6 +5185,7 @@ async function restoreSessionTabs(): Promise<boolean> {
     editorVisible: tab.editorVisible,
     previewHidden: tab.previewHidden,
     previewFullscreen: tab.previewFullscreen,
+    editorWidth: tab.editorWidth,
     content: tab.file.path ? undefined : tab.source,
     lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
     encoding: normalizeTextEncoding(tab.file.encoding),
@@ -5515,13 +5617,45 @@ onBeforeUnmount(() => {
       <section class="editor-panel" :class="{ 'search-visible': editorSearchVisible && !isPreviewSearchMode }">
         <div class="format-toolbar" :aria-label="`${currentDocumentLabel} 快捷工具栏`">
           <div class="format-actions">
+            <select
+              v-if="isMarkdownDocument"
+              data-testid="heading-select"
+              class="heading-select"
+              :value="currentLineHeadingLevel"
+              :title="`标题级别 (${shortcutModifier}+${altModifier}+0~4)`"
+              @change="onHeadingSelectChange"
+            >
+              <option value="0">正文</option>
+              <option value="1">H1</option>
+              <option value="2">H2</option>
+              <option value="3">H3</option>
+              <option value="4">H4</option>
+            </select>
+            <button v-if="isMarkdownDocument" data-testid="format-bold" class="icon-button" type="button" :aria-label="`粗体 (${shortcutModifier}+${altModifier}+Shift+D)`" @click="formatBold">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.bold" /></svg>
+            </button>
+            <button v-if="isMarkdownDocument" data-testid="format-italic" class="icon-button" type="button" :aria-label="`斜体 (${shortcutModifier}+I)`" @click="formatItalic">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.italic" /></svg>
+            </button>
+            <button v-if="isMarkdownDocument" data-testid="format-quote" class="icon-button" type="button" :aria-label="`引用 (${shortcutModifier}+${altModifier}+Q)`" @click="formatQuote">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.quote" /></svg>
+            </button>
+            <button v-if="isMarkdownDocument" data-testid="format-code" class="icon-button" type="button" :aria-label="`包裹代码 (${shortcutModifier}+${altModifier}+Shift+C)`" @click="formatCodeBlock">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.code" /></svg>
+            </button>
+            <button v-if="isMarkdownDocument" data-testid="format-ordered-list" class="icon-button" type="button" :aria-label="`有序列表 (${shortcutModifier}+${altModifier}+O)`" @click="formatOrderedList">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.listOrdered" /></svg>
+            </button>
+            <button v-if="isMarkdownDocument" data-testid="format-unordered-list" class="icon-button" type="button" :aria-label="`无序列表 (${shortcutModifier}+${altModifier}+L)`" @click="formatUnorderedList">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.listUnordered" /></svg>
+            </button>
             <button v-if="isMarkdownDocument" data-testid="insert-table" class="icon-button" type="button" aria-label="插入表格" title="插入表格" @click="insertTable">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.columns" /></svg>
             </button>
             <button v-if="isMarkdownDocument" data-testid="insert-link" class="icon-button" type="button" aria-label="插入链接" title="插入链接" @click="insertLink">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.link" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="insert-code" class="icon-button" type="button" aria-label="插入代码块" title="插入代码块" @click="insertCodeBlock">
+            <button v-if="isMarkdownDocument" data-testid="insert-code" class="icon-button" type="button" :aria-label="`插入代码块 (${shortcutModifier}+${altModifier}+C)`" @click="insertCodeBlock">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.code" /></svg>
             </button>
             <button v-if="isJsonDocument" data-testid="format-json" class="icon-button" type="button" aria-label="格式化 JSON" title="格式化 JSON（2 空格缩进）" @click="transformJsonSource(false)">
@@ -5695,6 +5829,7 @@ onBeforeUnmount(() => {
             :theme="session.theme"
             :vim-enabled="session.editorPreferences.vimEnabled"
             @focus-line-change="onEditorFocusLineChange"
+            @format-shortcut="onFormatShortcut"
             @monaco-paste="onEditorMonacoPaste"
             @scroll="onEditorScroll"
             @paste="onEditorPaste"

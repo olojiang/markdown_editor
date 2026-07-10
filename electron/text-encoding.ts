@@ -43,10 +43,10 @@ export function normalizeTextEncoding(encoding: unknown): TextEncoding {
   if (normalized === 'windows-1252' || normalized === 'win1252' || normalized === 'cp1252') {
     return 'windows1252';
   }
-  if (supportedTextEncodings.includes(normalized as TextEncoding)) {
-    return normalized as TextEncoding;
-  }
-  return defaultTextEncoding;
+  const matched = supportedTextEncodings.find(
+    (enc) => enc.replace(/_/g, '-') === normalized,
+  );
+  return matched ?? defaultTextEncoding;
 }
 
 export function detectTextEncoding(buffer: Buffer): TextEncoding {
