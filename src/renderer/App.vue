@@ -3086,8 +3086,12 @@ function onHeadingSelectChange(event: Event): void {
   editor.value?.focus();
 }
 
-function insertImageMarkdown(asset: ImageAsset, altText = asset.name.replace(/\.[^.]+$/, '')): void {
-  replaceSelection(`![${altText}](${asset.relativePath})`);
+function insertImageMarkdown(
+  asset: ImageAsset,
+  altText = asset.name.replace(/\.[^.]+$/, ''),
+  range: EditorInsertionRange | null = editorInsertionRange(),
+): void {
+  replaceEditorRange(`![${altText}](${asset.relativePath})`, range);
   status.value = `已插入图片 ${asset.name}`;
 }
 
@@ -3410,6 +3414,7 @@ async function deleteSelectedAsset(): Promise<void> {
 }
 
 async function pasteImageFromFile(imageFile: File): Promise<void> {
+  const insertionRange = editorInsertionRange();
   debugLog('editor.paste.image.detected', {
     fileName: imageFile.name,
     mode: imageUploadMode.value,
@@ -3436,10 +3441,22 @@ async function pasteImageFromFile(imageFile: File): Promise<void> {
     return;
   }
 
-  const markdownPath = currentFilePath();
-  if (!markdownPath || !bridge?.saveImageAsset) {
-    status.value = '请先保存 Markdown 文件，才能保存粘贴的图片';
+  if (!bridge?.saveImageAsset) {
+    status.value = '当前环境不支持保存粘贴的图片';
     return;
+  }
+
+  let markdownPath = currentFilePath();
+  if (!markdownPath) {
+    debugLog('editor.paste.image.document-save-required', { fileName: currentFile.value?.name ?? '' });
+    if (!await saveCurrentFileAndReport()) {
+      debugLog('editor.paste.image.document-save-cancelled');
+      return;
+    }
+    markdownPath = currentFilePath();
+    if (!markdownPath) {
+      return;
+    }
   }
 
   const converted = await convertImageFileToWebp(imageFile);
@@ -3456,7 +3473,7 @@ async function pasteImageFromFile(imageFile: File): Promise<void> {
   );
   await refreshImageAssets();
   selectedAssetPath.value = asset.relativePath;
-  insertImageMarkdown(asset);
+  insertImageMarkdown(asset, undefined, insertionRange);
 }
 
 async function onEditorPaste(event: ClipboardEvent): Promise<void> {
@@ -5631,22 +5648,22 @@ onBeforeUnmount(() => {
               <option value="3">H3</option>
               <option value="4">H4</option>
             </select>
-            <button v-if="isMarkdownDocument" data-testid="format-bold" class="icon-button" type="button" :aria-label="`粗体 (${shortcutModifier}+${altModifier}+Shift+D)`" @click="formatBold">
+            <button v-if="isMarkdownDocument" data-testid="format-bold" class="icon-button" type="button" :aria-label="`粗体 (${shortcutModifier}+${altModifier}+Shift+D)`" :title="`粗体 (${shortcutModifier}+${altModifier}+Shift+D)`" @click="formatBold">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.bold" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="format-italic" class="icon-button" type="button" :aria-label="`斜体 (${shortcutModifier}+I)`" @click="formatItalic">
+            <button v-if="isMarkdownDocument" data-testid="format-italic" class="icon-button" type="button" :aria-label="`斜体 (${shortcutModifier}+I)`" :title="`斜体 (${shortcutModifier}+I)`" @click="formatItalic">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.italic" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="format-quote" class="icon-button" type="button" :aria-label="`引用 (${shortcutModifier}+${altModifier}+Q)`" @click="formatQuote">
+            <button v-if="isMarkdownDocument" data-testid="format-quote" class="icon-button" type="button" :aria-label="`引用 (${shortcutModifier}+${altModifier}+Q)`" :title="`引用 (${shortcutModifier}+${altModifier}+Q)`" @click="formatQuote">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.quote" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="format-code" class="icon-button" type="button" :aria-label="`包裹代码 (${shortcutModifier}+${altModifier}+Shift+C)`" @click="formatCodeBlock">
+            <button v-if="isMarkdownDocument" data-testid="format-code" class="icon-button" type="button" :aria-label="`包裹代码 (${shortcutModifier}+${altModifier}+Shift+C)`" :title="`包裹代码 (${shortcutModifier}+${altModifier}+Shift+C)`" @click="formatCodeBlock">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.code" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="format-ordered-list" class="icon-button" type="button" :aria-label="`有序列表 (${shortcutModifier}+${altModifier}+O)`" @click="formatOrderedList">
+            <button v-if="isMarkdownDocument" data-testid="format-ordered-list" class="icon-button" type="button" :aria-label="`有序列表 (${shortcutModifier}+${altModifier}+O)`" :title="`有序列表 (${shortcutModifier}+${altModifier}+O)`" @click="formatOrderedList">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.listOrdered" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="format-unordered-list" class="icon-button" type="button" :aria-label="`无序列表 (${shortcutModifier}+${altModifier}+L)`" @click="formatUnorderedList">
+            <button v-if="isMarkdownDocument" data-testid="format-unordered-list" class="icon-button" type="button" :aria-label="`无序列表 (${shortcutModifier}+${altModifier}+L)`" :title="`无序列表 (${shortcutModifier}+${altModifier}+L)`" @click="formatUnorderedList">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.listUnordered" /></svg>
             </button>
             <button v-if="isMarkdownDocument" data-testid="insert-table" class="icon-button" type="button" aria-label="插入表格" title="插入表格" @click="insertTable">
@@ -5655,7 +5672,7 @@ onBeforeUnmount(() => {
             <button v-if="isMarkdownDocument" data-testid="insert-link" class="icon-button" type="button" aria-label="插入链接" title="插入链接" @click="insertLink">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.link" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="insert-code" class="icon-button" type="button" :aria-label="`插入代码块 (${shortcutModifier}+${altModifier}+C)`" @click="insertCodeBlock">
+            <button v-if="isMarkdownDocument" data-testid="insert-code" class="icon-button" type="button" :aria-label="`插入代码块 (${shortcutModifier}+${altModifier}+C)`" :title="`插入代码块 (${shortcutModifier}+${altModifier}+C)`" @click="insertCodeBlock">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.code" /></svg>
             </button>
             <button v-if="isJsonDocument" data-testid="format-json" class="icon-button" type="button" aria-label="格式化 JSON" title="格式化 JSON（2 空格缩进）" @click="transformJsonSource(false)">

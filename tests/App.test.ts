@@ -981,6 +981,105 @@ describe('App', () => {
     expect(editor.value).toContain('![1778054400000](assets/images/1778054400000.webp)');
   });
 
+  it('saves an untitled draft before storing a clipboard image on Cmd+V', async () => {
+    const createImageBitmap = vi.fn().mockResolvedValue({ width: 8, height: 6, close: vi.fn() });
+    vi.stubGlobal('createImageBitmap', createImageBitmap);
+    Object.defineProperty(window, 'createImageBitmap', { configurable: true, value: createImageBitmap });
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ drawImage: vi.fn() }),
+    });
+    Object.defineProperty(HTMLCanvasElement.prototype, 'toBlob', {
+      configurable: true,
+      value: vi.fn((callback: BlobCallback) => {
+        const webpBlob = new Blob(['webp'], { type: 'image/webp' });
+        Object.defineProperty(webpBlob, 'arrayBuffer', {
+          configurable: true,
+          value: vi.fn().mockResolvedValue(new ArrayBuffer(4)),
+        });
+        callback(webpBlob);
+      }),
+    });
+    vi.mocked(window.markdownBridge!.readClipboard!).mockReturnValue({
+      formats: ['image/png'],
+      html: '',
+      text: '',
+    });
+    vi.mocked(window.markdownBridge!.readClipboardImage!).mockResolvedValue({
+      data: new ArrayBuffer(8),
+      mimeType: 'image/png',
+    });
+    vi.mocked(window.markdownBridge!.saveMarkdownFileAs).mockResolvedValue({
+      path: '/docs/Draft.md',
+      name: 'Draft.md',
+      content: '# Draft',
+    });
+    const pastedAsset = {
+      name: 'clipboard.png',
+      relativePath: 'assets/images/clipboard.png',
+      absolutePath: '/docs/assets/images/clipboard.png',
+      size: 8,
+    };
+    vi.mocked(window.markdownBridge!.saveImageAsset).mockResolvedValue(pastedAsset);
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]');
+    await editor.setValue('# Draft');
+    editor.element.setSelectionRange(2, 2);
+    editor.element.dispatchEvent(new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'v',
+      metaKey: true,
+    }));
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveMarkdownFileAs).toHaveBeenCalledWith('# Draft', 'Draft.md');
+    expect(window.markdownBridge?.saveImageAsset).toHaveBeenCalledWith(
+      '/docs/Draft.md',
+      expect.stringMatching(/\.webp$/),
+      expect.any(ArrayBuffer),
+      'image/webp',
+    );
+    expect(editor.element.value).toBe('# ![clipboard](assets/images/clipboard.png)Draft');
+  });
+
+  it('does not store a clipboard image when saving an untitled draft is cancelled', async () => {
+    vi.mocked(window.markdownBridge!.readClipboard!).mockReturnValue({
+      formats: ['image/png'],
+      html: '',
+      text: '',
+    });
+    vi.mocked(window.markdownBridge!.readClipboardImage!).mockResolvedValue({
+      data: new ArrayBuffer(8),
+      mimeType: 'image/png',
+    });
+    vi.mocked(window.markdownBridge!.saveMarkdownFileAs).mockResolvedValue(null);
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
+    await vi.dynamicImportSettled();
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]');
+    await editor.setValue('# Keep draft');
+    editor.element.dispatchEvent(new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'v',
+      metaKey: true,
+    }));
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveMarkdownFileAs).toHaveBeenCalledWith('# Keep draft', 'Keep draft.md');
+    expect(window.markdownBridge?.saveImageAsset).not.toHaveBeenCalled();
+    expect(editor.element.value).toBe('# Keep draft');
+  });
+
   it('does not insert anything when the clipboard reports an image but readClipboardImage returns null', async () => {
     vi.mocked(window.markdownBridge!.readClipboard!).mockReturnValue({
       formats: ['image/png'],
