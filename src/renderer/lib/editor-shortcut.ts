@@ -27,11 +27,11 @@ export interface MonacoKeyCodeTable {
   Digit3: number;
   Digit4: number;
   KeyC: number;
-  KeyD: number;
+  KeyB: number;
   KeyI: number;
-  KeyL: number;
   KeyO: number;
   KeyQ: number;
+  KeyU: number;
 }
 
 export interface MonacoFormatShortcutInput {
@@ -53,11 +53,11 @@ export function resolveFormatShortcutFromMonacoKey(
     [keyCode.Digit3, 'Digit3'],
     [keyCode.Digit4, 'Digit4'],
     [keyCode.KeyC, 'KeyC'],
-    [keyCode.KeyD, 'KeyD'],
+    [keyCode.KeyB, 'KeyB'],
     [keyCode.KeyI, 'KeyI'],
-    [keyCode.KeyL, 'KeyL'],
     [keyCode.KeyO, 'KeyO'],
     [keyCode.KeyQ, 'KeyQ'],
+    [keyCode.KeyU, 'KeyU'],
   ]);
 
   const code = codeByKeyCode.get(event.keyCode) ?? '';
@@ -81,9 +81,6 @@ export function resolveFormatShortcut(event: FormatShortcutInput): FormatShortcu
 
   if (event.altKey) {
     if (event.shiftKey) {
-      if (event.code === 'KeyD') {
-        return 'bold';
-      }
       if (event.code === 'KeyC') {
         return 'code-block';
       }
@@ -92,20 +89,22 @@ export function resolveFormatShortcut(event: FormatShortcutInput): FormatShortcu
     if (/^Digit[0-4]$/.test(event.code)) {
       return `heading-${event.code.charAt(5)}` as FormatShortcutAction;
     }
+    if (event.code === 'KeyB') {
+      return 'bold';
+    }
+    if (event.code === 'KeyI') {
+      return 'italic';
+    }
     if (event.code === 'KeyQ') {
       return 'quote';
-    }
-    if (event.code === 'KeyL') {
-      return 'unordered-list';
     }
     if (event.code === 'KeyO') {
       return 'ordered-list';
     }
+    if (event.code === 'KeyU') {
+      return 'unordered-list';
+    }
     return null;
-  }
-
-  if (!event.shiftKey && event.key.toLowerCase() === 'i') {
-    return 'italic';
   }
 
   return null;

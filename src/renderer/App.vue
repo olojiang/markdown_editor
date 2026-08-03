@@ -552,13 +552,13 @@ const helpGroups = computed<HelpGroup[]>(() => [
     title: '格式化',
     items: [
       { label: '标题 H1~H4 / 正文', shortcut: `${shortcutModifier.value}+${altModifier.value}+1~4/0`, detail: '光标所在行快速切换标题级别或恢复正文' },
-      { label: '粗体', shortcut: `${shortcutModifier.value}+${altModifier.value}+Shift+D`, detail: '选中文本加粗或取消加粗（避免 macOS Cmd+Opt+D 系统快捷键）' },
-      { label: '斜体', shortcut: `${shortcutModifier.value}+I`, detail: '选中文本斜体或取消斜体' },
+      { label: '粗体', shortcut: `${shortcutModifier.value}+${altModifier.value}+B`, detail: 'B = Bold，选中文本加粗或取消加粗' },
+      { label: '斜体', shortcut: `${shortcutModifier.value}+${altModifier.value}+I`, detail: 'I = Italic，选中文本斜体或取消斜体' },
       { label: '引用', shortcut: `${shortcutModifier.value}+${altModifier.value}+Q`, detail: '切换引用块前缀' },
       { label: '包裹代码', shortcut: `${shortcutModifier.value}+${altModifier.value}+Shift+C`, detail: '单行选区用行内 ` 包裹，跨行选区用 ``` 代码块包裹' },
       { label: '插入代码块', shortcut: `${shortcutModifier.value}+${altModifier.value}+C`, detail: '插入 ``` 代码块模板（插入菜单 / 工具栏 + 按钮）' },
       { label: '有序列表', shortcut: `${shortcutModifier.value}+${altModifier.value}+O`, detail: '切换有序列表编号' },
-      { label: '无序列表', shortcut: `${shortcutModifier.value}+${altModifier.value}+L`, detail: '切换无序列表前缀' },
+      { label: '无序列表', shortcut: `${shortcutModifier.value}+${altModifier.value}+U`, detail: 'U = Unordered，切换无序列表前缀' },
     ],
   },
   {
@@ -576,7 +576,7 @@ const helpGroups = computed<HelpGroup[]>(() => [
       { label: '显示/隐藏预览', shortcut: `${shortcutModifier.value}+P`, detail: '编辑时切换右侧预览区域' },
       { label: '预览缩放', shortcut: `${shortcutModifier.value}+/ ${shortcutModifier.value}+-`, detail: '放大或缩小 Markdown 预览' },
       { label: '还原预览缩放', shortcut: `${shortcutModifier.value}+0`, detail: '把预览缩放还原为 100%' },
-      { label: '目录', shortcut: '', detail: '搜索、折叠标题，并跳转到对应位置' },
+      { label: '目录', shortcut: `${shortcutModifier.value}+${altModifier.value}+Shift+B`, detail: '搜索、折叠标题，并跳转到对应位置' },
       { label: 'Mermaid 预览', shortcut: `${shortcutModifier.value}+滚轮`, detail: '在预览或放大视图中缩放，拖拽移动图表' },
       { label: '关闭弹窗', shortcut: 'Esc', detail: '关闭 Mermaid 或图片放大视图' },
     ],
@@ -4324,7 +4324,7 @@ function onKeyDown(event: KeyboardEvent): void {
 
   const key = event.key.toLowerCase();
 
-  if (command && event.altKey && event.shiftKey && (event.code === 'KeyC' || event.code === 'KeyD')) {
+  if (command && event.altKey && ['KeyB', 'KeyC', 'KeyI', 'KeyO', 'KeyQ', 'KeyU'].includes(event.code)) {
     debugLog('formatShortcut.keyProbe', {
       code: event.code,
       key: event.key,
@@ -5613,10 +5613,10 @@ onBeforeUnmount(() => {
               <option value="3">H3</option>
               <option value="4">H4</option>
             </select>
-            <button v-if="isMarkdownDocument" data-testid="format-bold" class="icon-button" type="button" :aria-label="`粗体 (${shortcutModifier}+${altModifier}+Shift+D)`" :title="`粗体 (${shortcutModifier}+${altModifier}+Shift+D)`" @click="formatBold">
+            <button v-if="isMarkdownDocument" data-testid="format-bold" class="icon-button" type="button" :aria-label="`粗体 (${shortcutModifier}+${altModifier}+B)`" :title="`粗体 (${shortcutModifier}+${altModifier}+B)`" @click="formatBold">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.bold" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="format-italic" class="icon-button" type="button" :aria-label="`斜体 (${shortcutModifier}+I)`" :title="`斜体 (${shortcutModifier}+I)`" @click="formatItalic">
+            <button v-if="isMarkdownDocument" data-testid="format-italic" class="icon-button" type="button" :aria-label="`斜体 (${shortcutModifier}+${altModifier}+I)`" :title="`斜体 (${shortcutModifier}+${altModifier}+I)`" @click="formatItalic">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.italic" /></svg>
             </button>
             <button v-if="isMarkdownDocument" data-testid="format-quote" class="icon-button" type="button" :aria-label="`引用 (${shortcutModifier}+${altModifier}+Q)`" :title="`引用 (${shortcutModifier}+${altModifier}+Q)`" @click="formatQuote">
@@ -5628,7 +5628,7 @@ onBeforeUnmount(() => {
             <button v-if="isMarkdownDocument" data-testid="format-ordered-list" class="icon-button" type="button" :aria-label="`有序列表 (${shortcutModifier}+${altModifier}+O)`" :title="`有序列表 (${shortcutModifier}+${altModifier}+O)`" @click="formatOrderedList">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.listOrdered" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="format-unordered-list" class="icon-button" type="button" :aria-label="`无序列表 (${shortcutModifier}+${altModifier}+L)`" :title="`无序列表 (${shortcutModifier}+${altModifier}+L)`" @click="formatUnorderedList">
+            <button v-if="isMarkdownDocument" data-testid="format-unordered-list" class="icon-button" type="button" :aria-label="`无序列表 (${shortcutModifier}+${altModifier}+U)`" :title="`无序列表 (${shortcutModifier}+${altModifier}+U)`" @click="formatUnorderedList">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.listUnordered" /></svg>
             </button>
             <button v-if="isMarkdownDocument" data-testid="insert-table" class="icon-button" type="button" aria-label="插入表格" title="插入表格" @click="insertTable">

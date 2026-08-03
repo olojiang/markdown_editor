@@ -36,19 +36,19 @@ describe('resolveFormatShortcut', () => {
     }))).toBe('heading-0');
   });
 
-  it('resolves bold via Cmd+Alt+Shift+D to avoid macOS Dock shortcut', () => {
+  it('resolves bold via the semantic Cmd+Alt+B shortcut', () => {
     expect(resolveFormatShortcut(shortcutEvent({
       altKey: true,
-      code: 'KeyD',
-      key: '∂',
+      code: 'KeyB',
+      key: 'b',
       metaKey: true,
-      shiftKey: true,
     }))).toBe('bold');
     expect(resolveFormatShortcut(shortcutEvent({
       altKey: true,
-      code: 'KeyD',
+      code: 'KeyB',
       key: 'd',
       metaKey: true,
+      shiftKey: true,
     }))).toBeNull();
   });
 
@@ -62,7 +62,7 @@ describe('resolveFormatShortcut', () => {
     }))).toBe('code-block');
   });
 
-  it('resolves quote, list, and ordered list shortcuts via event.code', () => {
+  it('resolves quote, list, and ordered list shortcuts via semantic event.code values', () => {
     expect(resolveFormatShortcut(shortcutEvent({
       altKey: true,
       code: 'KeyQ',
@@ -71,8 +71,8 @@ describe('resolveFormatShortcut', () => {
     }))).toBe('quote');
     expect(resolveFormatShortcut(shortcutEvent({
       altKey: true,
-      code: 'KeyL',
-      key: '¬',
+      code: 'KeyU',
+      key: 'u',
       metaKey: true,
     }))).toBe('unordered-list');
     expect(resolveFormatShortcut(shortcutEvent({
@@ -83,8 +83,9 @@ describe('resolveFormatShortcut', () => {
     }))).toBe('ordered-list');
   });
 
-  it('resolves italic without Alt modifier', () => {
+  it('resolves italic with the unified Cmd+Alt+I shortcut', () => {
     expect(resolveFormatShortcut(shortcutEvent({
+      altKey: true,
       code: 'KeyI',
       key: 'i',
       metaKey: true,
@@ -94,7 +95,7 @@ describe('resolveFormatShortcut', () => {
   it('ignores format shortcuts without command modifier', () => {
     expect(resolveFormatShortcut(shortcutEvent({
       altKey: true,
-      code: 'KeyD',
+      code: 'KeyB',
       key: 'd',
     }))).toBeNull();
   });
@@ -107,9 +108,9 @@ describe('resolveFormatShortcut', () => {
       Digit3: 3,
       Digit4: 4,
       KeyC: 33,
-      KeyD: 34,
+      KeyB: 34,
       KeyI: 39,
-      KeyL: 42,
+      KeyU: 42,
       KeyO: 45,
       KeyQ: 48,
     };
@@ -123,28 +124,28 @@ describe('resolveFormatShortcut', () => {
     }, monacoKeyCode)).toBe('code-block');
   });
 
-  it('resolves code-block from Monaco keyCode via Cmd+Alt+Shift+C', () => {
+  it('resolves bold from Monaco keyCode via Cmd+Alt+B', () => {
     const monacoKeyCode = {
       Digit0: 0,
       Digit1: 1,
       Digit2: 2,
       Digit3: 3,
       Digit4: 4,
+      KeyB: 34,
       KeyC: 33,
-      KeyD: 34,
       KeyI: 39,
-      KeyL: 42,
       KeyO: 45,
       KeyQ: 48,
+      KeyU: 42,
     };
 
     expect(resolveFormatShortcutFromMonacoKey({
       altKey: true,
       ctrlKey: false,
-      keyCode: monacoKeyCode.KeyC,
+      keyCode: monacoKeyCode.KeyB,
       metaKey: true,
-      shiftKey: true,
-    }, monacoKeyCode)).toBe('code-block');
+      shiftKey: false,
+    }, monacoKeyCode)).toBe('bold');
   });
 
   it('ignores Alt shortcuts with Shift held except bold and code-block', () => {

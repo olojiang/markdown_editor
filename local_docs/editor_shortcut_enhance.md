@@ -12,7 +12,7 @@
 
 ### 问题 2：快捷键冲突排查
 
-`Cmd+Alt+B` 已被 Electron 菜单绑定为 `toggle-toc-panel`（展开/收起目录侧栏）。
+`Cmd+Alt+Shift+B` 用于 Electron 菜单的 `toggle-toc-panel`（展开/收起目录侧栏），因此 `Cmd+Alt+B` 可以留给粗体。
 
 ### 问题 3：双重 Tooltip
 
@@ -26,32 +26,32 @@ window 与 Monaco 各执行一次 toggle，视觉上无变化。
 
 插入模板 `Cmd+Opt+C` vs 包裹 toggle 原无快捷键。
 
-### 问题 6：macOS 系统拦截 Cmd+Opt+D
+### 问题 6：快捷键前缀与语义不统一
 
-**现象**: 按 `Cmd+Opt+D` 触发 Dock 显隐，应用收不到按键，日志无 `formatShortcut.execute`。
+**现象**: 格式化快捷键有的使用 `Cmd+I`，有的使用 `Cmd+Opt`，粗体后缀还是 `D`，不便于记忆。
 
-**根因**: `Cmd+Option+D` 是 macOS 系统保留快捷键。
+**调整**: 格式化快捷键统一使用 `Cmd+Opt+` 前缀，后缀使用语义首字母；粗体使用 `B`，斜体使用 `I`，无序列表使用 `U`。
 
-**修复**: 粗体改为 **`Cmd+Opt+Shift+D`**。
+**兼容**: 目录侧栏改为 `Cmd+Opt+Shift+B`，避免和粗体 `Cmd+Opt+B` 冲突。
 
 ## 当前快捷键表
 
 | 快捷键 | 操作 |
 |--------|------|
-| `Cmd+Opt+Shift+D` | 粗体 |
+| `Cmd+Opt+B` | 粗体 |
+| `Cmd+Opt+I` | 斜体 |
 | `Cmd+Opt+Shift+C` | 包裹代码（单行 `` ` `` / 跨行 ` ``` `） |
 | `Cmd+Opt+C` | 插入代码块模板 |
 | `Cmd+Opt+Q` | 引用 |
-| `Cmd+Opt+L` / `O` | 无序 / 有序列表 |
+| `Cmd+Opt+U` / `O` | 无序 / 有序列表 |
 | `Cmd+Opt+0~4` | 标题级别 |
-| `Cmd+I` | 斜体 |
 
 ## 解决思路
 
 1. `event.code` 匹配 Alt 组合键
 2. 编辑器聚焦时委托 Monaco `addCommand`，避免双触发
 3. `toggleCodeBlock()` 按选区是否含 `\n` 区分行内 / 围栏
-4. 粗体改用 `Cmd+Opt+Shift+D` 避开 macOS Dock 快捷键
+4. 格式化操作统一使用 `Cmd+Opt+` 前缀，后缀使用语义首字母；目录侧栏使用 `Cmd+Opt+Shift+B`
 
 ## 日志排查
 

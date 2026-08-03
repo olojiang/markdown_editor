@@ -28,20 +28,20 @@
 | `Cmd+Opt+3` | 设为 H3 标题 | 3 = 三级标题 |
 | `Cmd+Opt+4` | 设为 H4 标题 | 4 = 四级标题 |
 | `Cmd+Opt+0` | 恢复为正文 | 0 = 无标题 |
-| `Cmd+Opt+Shift+D` | 切换粗体 | **D**ouble asterisk（避开 macOS `Cmd+Opt+D` 系统快捷键） |
-| `Cmd+I` | 切换斜体 | **I**talic（标准快捷键） |
+| `Cmd+Opt+B` | 切换粗体 | **B**old |
+| `Cmd+Opt+I` | 切换斜体 | **I**talic |
 | `Cmd+Opt+Q` | 切换引用块 | **Q**uote |
 | `Cmd+Opt+Shift+C` | 包裹代码 | 单行 `` ` `` / 跨行 ` ``` ` 自动区分 |
 | `Cmd+Opt+O` | 切换有序列表 | **O**rdered |
-| `Cmd+Opt+L` | 切换无序列表 | **L**ist |
+| `Cmd+Opt+U` | 切换无序列表 | **U**nordered |
 
 - **包裹代码**：`Cmd+Opt+Shift+C`（工具栏 `</>` 按钮）
 - **插入代码块模板**：`Cmd+Opt+C`（Electron 菜单 / 工具栏 `+` 按钮）
 
 ### 快捷键设计原则
 
-- **不与现有快捷键冲突**：`Cmd+B` 已被书签管理占用，`Cmd+E` 已被模式切换占用
-- **`Cmd+Opt+` 前缀统一**：格式化操作使用 `Cmd+Opt+` 组合，便于记忆
+- **不与现有快捷键冲突**：`Cmd+B` 已被书签管理占用，`Cmd+E` 已被模式切换占用；目录侧栏使用 `Cmd+Opt+Shift+B`
+- **`Cmd+Opt+` 前缀统一**：格式化操作都以 `Cmd+Opt+` 开头，后缀使用单词首字母
 - **仅在编辑器可见 + Markdown 文档时生效**：阅读模式和非 Markdown 文档不触发
 
 ### 已知限制

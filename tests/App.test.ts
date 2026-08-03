@@ -509,7 +509,7 @@ describe('App', () => {
     await nextTick();
 
     editorEl.setSelectionRange(6, 11);
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: '∂', code: 'KeyD', metaKey: true, altKey: true, shiftKey: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', code: 'KeyB', metaKey: true, altKey: true }));
     await nextTick();
     expect(editorEl.value).toContain('**world**');
 
@@ -537,11 +537,10 @@ describe('App', () => {
     editorEl.focus();
 
     editorEl.dispatchEvent(new KeyboardEvent('keydown', {
-      key: '∂',
-      code: 'KeyD',
+      key: 'b',
+      code: 'KeyB',
       metaKey: true,
       altKey: true,
-      shiftKey: true,
       bubbles: true,
     }));
     await nextTick();
@@ -549,7 +548,7 @@ describe('App', () => {
     expect(editorEl.value).toContain('**world**');
   });
 
-  it('applies italic with Cmd+I keyboard shortcut', async () => {
+  it('applies italic with Cmd+Alt+I keyboard shortcut', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
@@ -562,7 +561,7 @@ describe('App', () => {
     await nextTick();
 
     editorEl.setSelectionRange(6, 11);
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', metaKey: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', code: 'KeyI', metaKey: true, altKey: true }));
     await nextTick();
 
     expect(editorEl.value).toContain('*world*');
@@ -591,7 +590,7 @@ describe('App', () => {
     expect(editorEl.value).toBe('Hello');
   });
 
-  it('applies quote with Cmd+Alt+Q and list with Cmd+Alt+L/O shortcuts', async () => {
+  it('applies quote with Cmd+Alt+Q and list with Cmd+Alt+U/O shortcuts', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
 
@@ -612,7 +611,7 @@ describe('App', () => {
     editorEl.dispatchEvent(new Event('input'));
     await nextTick();
     editorEl.setSelectionRange(0, 4);
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', code: 'KeyL', metaKey: true, altKey: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'u', code: 'KeyU', metaKey: true, altKey: true }));
     await nextTick();
     expect(editorEl.value).toBe('- Item');
 
@@ -661,7 +660,7 @@ describe('App', () => {
     await nextTick();
 
     editorEl.setSelectionRange(0, 4);
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', code: 'KeyD', metaKey: true, altKey: true, shiftKey: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', code: 'KeyB', metaKey: true, altKey: true }));
     await nextTick();
     expect(editorEl.value).toBe('Text');
   });
@@ -3351,6 +3350,11 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="save-file"]').attributes('title')).toBe(`保存 Markdown 文件 (${expectedShortcut('S')})`);
     expect(wrapper.get('[data-testid="toggle-preview"]').attributes('title')).toBe(`显示/隐藏预览 (${expectedShortcut('P')})`);
     expect(wrapper.get('[data-testid="toggle-editor"]').attributes('title')).toBe(`切换阅读/编辑模式 (${expectedShortcut('E')})`);
+    const formatPrefix = `${navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'}+${navigator.platform.toLowerCase().includes('mac') ? 'Opt' : 'Alt'}`;
+    expect(wrapper.get('[data-testid="format-bold"]').attributes('title')).toBe(`粗体 (${formatPrefix}+B)`);
+    expect(wrapper.get('[data-testid="format-italic"]').attributes('title')).toBe(`斜体 (${formatPrefix}+I)`);
+    expect(wrapper.get('[data-testid="format-ordered-list"]').attributes('title')).toBe(`有序列表 (${formatPrefix}+O)`);
+    expect(wrapper.get('[data-testid="format-unordered-list"]').attributes('title')).toBe(`无序列表 (${formatPrefix}+U)`);
     expect(wrapper.get('[data-testid="bookmark-manager-button"]').attributes('title')).toBe(`显示书签列表 (${expectedShortcut('B')})，共 0 个书签`);
     expect(wrapper.get('[data-testid="add-bookmark"]').attributes('title')).toBe(`添加当前位置到书签 (${expectedShortcut('Shift+B')})`);
     expect(wrapper.get('[data-testid="help-popover"]').text()).toContain('v0.1.4');

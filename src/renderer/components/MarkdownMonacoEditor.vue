@@ -303,8 +303,15 @@ function onMonacoKeyDown(event: Monaco.IKeyboardEvent): void {
     return;
   }
 
-  if ((event.metaKey || event.ctrlKey) && event.altKey && event.shiftKey
-    && (event.keyCode === monacoModule.KeyCode.KeyC || event.keyCode === monacoModule.KeyCode.KeyD)) {
+  if ((event.metaKey || event.ctrlKey) && event.altKey
+    && [
+      monacoModule.KeyCode.KeyB,
+      monacoModule.KeyCode.KeyC,
+      monacoModule.KeyCode.KeyI,
+      monacoModule.KeyCode.KeyO,
+      monacoModule.KeyCode.KeyQ,
+      monacoModule.KeyCode.KeyU,
+    ].includes(event.keyCode)) {
     editorDebugLog('formatShortcut.monacoKeyProbe', {
       keyCode: event.keyCode,
       metaKey: event.metaKey,

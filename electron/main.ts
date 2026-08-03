@@ -320,7 +320,7 @@ function buildApplicationMenu(): void {
         commandMenuItem('链接', 'insert-link', 'CmdOrCtrl+K'),
         commandMenuItem('代码块', 'insert-code', 'CmdOrCtrl+Alt+C'),
         commandMenuItem('包裹代码', 'format-code-block', 'CmdOrCtrl+Alt+Shift+C'),
-        commandMenuItem('粗体', 'format-bold', 'CmdOrCtrl+Alt+Shift+D'),
+        commandMenuItem('粗体', 'format-bold', 'CmdOrCtrl+Alt+B'),
         { type: 'separator' },
         commandMenuItem('导入本地图片...', 'import-image', 'Alt+Shift+I'),
         {
@@ -344,7 +344,7 @@ function buildApplicationMenu(): void {
       label: '视图',
       submenu: [
         commandMenuItem('阅读/编辑模式', 'toggle-editor', 'CmdOrCtrl+E'),
-        commandMenuItem('展开/收起目录侧栏', 'toggle-toc-panel', 'CmdOrCtrl+Alt+B'),
+        commandMenuItem('展开/收起目录侧栏', 'toggle-toc-panel', 'CmdOrCtrl+Alt+Shift+B'),
         commandMenuItem('显示/隐藏预览', 'toggle-preview', 'CmdOrCtrl+P'),
         commandMenuItem('全屏预览', 'toggle-fullscreen-preview', 'F11'),
         { type: 'separator' },
