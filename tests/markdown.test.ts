@@ -101,6 +101,20 @@ A->>B: evaluate_script("(() => { const el = ...; el.dispatchEvent(new MouseEvent
     expect(html).toContain('data-source-line="5"');
   });
 
+  it('preserves physical line breaks inside preview paragraphs', () => {
+    const html = renderMarkdown('/Volumes/pm9a1_1T/Twitter 259.964g\n/Volumes/pm9a1_1T/Study 137.105g');
+
+    expect(html).toContain('/Volumes/pm9a1_1T/Twitter 259.964g<br data-source-line="2">');
+    expect(html).toContain('/Volumes/pm9a1_1T/Study 137.105g');
+  });
+
+  it('adds source-line anchors to soft breaks for bidirectional scroll syncing', () => {
+    const html = renderMarkdown('first line\nsecond line\nthird line');
+
+    expect(html).toContain('<br data-source-line="2">');
+    expect(html).toContain('<br data-source-line="3">');
+  });
+
   it('marks rendered links for external browser handling', () => {
     const html = renderMarkdown('[Apple](https://apple.com/account)');
 

@@ -29,7 +29,7 @@
 
 ### 阶段二（已修复）：目录跳转后滚动 sync 回写
 
-`jumpToHeading()` 设置 `preview.scrollTop` 后触发 `onPreviewScroll`，经 `previewScrollOffset (-50)` 反推行号再 sync 回预览，可能拉偏位置。已通过 `beginDocumentScrollRestore()` 包裹跳转过程缓解。
+旧实现中，`jumpToHeading()` 设置 `preview.scrollTop` 后触发 `onPreviewScroll`，经固定 `previewScrollOffset (-50)` 反推行号再 sync 回预览，可能拉偏位置。该固定偏移现已移除，目录跳转仍由 `beginDocumentScrollRestore()` 隔离恢复事件。
 
 ### 阶段三（本次修复）：光标未迁移 + 异步高亮覆盖
 
@@ -46,6 +46,18 @@
    → 用户看到：滚动正确，高亮错误
 ```
 
+### 阶段四（本次修复）：光标同步错误地对齐到编辑器顶部
+
+普通光标移动也会触发 `onEditorFocusLineChange`。旧逻辑直接调用 `syncPreviewToLine(line)`，把光标对应的预览锚点放到预览顶部；当光标原本位于编辑器视口下方时，预览会突然跳到一个不对应的垂直位置。
+
+现在同步时计算 `editorLineTop - editor.scrollTop`，将这个光标相对视口偏移带到预览侧：编辑器里光标在下方，预览里的对应内容也保持在相近位置；编辑器自身滚动仍继续使用编辑器顶部作为同步基准。
+
+### 阶段五（本次修复）：长段落内部缺少源码行锚点
+
+预览开启物理换行后，连续的源码行仍属于同一个 Markdown 段落。此前只给段落起始节点添加 `data-source-line`，Preview 滚到段落中间时只能在两个块级节点之间粗略插值，Editor 会跳到错误位置。
+
+现在为 Markdown 的软换行和硬换行生成对应的 `data-source-line` 锚点，反向同步可以使用段落内部的实际 DOM 位置，连续磁盘路径、日志和清单等内容能按源码行精确跟随。
+
 ### 附加根因：数字开头 ID 的 CSS 选择器无效
 
 `#3top` 在 CSS 中非法，已改为 `[id="..."]`。
@@ -55,15 +67,18 @@
 1. **纯函数模块** `heading-scroll.ts`：滚动目标、scroll spy、源码行 spy、导航锁、标题选择器。
 2. **Scroll Spy** 基于 `scrollTop + 16px`，不用大视口 band。
 3. **目录跳转** 同时：`preview.scrollTop` + `setCursorPosition(sourceLine)` + `syncEditorToLine`。
-4. **导航锁** `lockedActiveHeadingId`：跳转后短暂阻止其他来源把高亮降级到上一项。
-5. **延迟恢复** `scheduleHeadingNavigationCompletion`：`nextTick → rAF → finishDocumentScrollRestore → rAF → unlock`。
-6. **调试日志** `rendererLog.debug`：`heading.navigation.lock/unlock`、`heading.active.blocked/update`。
+4. **滚动跟随** 编辑器使用 Monaco 的实际行坐标（支持行内连续位置），预览使用真实 `data-source-line` DOM 锚点，双向插值，不再使用固定 `-50px` 偏移。
+5. **光标同步** 普通光标变化保留光标在编辑器视口中的相对高度；目录、书签、搜索等显式跳转仍使用目标内容对齐顶部。
+6. **导航锁** `lockedActiveHeadingId`：跳转后短暂阻止其他来源把高亮降级到上一项。
+7. **延迟恢复** `scheduleHeadingNavigationCompletion`：`nextTick → rAF → finishDocumentScrollRestore → rAF → unlock`。
+8. **调试日志** `rendererLog.debug`：`heading.navigation.lock/unlock`、`heading.active.blocked/update`。
 
 ## 关键文件
 
 | 文件 | 职责 |
 | --- | --- |
 | `src/renderer/lib/heading-scroll.ts` | 纯函数：滚动目标、spy 判定、导航锁规则、源码行 spy、标题选择器 |
+| `src/renderer/components/MarkdownMonacoEditor.vue` | 暴露编辑器实际行坐标，支持 Monaco 与测试 textarea |
 | `src/renderer/App.vue` | `jumpToHeading`、锁、`setActiveHeadingId`、滚动 sync 编排 |
 | `src/renderer/lib/logger.ts` | `rendererLog.debug` 输出结构化日志 |
 | `tests/heading-scroll.test.ts` | 单元测试：相邻标题、边界、锁、源码行 spy |
@@ -271,8 +286,9 @@ pnpm exec vue-tsc --noEmit
 
 覆盖点：
 
-- `tests/heading-scroll.test.ts`：相邻标题、激活边界、数字 ID 选择器、导航锁、源码行 spy
-- `tests/App.test.ts`：`3Top:` 跳转、光标竞态下高亮不被覆盖
+- `tests/heading-scroll.test.ts`：相邻标题、激活边界、数字 ID 选择器、导航锁
+- `tests/MarkdownMonacoEditor.test.ts`：编辑器连续源码行坐标
+- `tests/App.test.ts`：编辑器/预览双向跟随、`3Top:` 跳转、光标竞态下高亮不被覆盖
 
 ## Review 记录（3 轮）
 
@@ -284,7 +300,7 @@ pnpm exec vue-tsc --noEmit
 
 ### 第 2 轮
 
-- `previewScrollOffset (-50)` 与 `PREVIEW_HEADING_SCROLL_PADDING (16)` 职责分离：前者行级 sync，后者标题 spy/跳转，不强行统一。
+- 编辑器行坐标与预览锚点现在直接做双向插值；`PREVIEW_HEADING_SCROLL_PADDING (16)` 只用于目录跳转和标题 spy，不再混入行级同步偏移。
 - `setActiveHeadingId` 统一所有高亮写入，避免遗漏路径；`watch(headingTree)` 清空逻辑仍直接写 ref，可接受（仅 id 失效时）。
 - 书签/光标历史跳转已先 `setCursorPosition` 再更新高亮，无需额外锁。
 - 结论：无过度设计，保留双 rAF unlock。

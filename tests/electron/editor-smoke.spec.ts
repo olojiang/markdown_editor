@@ -225,3 +225,46 @@ test('keeps long source lines inside the editor viewport', async () => {
     await fs.rm(tempDir, { force: true, recursive: true });
   }
 });
+
+test('keeps the editor aligned when preview scrolls inside a line-preserving paragraph', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-preview-scroll-'));
+  const markdownPath = path.join(tempDir, 'preview scroll.md');
+  const lines = Array.from({ length: 80 }, (_, index) => `/Volumes/disk/item-${index + 1} ${80 - index}g`);
+  await fs.writeFile(markdownPath, ['# Disk', '', ...lines].join('\n'), 'utf8');
+
+  const launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
+
+  try {
+    const page = await launched.app.firstWindow();
+    await page.setViewportSize({ width: 1388, height: 768 });
+    await expect(page.getByTestId('preview')).toContainText('item-1');
+    await ensureEditorVisible(page);
+
+    const target = await page.evaluate(() => {
+      const preview = document.querySelector<HTMLElement>('[data-testid="preview"]');
+      const anchor = preview?.querySelector<HTMLElement>('[data-source-line="38"]');
+      if (!preview || !anchor) {
+        throw new Error('Missing preview or source-line anchor');
+      }
+
+      const previewRect = preview.getBoundingClientRect();
+      preview.scrollTop = anchor.getBoundingClientRect().top - previewRect.top + preview.scrollTop;
+      preview.dispatchEvent(new Event('scroll', { bubbles: true }));
+      return anchor.dataset.sourceLine;
+    });
+
+    expect(target).toBe('38');
+    await expect.poll(() => page.evaluate(() => {
+      const line = Array.from(document.querySelectorAll<HTMLElement>('.view-line'))
+        .find((node) => node.textContent?.includes('item-36'));
+      const editor = document.querySelector<HTMLElement>('.monaco-editor .overflow-guard');
+      if (!line || !editor) {
+        return null;
+      }
+      return line.getBoundingClientRect().top - editor.getBoundingClientRect().top;
+    })).toBeLessThan(4);
+  } finally {
+    await closeEditor(launched);
+    await fs.rm(tempDir, { force: true, recursive: true });
+  }
+});

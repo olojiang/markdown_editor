@@ -562,7 +562,7 @@ export function filterHeadingTree(nodes: HeadingNode[], query: string): HeadingN
 }
 
 export function renderMarkdown(markdown: string): string {
-  const md = new MarkdownIt({ html: false, linkify: true, typographer: true });
+  const md = new MarkdownIt({ breaks: true, html: false, linkify: true, typographer: true });
   const slug = createSlugger();
   const sourceLineTokenTypes = new Set([
     'blockquote_open',
@@ -606,6 +606,33 @@ export function renderMarkdown(markdown: string): string {
       }
     });
   });
+
+  md.core.ruler.after('inline', 'source_line_break_attrs', (state) => {
+    state.tokens.forEach((token) => {
+      const firstSourceLine = token.map?.[0];
+      if (token.type !== 'inline' || !token.children || typeof firstSourceLine !== 'number') {
+        return;
+      }
+
+      let sourceLine = firstSourceLine + 1;
+      token.children.forEach((child) => {
+        if (child.type !== 'softbreak' && child.type !== 'hardbreak') {
+          return;
+        }
+
+        sourceLine += 1;
+        child.attrSet('data-source-line', String(sourceLine));
+      });
+    });
+  });
+
+  function renderSourceLineBreak(token: Token): string {
+    const sourceLine = token.attrGet('data-source-line');
+    return sourceLine ? `<br data-source-line="${escapeHtml(sourceLine)}">` : '<br>';
+  }
+
+  md.renderer.rules.softbreak = (tokens, index) => renderSourceLineBreak(tokens[index]);
+  md.renderer.rules.hardbreak = (tokens, index) => renderSourceLineBreak(tokens[index]);
 
   md.renderer.rules.fence = (tokens, index) => {
     const token = tokens[index];

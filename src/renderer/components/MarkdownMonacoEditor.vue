@@ -578,7 +578,7 @@ function fallbackLineHeight(element: HTMLElement): number {
 }
 
 function getLineScrollTop(lineNumber: number): number | null {
-  const requestedLineNumber = Number.isFinite(lineNumber) ? Math.trunc(lineNumber) : 1;
+  const requestedLineNumber = Number.isFinite(lineNumber) ? lineNumber : 1;
   const fallback = fallbackEditor.value;
   if (fallback) {
     return (Math.max(1, requestedLineNumber) - 1) * fallbackLineHeight(fallback);
@@ -594,7 +594,53 @@ function getLineScrollTop(lineNumber: number): number | null {
   }
 
   const safeLineNumber = Math.min(Math.max(1, requestedLineNumber), model.getLineCount());
-  return monacoEditor.getTopForLineNumber(safeLineNumber);
+  const baseLine = Math.floor(safeLineNumber);
+  const nextLine = Math.min(model.getLineCount(), baseLine + 1);
+  const baseTop = monacoEditor.getTopForLineNumber(baseLine);
+  if (nextLine === baseLine) {
+    return baseTop;
+  }
+  const nextTop = monacoEditor.getTopForLineNumber(nextLine);
+  return baseTop + (nextTop - baseTop) * (safeLineNumber - baseLine);
+}
+
+function getLinePositionAtScrollTop(scrollTop: number): number | null {
+  const safeScrollTop = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0;
+  const fallback = fallbackEditor.value;
+  if (fallback) {
+    return safeScrollTop / fallbackLineHeight(fallback) + 1;
+  }
+
+  if (!monacoEditor) {
+    return null;
+  }
+
+  const model = getModel();
+  if (!model) {
+    return null;
+  }
+
+  let low = 1;
+  let high = model.getLineCount();
+  let result = 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const top = monacoEditor.getTopForLineNumber(middle);
+    if (top <= safeScrollTop) {
+      result = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const currentTop = monacoEditor.getTopForLineNumber(result);
+  const nextLine = Math.min(model.getLineCount(), result + 1);
+  if (nextLine === result) {
+    return result;
+  }
+  const nextTop = monacoEditor.getTopForLineNumber(nextLine);
+  const lineSpan = nextTop - currentTop;
+  return lineSpan <= 0 ? result : result + Math.min(1, Math.max(0, (safeScrollTop - currentTop) / lineSpan));
 }
 
 function getMaxScrollTop(): number {
@@ -767,6 +813,7 @@ defineExpose({
   focus,
   getCursorPosition,
   getElement,
+  getLinePositionAtScrollTop,
   getLineScrollTop,
   getMaxScrollTop,
   getScrollTop,

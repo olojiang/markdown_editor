@@ -177,6 +177,7 @@ interface EditorSurface {
   focus(): void;
   getCursorPosition(): CursorPosition;
   getElement(): HTMLElement | null;
+  getLinePositionAtScrollTop?(scrollTop: number): number | null;
   getLineScrollTop(lineNumber: number): number | null;
   getMaxScrollTop(): number;
   getScrollTop(): number;
@@ -334,7 +335,6 @@ let isFlushingOpenQueue = false;
 let lastRecentFilesDiagnosticSignature = '';
 let htmlPreviewTimer: number | undefined;
 const queuedOpenRequests: MarkdownOpenRequest[] = [];
-const previewScrollOffset = -50;
 let lockedActiveHeadingId = '';
 let headingNavigationFrame: number | undefined;
 const sessionSaveDelay = 200;
@@ -1710,11 +1710,6 @@ function scrollRatio(element: HTMLElement): number {
   return maxScroll <= 0 ? 0 : element.scrollTop / maxScroll;
 }
 
-function scrollRatioWithOffset(element: HTMLElement, offset: number): number {
-  const maxScroll = element.scrollHeight - element.clientHeight;
-  return maxScroll <= 0 ? 0 : Math.max(0, element.scrollTop - offset) / maxScroll;
-}
-
 function applyScrollRatio(element: HTMLElement, ratio: number): void {
   const maxScroll = element.scrollHeight - element.clientHeight;
   element.scrollTop = maxScroll <= 0 ? 0 : maxScroll * ratio;
@@ -1775,83 +1770,14 @@ function interpolateTopFromAnchors(line: number, anchors: ScrollAnchor[]): numbe
   return before.top + (after.top - before.top) * ratio;
 }
 
-function editorAnchors(): ScrollAnchor[] {
-  const element = editorElement();
-  if (!element || !document.body) {
-    return [];
-  }
-
-  const style = window.getComputedStyle(element);
-  const mirror = document.createElement('div');
-  Object.assign(mirror.style, {
-    border: style.border,
-    boxSizing: style.boxSizing,
-    font: style.font,
-    letterSpacing: style.letterSpacing,
-    lineHeight: style.lineHeight,
-    overflowWrap: style.overflowWrap,
-    padding: style.padding,
-    pointerEvents: 'none',
-    position: 'absolute',
-    tabSize: style.tabSize,
-    top: '0',
-    visibility: 'hidden',
-    whiteSpace: 'pre-wrap',
-    width: `${element.clientWidth}px`,
-    wordBreak: style.wordBreak,
-  });
-
-  const lines = source.value.split('\n');
-  lines.forEach((line, index) => {
-    const marker = document.createElement('span');
-    marker.dataset.sourceLine = String(index + 1);
-    marker.style.display = 'inline-block';
-    marker.style.height = '0';
-    marker.style.overflow = 'hidden';
-    marker.style.verticalAlign = 'top';
-    marker.style.width = '0';
-    mirror.append(marker, document.createTextNode(line || '\u200b'));
-    if (index < lines.length - 1) {
-      mirror.append(document.createTextNode('\n'));
-    }
-  });
-
-  document.body.append(mirror);
-  const markers = Array.from(mirror.querySelectorAll<HTMLElement>('[data-source-line]'));
-  const firstTop = markers[0]?.offsetTop ?? 0;
-  const anchors = markers
-    .map((marker) => ({
-      line: Number(marker.dataset.sourceLine),
-      top: Math.max(0, marker.offsetTop - firstTop),
-    }))
-    .filter((anchor) => Number.isFinite(anchor.line));
-  mirror.remove();
-
-  const orderedAnchors: ScrollAnchor[] = [];
-  anchors.forEach((anchor) => {
-    const previous = orderedAnchors[orderedAnchors.length - 1];
-    if (!previous || anchor.top > previous.top && anchor.line > previous.line) {
-      orderedAnchors.push(anchor);
-    }
-  });
-
-  const maxEditorScroll = maxScrollTop(element);
-  const lastAnchor = orderedAnchors[orderedAnchors.length - 1];
-  if (lastAnchor && maxEditorScroll > lastAnchor.top && sourceLineCount() > lastAnchor.line) {
-    orderedAnchors.push({ line: sourceLineCount(), top: maxEditorScroll });
-  }
-
-  return orderedAnchors.length > 2 ? orderedAnchors : [];
-}
-
 function lineFromEditorScroll(): number {
   if (!editor.value) {
     return 1;
   }
 
-  const anchors = editorAnchors();
-  if (anchors.length > 0) {
-    return interpolateLineFromAnchors(editorScrollTop(), anchors);
+  const linePosition = editor.value.getLinePositionAtScrollTop?.(editorScrollTop());
+  if (linePosition !== null && linePosition !== undefined && Number.isFinite(linePosition)) {
+    return Math.min(sourceLineCount(), Math.max(1, linePosition));
   }
 
   return Math.min(sourceLineCount(), Math.max(1, editorScrollTop() / editorLineHeight() + 1));
@@ -1873,10 +1799,20 @@ function syncEditorToLine(line: number): void {
   }
 
   const exactLineTop = editor.value.getLineScrollTop(line);
-  const anchors = exactLineTop === null ? editorAnchors() : [];
   const targetTop = exactLineTop
-    ?? (anchors.length > 0 ? interpolateTopFromAnchors(line, anchors) : (line - 1) * editorLineHeight());
+    ?? (line - 1) * editorLineHeight();
   setEditorScrollTop(Math.min(editor.value.getMaxScrollTop(), Math.max(0, targetTop)));
+}
+
+function editorViewportOffsetForLine(line: number): number {
+  const lineTop = editor.value?.getLineScrollTop(line);
+  if (lineTop === null || lineTop === undefined || !Number.isFinite(lineTop)) {
+    return 0;
+  }
+
+  const rawOffset = Math.max(0, lineTop - editorScrollTop());
+  const viewportHeight = editorElement()?.clientHeight ?? 0;
+  return viewportHeight > 0 ? Math.min(rawOffset, viewportHeight) : rawOffset;
 }
 
 function previewNodeScrollTop(node: HTMLElement, container: HTMLElement): number {
@@ -1928,7 +1864,7 @@ function interpolateLineFromPreviewScroll(): number | null {
     return null;
   }
 
-  const scrollTop = Math.max(0, container.scrollTop - previewScrollOffset);
+  const scrollTop = Math.max(0, container.scrollTop);
   const anchors = previewAnchors();
   if (anchors.length === 0) {
     return null;
@@ -1946,7 +1882,7 @@ function interpolatePreviewScrollFromLine(line: number): number | null {
   return interpolateTopFromAnchors(line, anchors);
 }
 
-function syncPreviewToLine(line: number, lock = true): void {
+function syncPreviewToLine(line: number, lock = true, viewportOffset = 0): void {
   if (lock && scrollSyncSource && scrollSyncSource !== 'editor') {
     return;
   }
@@ -1957,24 +1893,34 @@ function syncPreviewToLine(line: number, lock = true): void {
     return;
   }
 
+  if (lock) {
+    lockScrollSync('editor');
+  }
+
   const targetTop = interpolatePreviewScrollFromLine(line);
   if (targetTop === null) {
     applyScrollRatio(targetElement, scrollRatio(sourceElement));
-    targetElement.scrollTop = Math.min(maxScrollTop(targetElement), targetElement.scrollTop + previewScrollOffset);
+    targetElement.scrollTop = Math.min(
+      maxScrollTop(targetElement),
+      Math.max(0, targetElement.scrollTop - viewportOffset),
+    );
   } else {
-    targetElement.scrollTop = Math.min(maxScrollTop(targetElement), Math.max(0, targetTop + previewScrollOffset));
+    targetElement.scrollTop = Math.min(
+      maxScrollTop(targetElement),
+      Math.max(0, targetTop - viewportOffset),
+    );
   }
+}
 
-  if (lock) {
-    scrollSyncSource = 'editor';
-    if (scrollSyncFrame !== undefined) {
-      window.cancelAnimationFrame(scrollSyncFrame);
-    }
-    scrollSyncFrame = window.requestAnimationFrame(() => {
-      scrollSyncSource = null;
-      scrollSyncFrame = undefined;
-    });
+function lockScrollSync(source: 'editor' | 'preview'): void {
+  scrollSyncSource = source;
+  if (scrollSyncFrame !== undefined) {
+    window.cancelAnimationFrame(scrollSyncFrame);
   }
+  scrollSyncFrame = window.requestAnimationFrame(() => {
+    scrollSyncSource = null;
+    scrollSyncFrame = undefined;
+  });
 }
 
 function syncScroll(from: 'editor' | 'preview', lock = true): void {
@@ -1988,26 +1934,19 @@ function syncScroll(from: 'editor' | 'preview', lock = true): void {
     return;
   }
 
+  if (lock) {
+    lockScrollSync(from);
+  }
+
   if (from === 'preview') {
     const line = interpolateLineFromPreviewScroll();
     if (line === null) {
-      applyScrollRatio(targetElement, scrollRatioWithOffset(sourceElement, previewScrollOffset));
+      applyScrollRatio(targetElement, scrollRatio(sourceElement));
     } else {
       syncEditorToLine(line);
     }
   } else {
     syncPreviewToLine(lineFromEditorScroll(), false);
-  }
-
-  if (lock) {
-    scrollSyncSource = from;
-    if (scrollSyncFrame !== undefined) {
-      window.cancelAnimationFrame(scrollSyncFrame);
-    }
-    scrollSyncFrame = window.requestAnimationFrame(() => {
-      scrollSyncSource = null;
-      scrollSyncFrame = undefined;
-    });
   }
 }
 
@@ -2030,7 +1969,7 @@ function onEditorFocusLineChange(): void {
     if (isRestoringDocumentScroll) {
       return;
     }
-    syncPreviewToLine(line);
+    syncPreviewToLine(line, true, editorViewportOffsetForLine(line));
     updateActiveHeadingFromSourceLine(line);
     rememberScroll(activeScrollTop());
   });

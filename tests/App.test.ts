@@ -64,7 +64,7 @@ function setPreviewSourceLineGeometry(preview: HTMLElement, containerTop: number
       return;
     }
 
-    setElementTop(node, containerTop + relativeTop);
+    setElementTop(node, containerTop + relativeTop - preview.scrollTop);
   });
 }
 
@@ -1379,7 +1379,7 @@ describe('App', () => {
     editor.scrollTop = 500;
     await wrapper.find('[data-testid="editor"]').trigger('scroll');
 
-    expect(preview.scrollTop).toBe(950);
+    expect(preview.scrollTop).toBe(1000);
   });
 
   it('syncs editor scrolling to preview source anchors relative to the preview pane', async () => {
@@ -1405,7 +1405,7 @@ describe('App', () => {
     editor.scrollTop = 6 * lineHeight;
     await wrapper.find('[data-testid="editor"]').trigger('scroll');
 
-    expect(preview.scrollTop).toBe(110);
+    expect(preview.scrollTop).toBe(160);
   });
 
   it('syncs preview and table-of-contents highlight from the editor cursor line', async () => {
@@ -1436,6 +1436,36 @@ describe('App', () => {
     expect(preview.scrollTop).toBeGreaterThan(0);
     const betaLink = wrapper.findAll('.toc-link').find((link) => link.text() === 'Beta');
     expect(betaLink?.classes()).toContain('active');
+  });
+
+  it('keeps the cursor viewport offset when syncing preview from a cursor change', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    setScrollMetrics(preview, 2200, 200);
+    preview.scrollTop = 0;
+    setPreviewSourceLineGeometry(preview, 500, {
+      1: 20,
+      3: 80,
+      5: 120,
+      7: 160,
+      9: 210,
+      11: 260,
+    });
+
+    const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 22.4;
+    editor.scrollTop = 80;
+    const cursorLine = 7;
+    const cursorOffset = offsetForLineColumn(openFile.content, cursorLine, 1);
+    editor.setSelectionRange(cursorOffset, cursorOffset);
+    wrapper.findComponent(MarkdownMonacoEditor).vm.$emit('focus-line-change');
+    await nextTick();
+
+    expect(preview.scrollTop).toBeCloseTo(160 - (cursorLine - 1) * lineHeight + 80);
   });
 
   it('builds a clickable table of contents for text chapters without a preview pane', async () => {
@@ -1585,7 +1615,40 @@ describe('App', () => {
     preview.scrollTop = 950;
     await wrapper.find('[data-testid="preview"]').trigger('scroll');
 
-    expect(editor.scrollTop).toBe(500);
+    expect(editor.scrollTop).toBe(475);
+  });
+
+  it('maps preview scrolling inside a soft-break paragraph to the matching editor line', async () => {
+    const longFile = {
+      ...openFile,
+      content: ['# Title', '', '/Volumes/disk/one 10g', '/Volumes/disk/two 9g', '/Volumes/disk/three 8g', '/Volumes/disk/four 7g', '/Volumes/disk/five 6g', '/Volumes/disk/six 5g', '/Volumes/disk/seven 4g'].join('\n'),
+    };
+    vi.mocked(window.markdownBridge!.readLastMarkdownFile).mockResolvedValue(longFile);
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    setScrollMetrics(preview, 2200, 200);
+    preview.scrollTop = 146;
+    setPreviewSourceLineGeometry(preview, 500, {
+      1: 20,
+      3: 80,
+      4: 102,
+      5: 124,
+      6: 146,
+      7: 168,
+      8: 190,
+      9: 212,
+    });
+
+    await wrapper.find('[data-testid="preview"]').trigger('scroll');
+
+    const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 22.4;
+    expect(editor.scrollTop).toBeCloseTo(5 * lineHeight);
   });
 
   it('keeps live preview scroll positions isolated while switching tabs', async () => {

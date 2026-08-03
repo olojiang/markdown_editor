@@ -120,7 +120,7 @@ A format toolbar (heading dropdown, bold, italic, quote, code, lists, insert lin
 
 ### Preview
 
-- Live Markdown rendering (markdown-it with linkify and typographer).
+- Live Markdown rendering (markdown-it with linkify, typographer, and preserved source line breaks).
 - Preview zoom: `Cmd/Ctrl++` / `Cmd/Ctrl+-` / `Cmd/Ctrl+0` (70%–160%).
 - Fullscreen preview mode (`F11`).
 - Hide/show preview: `Cmd/Ctrl+P`.
