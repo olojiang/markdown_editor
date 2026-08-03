@@ -1939,6 +1939,17 @@ function syncScroll(from: 'editor' | 'preview', lock = true): void {
   }
 
   if (from === 'preview') {
+    const sourceScrollTop = Math.max(0, sourceElement.scrollTop);
+    const sourceMaxScrollTop = maxScrollTop(sourceElement);
+    if (sourceScrollTop <= 1) {
+      setEditorScrollTop(0);
+      return;
+    }
+    if (sourceMaxScrollTop > 0 && sourceScrollTop >= sourceMaxScrollTop - 1) {
+      setEditorScrollTop(editor.value?.getMaxScrollTop() ?? 0);
+      return;
+    }
+
     const line = interpolateLineFromPreviewScroll();
     if (line === null) {
       applyScrollRatio(targetElement, scrollRatio(sourceElement));

@@ -263,6 +263,25 @@ test('keeps the editor aligned when preview scrolls inside a line-preserving par
       }
       return line.getBoundingClientRect().top - editor.getBoundingClientRect().top;
     })).toBeLessThan(4);
+
+    await page.evaluate(() => {
+      const preview = document.querySelector<HTMLElement>('[data-testid="preview"]');
+      if (!preview) {
+        throw new Error('Missing preview');
+      }
+      preview.scrollTop = preview.scrollHeight - preview.clientHeight;
+      preview.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+
+    await expect.poll(() => page.evaluate(() => {
+      const line = Array.from(document.querySelectorAll<HTMLElement>('.view-line'))
+        .find((node) => node.textContent?.includes('item-80'));
+      const editor = document.querySelector<HTMLElement>('.monaco-editor .overflow-guard');
+      if (!line || !editor) {
+        return null;
+      }
+      return line.getBoundingClientRect().bottom - editor.getBoundingClientRect().bottom;
+    })).toBeLessThanOrEqual(1);
   } finally {
     await closeEditor(launched);
     await fs.rm(tempDir, { force: true, recursive: true });

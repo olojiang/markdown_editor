@@ -1618,6 +1618,32 @@ describe('App', () => {
     expect(editor.scrollTop).toBe(475);
   });
 
+  it('pins the editor to its end when the preview reaches its end', async () => {
+    const longFile = {
+      ...openFile,
+      content: ['# Title', '', ...Array.from({ length: 53 }, (_, index) => `/Volumes/disk/item-${index + 1} ${53 - index}g`)].join('\n'),
+    };
+    vi.mocked(window.markdownBridge!.readLastMarkdownFile).mockResolvedValue(longFile);
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    setScrollMetrics(editor, 1200, 200);
+    setScrollMetrics(preview, 880, 200);
+    const lineTops = Object.fromEntries(
+      Array.from({ length: 53 }, (_, index) => [index + 3, 80 + index * 21.7]),
+    );
+    preview.scrollTop = preview.scrollHeight - preview.clientHeight;
+    setPreviewSourceLineGeometry(preview, 500, lineTops);
+
+    await wrapper.find('[data-testid="preview"]').trigger('scroll');
+
+    expect(editor.scrollTop).toBe(editor.scrollHeight - editor.clientHeight);
+  });
+
   it('maps preview scrolling inside a soft-break paragraph to the matching editor line', async () => {
     const longFile = {
       ...openFile,
