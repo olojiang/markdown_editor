@@ -45,13 +45,13 @@ A desktop Markdown document reader/editor built with Electron + Vue 3 + TypeScri
 |---|---|
 | `Cmd/Ctrl+Opt/Alt+1`–`4` | Set H1–H4 heading |
 | `Cmd/Ctrl+Opt/Alt+0` | Restore to body text |
-| `Cmd/Ctrl+Opt/Alt+Shift+D` | Toggle bold |
-| `Cmd/Ctrl+I` | Toggle italic |
+| `Cmd/Ctrl+Opt/Alt+B` | Toggle bold (`B` = Bold) |
+| `Cmd/Ctrl+Opt/Alt+I` | Toggle italic (`I` = Italic) |
 | `Cmd/Ctrl+Opt/Alt+Q` | Toggle blockquote |
 | `Cmd/Ctrl+Opt/Alt+Shift+C` | Toggle code (inline or fenced) |
 | `Cmd/Ctrl+Opt/Alt+C` | Insert code block template |
 | `Cmd/Ctrl+Opt/Alt+O` | Toggle ordered list |
-| `Cmd/Ctrl+Opt/Alt+L` | Toggle unordered list |
+| `Cmd/Ctrl+Opt/Alt+U` | Toggle unordered list (`U` = Unordered) |
 
 A format toolbar (heading dropdown, bold, italic, quote, code, lists, insert link, insert table) is visible for Markdown documents when the editor is shown.
 
@@ -138,7 +138,7 @@ A format toolbar (heading dropdown, bold, italic, quote, code, lists, insert lin
 ### View Layout
 
 - Three-column: TOC (left), editor (middle), preview (right).
-- Resizable TOC column (180–520px), toggle with `Cmd/Ctrl+Alt+B`.
+- Resizable TOC column (180–520px), toggle with `Cmd/Ctrl+Opt/Alt+Shift+B`.
 - Resizable editor column (320–1200px), remembered per tab.
 - Collapsible TOC, hideable preview, fullscreen preview, reader mode.
 
@@ -170,7 +170,7 @@ A format toolbar (heading dropdown, bold, italic, quote, code, lists, insert lin
 | `Cmd/Ctrl+B` | Bookmark manager |
 | `Cmd/Ctrl+Shift+B` | Toggle bookmark |
 | `Cmd/Ctrl+P` | Show/hide preview |
-| `Cmd/Ctrl+Alt+B` | Toggle TOC panel |
+| `Cmd/Ctrl+Opt/Alt+Shift+B` | Toggle TOC panel |
 | `Cmd/Ctrl++` / `-` / `0` | Preview zoom in/out/reset |
 | `F11` | Fullscreen preview toggle |
 | `Cmd/Ctrl+K` | Insert link |
@@ -217,6 +217,8 @@ The ARM64 DMG is written to `release/`. For local updates:
 ```
 
 See [docs/Mac_Distribution.md](docs/Mac_Distribution.md) for packaging and permission notes.
+
+For the repeatable local signing flow, see the local record at `~/Downloads/Markdown/app_sign.md`. The build intentionally disables electron-builder's automatic certificate discovery and signs explicitly in `afterPack` after the dedicated keychain has been prepared.
 
 ### Windows x64 Installer
 

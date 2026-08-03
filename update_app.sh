@@ -237,6 +237,7 @@ fi
 export MAC_CODESIGN_IDENTITY="$APPLE_CERTIFICATE_ID"
 export MAC_CODESIGN_KEYCHAIN="$KEYCHAIN_PATH"
 export MAC_CODESIGN_ENTITLEMENTS="${MAC_CODESIGN_ENTITLEMENTS:-$MAC_ENTITLEMENTS}"
+echo "Electron Builder automatic signing is intentionally disabled; using explicit afterPack signing with ${MAC_CODESIGN_IDENTITY}."
 if [[ "$NOTARIZE" == true ]]; then
   export MAC_CODESIGN_REQUIRE_TIMESTAMP=1
 else
@@ -264,6 +265,7 @@ if [[ ! -d "$BUILT_APP" ]]; then
 fi
 
 node scripts/sign-mac-app.cjs "$BUILT_APP"
+echo "Explicit Developer ID signing and verification passed for ${BUILT_APP}."
 
 if [[ "$NOTARIZE" == true ]]; then
   node scripts/notarize-mac-app.cjs "$BUILT_APP"
