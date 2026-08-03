@@ -64,3 +64,13 @@ export function resolveActiveHeadingId(
 
   return activeId;
 }
+
+export function tocScrollTarget(
+  itemTop: number,
+  itemHeight: number,
+  viewportHeight: number,
+  maxScrollTop: number,
+): number {
+  const centeredTop = itemTop - Math.max(0, (viewportHeight - itemHeight) / 2);
+  return Math.min(Math.max(0, maxScrollTop), Math.max(0, centeredTop));
+}

@@ -36,6 +36,7 @@ import {
   resolveActiveHeadingId,
   resolveActiveHeadingIdFromSourceLine,
   shouldBlockActiveHeadingUpdate,
+  tocScrollTarget,
 } from '@/renderer/lib/heading-scroll';
 import { rendererLog } from '@/renderer/lib/logger';
 import {
@@ -276,7 +277,7 @@ const previewZoom = ref(1);
 const activeMermaidDiagram = shallowRef<ActiveMermaidDiagram | null>(null);
 const activeImagePreview = shallowRef<ActiveImagePreview | null>(null);
 const preview = ref<HTMLElement | null>(null);
-const tocPanel = ref<HTMLElement | null>(null);
+const tocScroller = ref<HTMLElement | null>(null);
 const editor = ref<EditorSurface | null>(null);
 const status = ref('请选择或打开一个支持的文档');
 const activeEditorLine = ref(1);
@@ -1088,7 +1089,7 @@ function activePreviewScrollTop(): number {
 }
 
 function activeTocScrollTop(): number {
-  return tocPanel.value?.scrollTop ?? activeTab.value?.tocScrollTop ?? 0;
+  return tocScroller.value?.scrollTop ?? activeTab.value?.tocScrollTop ?? 0;
 }
 
 function activeDocumentHasScrollableTop(): boolean {
@@ -2151,16 +2152,16 @@ function rememberedFileScrollTop(filePath: string | null): number | null {
 }
 
 function restoreTocScroll(scrollTop: number): void {
-  if (tocPanel.value) {
-    tocPanel.value.scrollTop = scrollTop;
+  if (tocScroller.value) {
+    tocScroller.value.scrollTop = scrollTop;
   }
   void nextTick(() => {
-    if (tocPanel.value) {
-      tocPanel.value.scrollTop = scrollTop;
+    if (tocScroller.value) {
+      tocScroller.value.scrollTop = scrollTop;
     }
     window.requestAnimationFrame(() => {
-      if (tocPanel.value) {
-        tocPanel.value.scrollTop = scrollTop;
+      if (tocScroller.value) {
+        tocScroller.value.scrollTop = scrollTop;
       }
     });
   });
@@ -5061,13 +5062,27 @@ watch(() => session.value.theme, () => {
   void renderMermaid();
 });
 
+function scrollActiveTocItemIntoView(id: string): void {
+  const scroller = tocScroller.value;
+  const row = scroller?.querySelector<HTMLElement>(`[data-toc-id="${escapeCssIdentifier(id)}"]`);
+  if (!scroller || !row || scroller.clientHeight <= 0 || scroller.scrollHeight <= scroller.clientHeight) {
+    return;
+  }
+
+  const scrollerRect = scroller.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  const rowHeight = rowRect.height || row.offsetHeight || 28;
+  const rowTop = scroller.scrollTop + rowRect.top - scrollerRect.top;
+  scroller.scrollTop = tocScrollTarget(rowTop, rowHeight, scroller.clientHeight, maxScrollTop(scroller));
+}
+
 watch(activeHeadingId, async (id) => {
   if (!id) {
     return;
   }
 
   await nextTick();
-  document.querySelector<HTMLElement>(`[data-toc-id="${escapeCssIdentifier(id)}"]`)?.scrollIntoView({ block: 'nearest' });
+  scrollActiveTocItemIntoView(id);
 });
 
 watch(headingTree, (nodes) => {
@@ -5529,7 +5544,7 @@ onBeforeUnmount(() => {
     </div>
 
     <section class="workspace" :style="gridStyle">
-      <aside ref="tocPanel" class="toc-panel" data-testid="toc" @scroll="onTocScroll">
+      <aside class="toc-panel" data-testid="toc">
         <SearchPanel
           v-show="fileSearchVisible"
           ref="fileSearchPanel"
@@ -5538,7 +5553,7 @@ onBeforeUnmount(() => {
           @navigate="navigateToSearchResult"
           @close="hideFileSearch"
         />
-        <div v-show="!fileSearchVisible" class="toc-content">
+        <div v-show="!fileSearchVisible" ref="tocScroller" class="toc-content" @scroll="onTocScroll">
           <div class="panel-toolbar">
             <div class="toc-toolbar-row">
               <h2>目录</h2>

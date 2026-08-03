@@ -2418,7 +2418,7 @@ describe('App', () => {
 
     expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.scrollTop).toBe(111);
     expect(wrapper.find<HTMLElement>('[data-testid="preview"]').element.scrollTop).toBe(333);
-    expect(wrapper.find<HTMLElement>('[data-testid="toc"]').element.scrollTop).toBe(55);
+    expect(wrapper.find<HTMLElement>('.toc-content').element.scrollTop).toBe(55);
   });
 
   it('keeps edit, preview, and fullscreen view state isolated per tab', async () => {

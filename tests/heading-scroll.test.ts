@@ -6,6 +6,7 @@ import {
   resolveActiveHeadingId,
   resolveActiveHeadingIdFromSourceLine,
   shouldBlockActiveHeadingUpdate,
+  tocScrollTarget,
 } from '@/renderer/lib/heading-scroll';
 
 describe('heading-scroll', () => {
@@ -65,5 +66,13 @@ describe('heading-scroll', () => {
       { id: 'alpha', top: 120 },
       { id: 'beta', top: 120 },
     ], 104)).toBe('beta');
+  });
+
+  it('centers an active table-of-contents item when there is room to scroll', () => {
+    expect(tocScrollTarget(600, 28, 400, 1000)).toBe(414);
+  });
+
+  it('clamps an active table-of-contents item to the scroll end', () => {
+    expect(tocScrollTarget(1000, 28, 400, 700)).toBe(700);
   });
 });
