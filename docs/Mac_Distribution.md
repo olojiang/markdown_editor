@@ -12,12 +12,18 @@ The `build.mac.identity` value is intentionally `null`. This suppresses electron
 
 Output files are written to `release/`:
 
-- `Markdown 纪-0.1.7-arm64.dmg` for Apple Silicon Macs.
+- `markdown-editor-<version>-arm64.dmg` for Apple Silicon Macs.
 
 For local development updates, run:
 
 ```bash
 ./update_app.sh
+```
+
+For a release build without installing or relaunching the app:
+
+```bash
+./update_app.sh --release
 ```
 
 The script rebuilds the macOS ARM64 app, signs and verifies the packaged app, stops any running copy, copies the app to `/Applications/Markdown 纪.app`, verifies the installed copy, removes the old `/Applications/Markdown Editor.app` if present, clears the local quarantine flag, refreshes LaunchServices registration, and launches the app from `/Applications`.
@@ -89,12 +95,17 @@ codesign --display --verbose=4 "/Applications/Markdown 纪.app" 2>&1 \
 
 For a GitHub Release, use a branch name or a full commit SHA with `gh --target`; a short SHA can be rejected by the GitHub Releases API:
 
+For the normal cross-platform release flow, use
+[docs/Release.md](Release.md). It publishes the macOS and Windows assets to
+the same tag and keeps `latest-mac.yml` and `latest.yml` next to their matching
+installers.
+
 ```bash
 gh release create v0.1.13 \
   --repo olojiang/markdown_editor \
   --target main \
   --title "Markdown 纪 0.1.13" \
-  'release/Markdown 纪-0.1.13-arm64.dmg#markdown-editor-0.1.13.dmg' \
-  'release/Markdown 纪-0.1.13-arm64.dmg.blockmap#markdown-editor-0.1.13-arm64.dmg.blockmap' \
+  'release/markdown-editor-0.1.13-arm64.dmg' \
+  'release/markdown-editor-0.1.13-arm64.dmg.blockmap' \
   release/latest-mac.yml
 ```

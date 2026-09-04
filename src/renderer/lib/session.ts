@@ -23,6 +23,11 @@ export interface MarkdownBookmark {
   updatedAt: number;
 }
 
+export interface EditorCursorPosition {
+  lineNumber: number;
+  column: number;
+}
+
 export interface MarkdownSessionTab {
   id: string;
   filePath: string | null;
@@ -31,6 +36,9 @@ export interface MarkdownSessionTab {
   editorScrollTop: number;
   previewScrollTop: number;
   tocScrollTop: number;
+  cursorPosition: EditorCursorPosition;
+  activeHeadingId: string;
+  collapsedHeadingIds: string[];
   editorVisible: boolean;
   previewHidden: boolean;
   previewFullscreen: boolean;
@@ -267,6 +275,28 @@ function normalizeScrollTop(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
+function normalizeCursorPosition(value: unknown): EditorCursorPosition {
+  if (!value || typeof value !== 'object') {
+    return { lineNumber: 1, column: 1 };
+  }
+  const candidate = value as Partial<EditorCursorPosition>;
+  return {
+    lineNumber: typeof candidate.lineNumber === 'number' && Number.isFinite(candidate.lineNumber)
+      ? Math.max(1, Math.floor(candidate.lineNumber))
+      : 1,
+    column: typeof candidate.column === 'number' && Number.isFinite(candidate.column)
+      ? Math.max(1, Math.floor(candidate.column))
+      : 1,
+  };
+}
+
+function normalizeHeadingIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(new Set(value.filter((id): id is string => typeof id === 'string' && id.length > 0)));
+}
+
 export function bookmarkFileKey(bookmark: Pick<MarkdownBookmark, 'filePath' | 'tabId'>): string {
   const target = bookmark.filePath ? normalizeRecentFilePath(bookmark.filePath) : bookmark.tabId;
   return target.toLocaleLowerCase();
@@ -365,6 +395,9 @@ export function normalizeSessionTabs(
       editorScrollTop: normalizeScrollTop(candidate.editorScrollTop, scrollTop),
       previewScrollTop: normalizeScrollTop(candidate.previewScrollTop, scrollTop),
       tocScrollTop: normalizeScrollTop(candidate.tocScrollTop),
+      cursorPosition: normalizeCursorPosition(candidate.cursorPosition),
+      activeHeadingId: typeof candidate.activeHeadingId === 'string' ? candidate.activeHeadingId : '',
+      collapsedHeadingIds: normalizeHeadingIds(candidate.collapsedHeadingIds),
       editorVisible,
       previewHidden,
       previewFullscreen: candidate.previewFullscreen === true,

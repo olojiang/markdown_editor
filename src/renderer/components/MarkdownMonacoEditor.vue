@@ -532,12 +532,14 @@ function getCursorPosition(): CursorPosition {
   return monacoEditor?.getPosition() ?? { column: 1, lineNumber: 1 };
 }
 
-function setCursorPosition(position: CursorPosition): void {
+function setCursorPosition(position: CursorPosition, options: { focus?: boolean } = {}): void {
   const fallback = fallbackEditor.value;
   if (fallback) {
     const offset = offsetFromCursorPosition(fallback.value, position);
     fallback.setSelectionRange(offset, offset);
-    fallback.focus();
+    if (options.focus !== false) {
+      fallback.focus();
+    }
     return;
   }
 
@@ -550,7 +552,9 @@ function setCursorPosition(position: CursorPosition): void {
   const column = Math.min(Math.max(1, position.column), model.getLineMaxColumn(lineNumber));
   monacoEditor.setPosition({ column, lineNumber });
   monacoEditor.revealPositionInCenterIfOutsideViewport({ column, lineNumber });
-  monacoEditor.focus();
+  if (options.focus !== false) {
+    monacoEditor.focus();
+  }
 }
 
 function setSelectionRange(start: number, end: number): void {

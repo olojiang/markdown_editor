@@ -114,6 +114,20 @@ describe('Electron build configuration', () => {
     expect(mainSource).toContain("app.getPath('appData')");
   });
 
+  it('keeps three rolling session backups and logs save snapshots', () => {
+    const mainSource = fs.readFileSync('electron/main.ts', 'utf8');
+    const storageSource = fs.readFileSync('electron/session-storage.ts', 'utf8');
+
+    expect(mainSource).toContain('sessionBackupCount');
+    expect(mainSource).toContain('session.save.committed');
+    expect(mainSource).toContain('session.save.skipped-stale');
+    expect(mainSource).toContain('sessionWriteQueue');
+    expect(mainSource).toContain('fsSync.renameSync(tempPath, targetPath)');
+    expect(storageSource).toContain('export const sessionBackupCount = 3;');
+    expect(storageSource).toContain('`${sessionPath}.bak.${index}`');
+    expect(storageSource).toContain('fs.copyFileSync(sourcePath, targetPath)');
+  });
+
   it('keeps GUI-launched cloud uploads compatible with shell-defined tokens', () => {
     const mainSource = fs.readFileSync('electron/main.ts', 'utf8');
 

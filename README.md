@@ -216,6 +216,12 @@ The ARM64 DMG is written to `release/`. For local updates:
 ./update_app.sh
 ```
 
+To build and sign the macOS release artifacts without installing the app:
+
+```bash
+./update_app.sh --release
+```
+
 See [docs/Mac_Distribution.md](docs/Mac_Distribution.md) for packaging and permission notes.
 
 For the repeatable local signing flow, see the local record at `~/Downloads/Markdown/app_sign.md`. The build intentionally disables electron-builder's automatic certificate discovery and signs explicitly in `afterPack` after the dedicated keychain has been prepared.
@@ -227,6 +233,27 @@ pnpm build:win_x64
 ```
 
 The NSIS installer is written to `release/`. Cross-building from macOS may require Wine; building on Windows avoids that dependency.
+
+### GitHub Release (macOS + Windows)
+
+Use the combined release entry point after committing the source changes:
+
+```bash
+./publish_release.sh
+```
+
+This builds the macOS DMG and Windows x64 NSIS installer, uploads both update
+metadata files and blockmaps, and creates or updates the versioned GitHub
+Release. Add `--sign` when the macOS app should also be notarized and stapled:
+
+```bash
+./publish_release.sh --sign
+```
+
+The combined flow runs on macOS, uses `/Users/hunter/Workspace/apple_keys` for
+Apple signing by default, and requires Wine for the Windows cross-build. See
+[docs/Release.md](docs/Release.md) for the complete checklist and recovery
+steps.
 
 ## Tech Stack
 

@@ -13,18 +13,20 @@ TARGET_DIR="/Applications"
 TARGET_APP="${TARGET_DIR}/${APP_NAME}"
 OLD_TARGET_APP="${TARGET_DIR}/${OLD_APP_NAME}"
 NOTARIZE=false
+RELEASE_ONLY=false
 BUILD_DIR="${ROOT_DIR}/build"
 MAC_ICON_SVG="${BUILD_DIR}/icon.svg"
 MAC_ENTITLEMENTS="${BUILD_DIR}/entitlements.mac.plist"
 
 usage() {
   cat <<'USAGE'
-Usage: ./update_app.sh [--sign]
+Usage: ./update_app.sh [--sign] [--release]
 
 Build, sign, install, and relaunch Markdown 纪.app.
 
 Options:
   --sign      Also submit to Apple notarization, staple the ticket, and run Gatekeeper checks.
+  --release   Build and sign the macOS release artifacts without installing or relaunching the app.
   -h, --help  Show this help.
 
 Without --sign the app is still codesigned, but notarization and stapler checks are skipped.
@@ -35,6 +37,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --sign)
       NOTARIZE=true
+      shift
+      ;;
+    --release)
+      RELEASE_ONLY=true
       shift
       ;;
     -h|--help)
@@ -271,6 +277,11 @@ if [[ "$NOTARIZE" == true ]]; then
   node scripts/notarize-mac-app.cjs "$BUILT_APP"
 else
   echo "Skipping Apple notarization. Run ./update_app.sh --sign to notarize and staple."
+fi
+
+if [[ "$RELEASE_ONLY" == true ]]; then
+  echo "Built and signed macOS release artifacts without installing ${BUILT_APP}."
+  exit 0
 fi
 
 osascript -e "tell application id \"${APP_BUNDLE_ID}\" to quit" >/dev/null 2>&1 || true

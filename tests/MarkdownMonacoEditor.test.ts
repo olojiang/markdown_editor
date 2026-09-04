@@ -22,4 +22,28 @@ describe('MarkdownMonacoEditor scroll coordinates', () => {
     expect(surface.getLinePositionAtScrollTop(lineHeight * 2.5)).toBeCloseTo(3.5);
     wrapper.unmount();
   });
+
+  it('restores a cursor without stealing focus when requested', () => {
+    const wrapper = mount(MarkdownMonacoEditor, {
+      props: {
+        bookmarkLineNumbers: [],
+        configText: '{}',
+        language: 'markdown',
+        modelValue: 'one\ntwo',
+        theme: 'light',
+        vimEnabled: false,
+      },
+    });
+    const outsideInput = document.createElement('input');
+    document.body.append(outsideInput);
+    outsideInput.focus();
+
+    (wrapper.vm as unknown as { setCursorPosition(position: { column: number; lineNumber: number }, options?: { focus?: boolean }): void })
+      .setCursorPosition({ lineNumber: 2, column: 2 }, { focus: false });
+
+    expect(document.activeElement).toBe(outsideInput);
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.selectionStart).toBe(5);
+    outsideInput.remove();
+    wrapper.unmount();
+  });
 });

@@ -12,6 +12,10 @@ import {
   normalizeTextEncoding,
   type TextEncoding,
 } from './text-encoding';
+import {
+  rotateSessionBackupsSync,
+  sessionBackupCount,
+} from './session-storage';
 
 interface MarkdownSession {
   filePath: string | null;
@@ -227,6 +231,9 @@ const htmlPreviewEntries = new Map<string, HtmlPreviewEntry>();
 const htmlPreviewMaxEntries = 40;
 const htmlPreviewIdSearchParam = 'markdown-preview-id';
 const legacySessionUserDataNames = ['markdown-editor'];
+let sessionWriteQueue: Promise<void> = Promise.resolve();
+let sessionWriteGeneration = 0;
+let sessionSaveSequence = 0;
 
 function mainLog(event: string, payload: Record<string, unknown> = {}): void {
   const record = {
@@ -762,37 +769,126 @@ async function readSession(): Promise<MarkdownSession> {
 }
 
 async function saveSession(session: MarkdownSession): Promise<void> {
-  await fs.mkdir(path.dirname(sessionFilePath()), { recursive: true });
-  const recentFiles = normalizeRecentFiles(session.recentFiles);
-  const bookmarks = normalizeBookmarks(session.bookmarks);
-  const fileEncodings = normalizeFileEncodings(session.fileEncodings);
-  const fileScrollPositions = normalizeFileScrollPositions(session.fileScrollPositions);
-  logRecentFilesDiagnostics('save-session', session.recentFiles, recentFiles);
-  await fs.writeFile(sessionFilePath(), JSON.stringify({
-    ...session,
-    bookmarks,
-    bookmarkViewMode: normalizeBookmarkViewMode(session.bookmarkViewMode),
-    recentFiles,
-    fileEncodings,
-    fileScrollPositions,
-  }, null, 2), 'utf8');
+  const requestId = ++sessionSaveSequence;
+  const generation = sessionWriteGeneration;
+  const write = sessionWriteQueue.then(
+    () => writeSessionSnapshot(session, requestId, generation),
+    () => writeSessionSnapshot(session, requestId, generation),
+  );
+  sessionWriteQueue = write.catch(() => undefined);
+  await write;
 }
 
 function saveSessionSync(session: MarkdownSession): void {
-  fsSync.mkdirSync(path.dirname(sessionFilePath()), { recursive: true });
-  const recentFiles = normalizeRecentFiles(session.recentFiles);
+  sessionWriteGeneration += 1;
+  writeSessionSnapshotSync(session, ++sessionSaveSequence, 'save-session-sync');
+}
+
+function sessionForPersistence(session: MarkdownSession): { normalized: MarkdownSession; recentFiles: string[] } {
+  const normalizedRecentFiles = normalizeRecentFiles(session.recentFiles);
+  const fallbackRecentFiles = [
+    session.filePath,
+    ...(Array.isArray(session.tabs) ? session.tabs.map((tab) => tab.filePath) : []),
+  ].filter((filePath): filePath is string => typeof filePath === 'string');
+  const recentFiles = normalizedRecentFiles.length > 0
+    ? normalizedRecentFiles
+    : normalizeRecentFiles(fallbackRecentFiles);
   const bookmarks = normalizeBookmarks(session.bookmarks);
   const fileEncodings = normalizeFileEncodings(session.fileEncodings);
   const fileScrollPositions = normalizeFileScrollPositions(session.fileScrollPositions);
-  logRecentFilesDiagnostics('save-session-sync', session.recentFiles, recentFiles);
-  fsSync.writeFileSync(sessionFilePath(), JSON.stringify({
-    ...session,
-    bookmarks,
-    bookmarkViewMode: normalizeBookmarkViewMode(session.bookmarkViewMode),
+  return {
+    normalized: {
+      ...session,
+      bookmarks,
+      bookmarkViewMode: normalizeBookmarkViewMode(session.bookmarkViewMode),
+      recentFiles,
+      fileEncodings,
+      fileScrollPositions,
+    },
     recentFiles,
-    fileEncodings,
-    fileScrollPositions,
-  }, null, 2), 'utf8');
+  };
+}
+
+function sessionSnapshotText(session: MarkdownSession): { recentFiles: string[]; text: string } {
+  const { normalized, recentFiles } = sessionForPersistence(session);
+  logRecentFilesDiagnostics('save-session', session.recentFiles, recentFiles);
+  return {
+    recentFiles,
+    text: JSON.stringify(normalized, null, 2),
+  };
+}
+
+function sessionSaveLogPayload(
+  source: string,
+  requestId: number,
+  recentFiles: string[],
+  backupPaths: string[],
+): Record<string, unknown> {
+  return {
+    source,
+    requestId,
+    recentFileCount: recentFiles.length,
+    recentFiles,
+    sessionPath: sessionFilePath(),
+    backupPaths,
+  };
+}
+
+async function writeSessionSnapshot(
+  session: MarkdownSession,
+  requestId: number,
+  generation: number,
+): Promise<void> {
+  const targetPath = sessionFilePath();
+  const tempPath = `${targetPath}.tmp.${process.pid}.${requestId}`;
+  const { recentFiles, text } = sessionSnapshotText(session);
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  mainLog('session.save.started', sessionSaveLogPayload('save-session', requestId, recentFiles, []));
+  await fs.writeFile(tempPath, text, 'utf8');
+
+  if (generation !== sessionWriteGeneration) {
+    await fs.rm(tempPath, { force: true });
+    mainLog('session.save.skipped-stale', {
+      requestId,
+      requestedGeneration: generation,
+      currentGeneration: sessionWriteGeneration,
+    });
+    return;
+  }
+
+  try {
+    const backupPaths = rotateSessionBackupsSync(targetPath, sessionBackupCount);
+    fsSync.renameSync(tempPath, targetPath);
+    mainLog('session.save.committed', sessionSaveLogPayload('save-session', requestId, recentFiles, backupPaths));
+  } catch (error) {
+    await fs.rm(tempPath, { force: true });
+    mainLog('session.save.failed', {
+      requestId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+function writeSessionSnapshotSync(session: MarkdownSession, requestId: number, source: string): void {
+  const targetPath = sessionFilePath();
+  const tempPath = `${targetPath}.tmp.${process.pid}.${requestId}`;
+  const { recentFiles, text } = sessionSnapshotText(session);
+  fsSync.mkdirSync(path.dirname(targetPath), { recursive: true });
+  mainLog('session.save.started', sessionSaveLogPayload(source, requestId, recentFiles, []));
+  fsSync.writeFileSync(tempPath, text, 'utf8');
+  try {
+    const backupPaths = rotateSessionBackupsSync(targetPath, sessionBackupCount);
+    fsSync.renameSync(tempPath, targetPath);
+    mainLog('session.save.committed', sessionSaveLogPayload(source, requestId, recentFiles, backupPaths));
+  } catch (error) {
+    try {
+      fsSync.unlinkSync(tempPath);
+    } catch {
+      // Preserve the original save error.
+    }
+    throw error;
+  }
 }
 
 function isSupportedDocumentPath(filePath: string): boolean {

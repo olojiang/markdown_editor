@@ -116,6 +116,40 @@ describe('session helpers', () => {
     ]);
   });
 
+  it('normalizes cursor and table-of-contents state independently for each tab', () => {
+    expect(normalizeSessionTabs([
+      {
+        id: 'file:/docs/a.md',
+        filePath: '/docs/a.md',
+        name: 'a.md',
+        scrollTop: 0,
+        cursorPosition: { lineNumber: 8.9, column: 4.2 },
+        activeHeadingId: 'alpha',
+        collapsedHeadingIds: ['root', 'root', ''],
+      },
+      {
+        id: 'file:/docs/b.md',
+        filePath: '/docs/b.md',
+        name: 'b.md',
+        scrollTop: 0,
+        cursorPosition: { lineNumber: -2, column: Number.NaN },
+        activeHeadingId: 'beta',
+        collapsedHeadingIds: ['other'],
+      },
+    ])).toEqual([
+      expect.objectContaining({
+        cursorPosition: { lineNumber: 8, column: 4 },
+        activeHeadingId: 'alpha',
+        collapsedHeadingIds: ['root'],
+      }),
+      expect.objectContaining({
+        cursorPosition: { lineNumber: 1, column: 1 },
+        activeHeadingId: 'beta',
+        collapsedHeadingIds: ['other'],
+      }),
+    ]);
+  });
+
   it('normalizes per-tab view state independently', () => {
     expect(normalizeSessionTabs([
       {

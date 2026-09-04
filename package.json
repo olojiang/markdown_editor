@@ -12,6 +12,7 @@
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:mac": "pnpm build:icon && pnpm build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --arm64 --publish never",
     "build:win_x64": "pnpm build && electron-builder --win nsis --x64 --publish never",
+    "release": "./publish_release.sh",
     "test": "vitest run",
     "test:electron": "pnpm build && playwright test -c playwright.electron.config.ts",
     "test:watch": "vitest",
@@ -90,7 +91,7 @@
       ]
     },
     "dmg": {
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "artifactName": "markdown-editor-${version}-${arch}.${ext}",
       "contents": [
         {
           "x": 130,
@@ -113,7 +114,7 @@
           ]
         }
       ],
-      "artifactName": "${productName}-${version}-win-${arch}-setup.${ext}",
+      "artifactName": "markdown-editor-setup-${version}.${ext}",
       "fileAssociations": [
         {
           "ext": [

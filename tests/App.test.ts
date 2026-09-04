@@ -2420,6 +2420,61 @@ describe('App', () => {
     expect(wrapper.find<HTMLElement>('.toc-content').element.scrollTop).toBe(55);
   });
 
+  it('restores each tab cursor and table-of-contents selection without cross-tab state leakage', async () => {
+    const otherFile = {
+      path: '/docs/other.md',
+      name: 'other.md',
+      content: '# Other\n\n## Gamma\n\nother body',
+    };
+    vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValue(otherFile);
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const firstEditor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]');
+    await wrapper.findAll('.toc-link').find((link) => link.text() === 'Beta')!.trigger('click');
+    await nextTick();
+    const firstCursorOffset = offsetForLineColumn(openFile.content, 9, 4);
+    firstEditor.element.focus();
+    firstEditor.element.setSelectionRange(firstCursorOffset, firstCursorOffset);
+    await firstEditor.trigger('select');
+    await nextTick();
+
+    await wrapper.find('[data-testid="open-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+
+    const secondEditor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]');
+    await wrapper.findAll('.toc-link').find((link) => link.text() === 'Gamma')!.trigger('click');
+    await nextTick();
+    const secondCursorOffset = offsetForLineColumn(otherFile.content, 4, 3);
+    secondEditor.element.focus();
+    secondEditor.element.setSelectionRange(secondCursorOffset, secondCursorOffset);
+    await secondEditor.trigger('select');
+    await nextTick();
+    expect(secondEditor.element.selectionStart).toBe(secondCursorOffset);
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+    const savedSessionBeforeSwitch = vi.mocked(window.markdownBridge!.saveSession).mock.calls.at(-1)?.[0];
+    expect(savedSessionBeforeSwitch?.tabs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        filePath: openFile.path,
+        cursorPosition: { lineNumber: 9, column: 4 },
+        activeHeadingId: 'beta',
+      }),
+    ]));
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.selectionStart).toBe(firstCursorOffset);
+    expect(wrapper.findAll('.toc-link').find((link) => link.text() === 'Beta')?.classes()).toContain('active');
+
+    await wrapper.find('[data-testid="tab-other.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element.selectionStart).toBe(secondCursorOffset);
+    expect(wrapper.findAll('.toc-link').find((link) => link.text() === 'Gamma')?.classes()).toContain('active');
+    wrapper.unmount();
+  });
+
   it('keeps edit, preview, and fullscreen view state isolated per tab', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();

@@ -96,6 +96,9 @@ interface OpenTab {
   editorScrollTop: number;
   previewScrollTop: number;
   tocScrollTop: number;
+  cursorPosition: CursorPosition;
+  activeHeadingId: string;
+  collapsedHeadingIds: string[];
   editorVisible: boolean;
   previewHidden: boolean;
   previewFullscreen: boolean;
@@ -185,7 +188,7 @@ interface EditorSurface {
   getSelectionRange(): { start: number; end: number };
   redo(): void;
   replaceRange(replacement: string, options: { end: number; scrollTop: number; start: number; selectionEndOffset: number; selectionStartOffset: number }): void;
-  setCursorPosition(position: CursorPosition): void;
+  setCursorPosition(position: CursorPosition, options?: { focus?: boolean }): void;
   setScrollTop(value: number): void;
   setSelectionRange(start: number, end: number): void;
   undo(): void;
@@ -324,6 +327,7 @@ let isNavigatingCursorHistory = false;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
 let isRestoringDocumentScroll = false;
+let activeViewRevision = 0;
 let removeExternalOpenListener: (() => void) | undefined;
 let removeMarkdownFileChangedListener: (() => void) | undefined;
 let removeToggleEditorShortcutListener: (() => void) | undefined;
@@ -628,6 +632,7 @@ function toggleNode(target: HeadingNode): void {
     collapsed.add(target.id);
   }
   collapsedHeadingIds.value = collapsed;
+  persistTabSession({}, { deferred: true });
 }
 
 function collectCollapsibleHeadingIds(nodes: HeadingNode[], ids: Set<string>): void {
@@ -641,12 +646,14 @@ function collectCollapsibleHeadingIds(nodes: HeadingNode[], ids: Set<string>): v
 
 function expandAllHeadings(): void {
   collapsedHeadingIds.value = new Set();
+  persistTabSession({}, { deferred: true });
 }
 
 function collapseAllHeadings(): void {
   const ids = new Set<string>();
   collectCollapsibleHeadingIds(headingTree.value, ids);
   collapsedHeadingIds.value = ids;
+  persistTabSession({}, { deferred: true });
 }
 
 function rewriteLocalImageSources(html: string): string {
@@ -1129,6 +1136,9 @@ function syncActiveTabState(): void {
   tab.editorScrollTop = activeEditorScrollTop();
   tab.previewScrollTop = activePreviewScrollTop();
   tab.tocScrollTop = activeTocScrollTop();
+  tab.cursorPosition = editor.value?.getCursorPosition() ?? tab.cursorPosition;
+  tab.activeHeadingId = activeHeadingId.value;
+  tab.collapsedHeadingIds = Array.from(collapsedHeadingIds.value);
   tab.editorVisible = isEditorVisible.value;
   tab.previewHidden = isPreviewHidden.value;
   tab.previewFullscreen = hasPreviewPane.value && isPreviewFullscreen.value;
@@ -1143,6 +1153,9 @@ function serializedOpenTabs(): MarkdownSession['tabs'] {
     editorScrollTop: tab.editorScrollTop,
     previewScrollTop: tab.previewScrollTop,
     tocScrollTop: tab.tocScrollTop,
+    cursorPosition: { ...tab.cursorPosition },
+    activeHeadingId: tab.activeHeadingId,
+    collapsedHeadingIds: [...tab.collapsedHeadingIds],
     editorVisible: tab.editorVisible,
     previewHidden: tab.previewHidden,
     previewFullscreen: tab.previewFullscreen,
@@ -1251,6 +1264,9 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
       editorScrollTop: tab.editorScrollTop,
       previewScrollTop: tab.previewScrollTop,
       tocScrollTop: tab.tocScrollTop,
+      cursorPosition: { ...tab.cursorPosition },
+      activeHeadingId: tab.activeHeadingId,
+      collapsedHeadingIds: [...tab.collapsedHeadingIds],
       editorVisible: tab.editorVisible,
       previewHidden: tab.previewHidden,
       previewFullscreen: tab.previewFullscreen,
@@ -1972,7 +1988,18 @@ function onEditorScroll(): void {
 }
 
 function onEditorFocusLineChange(): void {
+  const eventTabId = activeTabId.value;
+  const eventRevision = activeViewRevision;
   void nextTick(() => {
+    if (eventTabId !== activeTabId.value || eventRevision !== activeViewRevision) {
+      rendererLog.debug('editor.focus.skipped-stale', {
+        eventTabId,
+        activeTabId: activeTabId.value,
+        eventRevision,
+        activeViewRevision,
+      });
+      return;
+    }
     const position = editor.value?.getCursorPosition();
     const line = position?.lineNumber ?? lineFromEditorSelection();
     activeEditorLine.value = Math.min(sourceLineCount(), Math.max(1, line));
@@ -1999,6 +2026,9 @@ function onPreviewScroll(event: Event): void {
 function lockActiveHeading(id: string, source: string): void {
   lockedActiveHeadingId = id;
   activeHeadingId.value = id;
+  if (activeTab.value) {
+    activeTab.value.activeHeadingId = id;
+  }
   rendererLog.debug('heading.navigation.lock', { id, source });
 }
 
@@ -2020,6 +2050,9 @@ function setActiveHeadingId(id: string, source: string): void {
     });
   }
   activeHeadingId.value = id;
+  if (activeTab.value) {
+    activeTab.value.activeHeadingId = id;
+  }
 }
 
 function scheduleHeadingNavigationCompletion(id: string): void {
@@ -2152,14 +2185,22 @@ function rememberedFileScrollTop(filePath: string | null): number | null {
 }
 
 function restoreTocScroll(scrollTop: number): void {
+  const restoreTabId = activeTabId.value;
+  const restoreRevision = activeViewRevision;
   if (tocScroller.value) {
     tocScroller.value.scrollTop = scrollTop;
   }
   void nextTick(() => {
+    if (restoreTabId !== activeTabId.value || restoreRevision !== activeViewRevision) {
+      return;
+    }
     if (tocScroller.value) {
       tocScroller.value.scrollTop = scrollTop;
     }
     window.requestAnimationFrame(() => {
+      if (restoreTabId !== activeTabId.value || restoreRevision !== activeViewRevision) {
+        return;
+      }
       if (tocScroller.value) {
         tocScroller.value.scrollTop = scrollTop;
       }
@@ -2167,7 +2208,14 @@ function restoreTocScroll(scrollTop: number): void {
   });
 }
 
-function restoreDocumentScroll(tab: Pick<OpenTab, 'editorScrollTop' | 'previewScrollTop' | 'scrollTop' | 'tocScrollTop'>): void {
+function restoreDocumentScroll(tab: OpenTab): void {
+  if (activeTabId.value !== tab.id) {
+    rendererLog.debug('tab.restore.skipped-stale', {
+      restoreTabId: tab.id,
+      activeTabId: activeTabId.value,
+    });
+    return;
+  }
   if (!isRestoringDocumentScroll) {
     beginDocumentScrollRestore();
   }
@@ -2179,7 +2227,79 @@ function restoreDocumentScroll(tab: Pick<OpenTab, 'editorScrollTop' | 'previewSc
   setEditorScrollTop(editorTop);
   restoreTocScroll(tab.tocScrollTop ?? 0);
   updateActiveHeadingFromPreview();
-  finishDocumentScrollRestore();
+  const restoreRevision = activeViewRevision;
+  void nextTick(() => {
+    window.requestAnimationFrame(() => {
+      if (activeTabId.value !== tab.id || activeViewRevision !== restoreRevision) {
+        return;
+      }
+      finishDocumentScrollRestore();
+    });
+  });
+}
+
+function prepareActiveTabTreeState(tab: OpenTab): void {
+  collapsedHeadingIds.value = new Set(tab.collapsedHeadingIds);
+  activeHeadingId.value = tab.activeHeadingId;
+}
+
+function restoreActiveTabState(tab: OpenTab, options: { focus?: boolean } = {}): void {
+  if (activeTabId.value !== tab.id) {
+    rendererLog.debug('tab.restore.skipped-stale', {
+      restoreTabId: tab.id,
+      activeTabId: activeTabId.value,
+    });
+    return;
+  }
+
+  if (headingNavigationFrame !== undefined) {
+    window.cancelAnimationFrame(headingNavigationFrame);
+    headingNavigationFrame = undefined;
+  }
+  lockedActiveHeadingId = '';
+  prepareActiveTabTreeState(tab);
+  const restoredActiveHeadingId = flattenHeadingIds(headingTree.value).has(tab.activeHeadingId)
+    ? tab.activeHeadingId
+    : '';
+  activeHeadingId.value = restoredActiveHeadingId;
+  activeEditorLine.value = tab.cursorPosition.lineNumber;
+  activeEditorColumn.value = tab.cursorPosition.column;
+  if (options.focus || tab.cursorPosition.lineNumber !== 1 || tab.cursorPosition.column !== 1) {
+    editor.value?.setCursorPosition(tab.cursorPosition, { focus: false });
+    if (options.focus) {
+      editor.value?.focus();
+    }
+  }
+  rendererLog.debug('tab.restore.applied', {
+    tabId: tab.id,
+    editorScrollTop: tab.editorScrollTop,
+    previewScrollTop: tab.previewScrollTop,
+    tocScrollTop: tab.tocScrollTop,
+    cursorPosition: tab.cursorPosition,
+    activeHeadingId: activeHeadingId.value,
+  });
+  restoreDocumentScroll(tab);
+  if (restoredActiveHeadingId) {
+    activeHeadingId.value = restoredActiveHeadingId;
+    tab.activeHeadingId = restoredActiveHeadingId;
+  }
+}
+
+function scheduleActiveTabRestore(tabId: string, options: { focus?: boolean } = {}): void {
+  const restoreRevision = activeViewRevision;
+  void nextTick(() => {
+    const tab = openTabs.value.find((item) => item.id === tabId);
+    if (!tab || activeTabId.value !== tabId || restoreRevision !== activeViewRevision) {
+      rendererLog.debug('tab.restore.skipped-stale', {
+        restoreTabId: tabId,
+        activeTabId: activeTabId.value,
+        restoreRevision,
+        activeViewRevision,
+      });
+      return;
+    }
+    restoreActiveTabState(tab, options);
+  });
 }
 
 function scrollActiveDocumentToTop(): void {
@@ -2217,7 +2337,9 @@ function activateTab(tabId: string): void {
   }
 
   beginDocumentScrollRestore();
+  activeViewRevision += 1;
   activeTabId.value = tab.id;
+  prepareActiveTabTreeState(tab);
   currentFile.value = tab.file;
   source.value = tab.source;
   lastSavedContent.value = tab.lastSavedContent;
@@ -2236,10 +2358,8 @@ function activateTab(tabId: string): void {
     ...forcedEditorPatchForFile(tab.file),
   }, { syncActive: false });
   void refreshImageAssets(tab.file.path ?? undefined);
-  void nextTick(() => {
-    restoreDocumentScroll(tab);
-    void renderMermaid();
-  });
+  scheduleActiveTabRestore(tab.id, { focus: true });
+  void renderMermaid();
 }
 
 function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolean; persist?: boolean } = {}): void {
@@ -2269,6 +2389,9 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
       existing.editorScrollTop = 0;
       existing.previewScrollTop = 0;
       existing.tocScrollTop = 0;
+      existing.cursorPosition = { lineNumber: 1, column: 1 };
+      existing.activeHeadingId = '';
+      existing.collapsedHeadingIds = [];
       existing.editorVisible = false;
       existing.previewHidden = false;
       existing.previewFullscreen = false;
@@ -2283,11 +2406,21 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
       editorScrollTop: nextScrollTop,
       previewScrollTop: nextScrollTop,
       tocScrollTop: 0,
+      cursorPosition: { lineNumber: 1, column: 1 },
+      activeHeadingId: '',
+      collapsedHeadingIds: [],
       ...tabViewStateForFile(normalizedFile),
     });
   }
   beginDocumentScrollRestore();
+  activeViewRevision += 1;
   activeTabId.value = tabId;
+  const tabForRestore = openTabs.value.find((tab) => tab.id === tabId);
+  if (tabForRestore) {
+    prepareActiveTabTreeState(tabForRestore);
+  } else {
+    rendererLog.warn('tab.restore.missing', { tabId });
+  }
   currentFile.value = normalizedFile;
   source.value = normalizedFile.content;
   lastSavedContent.value = normalizedFile.content;
@@ -2297,14 +2430,7 @@ function setFile(file: MarkdownFile, scrollTop = 0, options: { external?: boolea
   }
   status.value = normalizedFile.path ?? '未保存的新文档';
   void refreshImageAssets(normalizedFile.path ?? undefined);
-  void nextTick(() => {
-    restoreDocumentScroll(activeTab.value ?? {
-      scrollTop: nextScrollTop,
-      editorScrollTop: nextScrollTop,
-      previewScrollTop: nextScrollTop,
-      tocScrollTop: 0,
-    });
-  });
+  scheduleActiveTabRestore(tabId);
 }
 
 async function closeTabNow(tabId: string): Promise<void> {
@@ -2547,6 +2673,9 @@ function createNewMarkdownTab(content = '', name?: string): void {
     editorScrollTop: 0,
     previewScrollTop: 0,
     tocScrollTop: 0,
+    cursorPosition: { lineNumber: 1, column: 1 },
+    activeHeadingId: '',
+    collapsedHeadingIds: [],
     editorVisible: true,
     previewHidden: false,
     previewFullscreen: false,
@@ -2554,7 +2683,9 @@ function createNewMarkdownTab(content = '', name?: string): void {
   };
   openTabs.value.push(tab);
   beginDocumentScrollRestore();
+  activeViewRevision += 1;
   activeTabId.value = tab.id;
+  prepareActiveTabTreeState(tab);
   currentFile.value = tab.file;
   source.value = tab.source;
   lastSavedContent.value = tab.lastSavedContent;
@@ -2563,12 +2694,8 @@ function createNewMarkdownTab(content = '', name?: string): void {
   isPreviewFullscreen.value = false;
   status.value = '未保存的新 Markdown 文件';
   persistTabSession({ editorVisible: true, previewHidden: false }, { syncActive: false });
-  void nextTick(() => {
-    restoreDocumentScroll(tab);
-    editor.value?.focus();
-    updateActiveHeadingFromPreview();
-    void renderMermaid();
-  });
+  scheduleActiveTabRestore(tab.id);
+  void renderMermaid();
 }
 
 async function openFile(): Promise<void> {
@@ -2624,10 +2751,8 @@ function applyFreshFileContent(file: MarkdownFile, message: string): void {
     scrollTop,
   }, { syncActive: false, deferred: true });
   void refreshImageAssets(file.path ?? undefined);
-  void nextTick(() => {
-    restoreDocumentScroll(tab);
-    void renderMermaid();
-  });
+  scheduleActiveTabRestore(tab.id);
+  void renderMermaid();
 }
 
 function onMarkdownFileChanged(file: MarkdownFile): void {
@@ -5088,6 +5213,9 @@ watch(activeHeadingId, async (id) => {
 watch(headingTree, (nodes) => {
   if (activeHeadingId.value && !flattenHeadingIds(nodes).has(activeHeadingId.value)) {
     activeHeadingId.value = '';
+    if (activeTab.value) {
+      activeTab.value.activeHeadingId = '';
+    }
   }
 });
 
@@ -5113,6 +5241,9 @@ async function restoreSessionTabs(): Promise<boolean> {
         editorScrollTop: tab.editorScrollTop,
         previewScrollTop: tab.previewScrollTop,
         tocScrollTop: tab.tocScrollTop,
+        cursorPosition: { ...tab.cursorPosition },
+        activeHeadingId: tab.activeHeadingId,
+        collapsedHeadingIds: [...tab.collapsedHeadingIds],
         editorVisible: tab.editorVisible,
         previewHidden: tab.previewHidden,
         previewFullscreen: tab.previewFullscreen,
@@ -5130,6 +5261,9 @@ async function restoreSessionTabs(): Promise<boolean> {
         editorScrollTop: tab.editorScrollTop,
         previewScrollTop: tab.previewScrollTop,
         tocScrollTop: tab.tocScrollTop,
+        cursorPosition: { ...tab.cursorPosition },
+        activeHeadingId: tab.activeHeadingId,
+        collapsedHeadingIds: [...tab.collapsedHeadingIds],
         editorVisible: tab.editorVisible,
         previewHidden: tab.previewHidden,
         previewFullscreen: tab.previewFullscreen,
@@ -5150,7 +5284,9 @@ async function restoreSessionTabs(): Promise<boolean> {
     ?? restoredTabs.find((tab) => tab.file.path === desired?.filePath)
     ?? restoredTabs[0];
   beginDocumentScrollRestore();
+  activeViewRevision += 1;
   activeTabId.value = active.id;
+  prepareActiveTabTreeState(active);
   currentFile.value = active.file;
   source.value = active.source;
   lastSavedContent.value = active.lastSavedContent;
@@ -5164,6 +5300,9 @@ async function restoreSessionTabs(): Promise<boolean> {
     editorScrollTop: tab.editorScrollTop,
     previewScrollTop: tab.previewScrollTop,
     tocScrollTop: tab.tocScrollTop,
+    cursorPosition: { ...tab.cursorPosition },
+    activeHeadingId: tab.activeHeadingId,
+    collapsedHeadingIds: [...tab.collapsedHeadingIds],
     editorVisible: tab.editorVisible,
     previewHidden: tab.previewHidden,
     previewFullscreen: tab.previewFullscreen,
@@ -5183,9 +5322,7 @@ async function restoreSessionTabs(): Promise<boolean> {
     ...forcedEditorPatchForFile(active.file),
   });
   void refreshImageAssets(active.file.path ?? undefined);
-  void nextTick(() => {
-    restoreDocumentScroll(active);
-  });
+  scheduleActiveTabRestore(active.id);
   saveSessionNow(session.value);
   return true;
 }
