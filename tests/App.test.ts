@@ -283,6 +283,24 @@ describe('App', () => {
     );
   });
 
+  it('toggles automatic editor suggestions and persists the editor preference', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    const toggle = wrapper.find('[data-testid="toggle-auto-suggestions"]');
+    expect(toggle.classes()).toContain('active');
+
+    await toggle.trigger('click');
+
+    expect(toggle.classes()).not.toContain('active');
+    expect(wrapper.text()).toContain('编辑器自动提示已关闭');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        editorPreferences: expect.objectContaining({ autoSuggestionsEnabled: false }),
+      }),
+    );
+  });
+
   it('defaults rich text paste conversion off and persists the selected mode', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();

@@ -6,6 +6,7 @@ describe('MarkdownMonacoEditor scroll coordinates', () => {
   it('exposes a continuous source line position at the current editor scroll position', () => {
     const wrapper = mount(MarkdownMonacoEditor, {
       props: {
+        autoSuggestionsEnabled: true,
         bookmarkLineNumbers: [],
         configText: '{}',
         language: 'markdown',
@@ -26,6 +27,7 @@ describe('MarkdownMonacoEditor scroll coordinates', () => {
   it('restores a cursor without stealing focus when requested', () => {
     const wrapper = mount(MarkdownMonacoEditor, {
       props: {
+        autoSuggestionsEnabled: true,
         bookmarkLineNumbers: [],
         configText: '{}',
         language: 'markdown',

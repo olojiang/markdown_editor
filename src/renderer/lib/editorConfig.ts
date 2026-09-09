@@ -1,4 +1,5 @@
 export interface EditorPreferences {
+  autoSuggestionsEnabled: boolean;
   vimEnabled: boolean;
   configText: string;
   richTextPasteEnabled: boolean;
@@ -28,6 +29,7 @@ export const defaultEditorConfigText = JSON.stringify({
 }, null, 2);
 
 export const defaultEditorPreferences: EditorPreferences = {
+  autoSuggestionsEnabled: true,
   vimEnabled: false,
   configText: defaultEditorConfigText,
   richTextPasteEnabled: false,
@@ -75,6 +77,7 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
 
   const candidate = value as Partial<EditorPreferences>;
   return {
+    autoSuggestionsEnabled: candidate.autoSuggestionsEnabled !== false,
     vimEnabled: candidate.vimEnabled === true,
     configText: typeof candidate.configText === 'string' && candidate.configText.trim()
       ? candidate.configText

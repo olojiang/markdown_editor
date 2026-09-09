@@ -36,6 +36,7 @@ describe('session helpers', () => {
       previewHidden: false,
       editorVisible: false,
       editorPreferences: {
+        autoSuggestionsEnabled: true,
         vimEnabled: false,
         configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
         richTextPasteEnabled: false,
@@ -62,6 +63,7 @@ describe('session helpers', () => {
       previewHidden: false,
       editorVisible: false,
       editorPreferences: {
+        autoSuggestionsEnabled: true,
         vimEnabled: false,
         configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
         richTextPasteEnabled: false,
@@ -277,6 +279,7 @@ describe('session helpers', () => {
         vimEnabled: true,
         configText: '{ "tabSize": 4, "wordWrap": "off", "minimap": true }',
         richTextPasteEnabled: false,
+        autoSuggestionsEnabled: false,
       },
     }, {})).toEqual(
       expect.objectContaining({
@@ -284,6 +287,7 @@ describe('session helpers', () => {
           vimEnabled: true,
           configText: '{ "tabSize": 4, "wordWrap": "off", "minimap": true }',
           richTextPasteEnabled: false,
+          autoSuggestionsEnabled: false,
         },
       }),
     );
@@ -300,6 +304,7 @@ describe('session helpers', () => {
           vimEnabled: false,
           configText: '{\n  "tabSize": 2,\n  "wordWrap": "on",\n  "minimap": false\n}',
           richTextPasteEnabled: false,
+          autoSuggestionsEnabled: true,
         },
       }),
     );

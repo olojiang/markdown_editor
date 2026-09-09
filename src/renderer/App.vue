@@ -263,6 +263,7 @@ const icons = {
   bold: 'M6 4h8a4 4 0 0 1 0 8H6zm0 8h9a4 4 0 0 1 0 8H6z',
   italic: 'M19 4h-9 M14 20H5 M15 4L9 20',
   heading: 'M6 12h12 M6 4v16 M18 4v16',
+  lightbulb: 'M9 18h6 M10 22h4 M8.2 14.5A7 7 0 1 1 15.8 14.5c-.9.8-1.5 1.6-1.7 2.5h-4.2c-.2-.9-.8-1.7-1.7-2.5z',
   quote: 'M17 6H3 M21 12H8 M21 18H8 M3 12v6',
   listOrdered: 'M10 6h11 M10 12h11 M10 18h11 M4 6h1v4 M4 10h2 M6 18H4c0-1 2-2 2-3s-1-1.5-2-1',
   listUnordered: 'M8 6h13 M8 12h13 M8 18h13 M3 6h.01 M3 12h.01 M3 18h.01',
@@ -1287,6 +1288,7 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
     previewHidden: normalized.previewHidden,
     editorVisible: normalized.editorVisible,
     editorPreferences: {
+      autoSuggestionsEnabled: normalized.editorPreferences.autoSuggestionsEnabled,
       vimEnabled: normalized.editorPreferences.vimEnabled,
       configText: normalized.editorPreferences.configText,
       richTextPasteEnabled: normalized.editorPreferences.richTextPasteEnabled,
@@ -3987,10 +3989,20 @@ function persistEditorPreferences(patch: Partial<MarkdownSession['editorPreferen
   };
   persistSession({ editorPreferences });
   rendererLog.info('editor.preferences.persisted', {
+    autoSuggestionsEnabled: editorPreferences.autoSuggestionsEnabled,
     configLength: editorPreferences.configText.length,
     richTextPasteEnabled: editorPreferences.richTextPasteEnabled,
     vimEnabled: editorPreferences.vimEnabled,
   });
+}
+
+function setAutoSuggestionsEnabled(enabled: boolean): void {
+  if (session.value.editorPreferences.autoSuggestionsEnabled === enabled) {
+    return;
+  }
+
+  persistEditorPreferences({ autoSuggestionsEnabled: enabled });
+  status.value = enabled ? '编辑器自动提示已开启' : '编辑器自动提示已关闭';
 }
 
 function toggleVimMode(): void {
@@ -5796,6 +5808,17 @@ onBeforeUnmount(() => {
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.bookmark" /></svg>
             </button>
             <button
+              data-testid="toggle-auto-suggestions"
+              class="icon-button"
+              type="button"
+              :class="{ active: session.editorPreferences.autoSuggestionsEnabled }"
+              :aria-label="session.editorPreferences.autoSuggestionsEnabled ? '关闭编辑器自动提示' : '开启编辑器自动提示'"
+              :title="session.editorPreferences.autoSuggestionsEnabled ? '关闭编辑器自动提示' : '开启编辑器自动提示'"
+              @click="setAutoSuggestionsEnabled(!session.editorPreferences.autoSuggestionsEnabled)"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.lightbulb" /></svg>
+            </button>
+            <button
               data-testid="toggle-vim-mode"
               class="icon-button"
               type="button"
@@ -5943,6 +5966,7 @@ onBeforeUnmount(() => {
             ref="editor"
             v-model="source"
             :bookmark-line-numbers="currentFileBookmarkLines"
+            :auto-suggestions-enabled="session.editorPreferences.autoSuggestionsEnabled"
             :config-text="session.editorPreferences.configText"
             :language="currentEditorLanguage"
             :theme="session.theme"

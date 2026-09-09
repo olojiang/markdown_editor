@@ -39,6 +39,7 @@ interface CursorPosition {
 }
 
 const props = defineProps<{
+  autoSuggestionsEnabled: boolean;
   bookmarkLineNumbers: number[];
   configText: string;
   language: string;
@@ -99,6 +100,8 @@ async function loadMonacoEditor(): Promise<typeof Monaco> {
 function monacoOptions(config: ParsedEditorConfig): Monaco.editor.IStandaloneEditorConstructionOptions {
   return {
     automaticLayout: true,
+    quickSuggestions: props.autoSuggestionsEnabled,
+    suggestOnTriggerCharacters: props.autoSuggestionsEnabled,
     detectIndentation: false,
     fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
     fontSize: config.fontSize,
@@ -815,6 +818,8 @@ watch(() => props.configText, () => {
 watch(() => props.vimEnabled, () => {
   void syncVimMode();
 });
+
+watch(() => props.autoSuggestionsEnabled, applyConfig);
 
 watch(() => props.bookmarkLineNumbers, () => {
   syncBookmarkDecorations();

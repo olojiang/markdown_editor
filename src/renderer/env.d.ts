@@ -145,6 +145,7 @@ interface MarkdownSession {
   previewHidden: boolean;
   editorVisible: boolean;
   editorPreferences?: {
+    autoSuggestionsEnabled?: boolean;
     vimEnabled: boolean;
     configText: string;
     richTextPasteEnabled?: boolean;
