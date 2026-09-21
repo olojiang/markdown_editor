@@ -56,6 +56,21 @@ describe('renderMarkdown', () => {
     expect(html).toContain('<strong>类型安全约束答案形式，不保证语义正确。</strong>');
   });
 
+  it('renders Chinese emphasis before punctuation-adjacent CJK text', () => {
+    const html = renderMarkdown([
+      '**NanoJev 适合“问题明确、答案类型有限，代码要据此分支”的判断任务。**它不负责长篇生成。',
+      '**优先考虑：**高频、结构化；',
+      '**先别选它：**要生成自然语言报告。',
+    ].join('\n'));
+
+    expect(html.match(/<strong>/g)).toHaveLength(3);
+    expect(html).toContain('<strong>NanoJev 适合“问题明确、答案类型有限，代码要据此分支”的判断任务。</strong>它');
+    expect(html).toContain('<strong>优先考虑：</strong>高频、结构化；');
+    expect(html).toContain('<strong>先别选它：</strong>要生成自然语言报告。');
+    expect(html).not.toContain('**');
+    expect(html).not.toMatch(/[\uE000-\uF8FF]/u);
+  });
+
   it('does not normalize strong delimiters inside code', () => {
     const html = renderMarkdown('`** literal **`\n\n```text\n** literal **\n```');
 

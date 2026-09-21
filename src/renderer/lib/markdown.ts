@@ -128,7 +128,7 @@ function isEscaped(value: string, index: number): boolean {
   return backslashes % 2 === 1;
 }
 
-function normalizeStrongEmphasisLine(line: string): string {
+function normalizeStrongEmphasisLine(line: string, boundaryMarker: string): string {
   const markers: Array<{ end: number; start: number; value: string }> = [];
   let codeSpanLength = 0;
 
@@ -156,6 +156,7 @@ function normalizeStrongEmphasisLine(line: string): string {
   }
 
   const removals: Array<{ end: number; start: number }> = [];
+  const insertions: number[] = [];
   const openMarkers = new Map<string, number>();
   markers.forEach((marker) => {
     const openIndex = openMarkers.get(marker.value);
@@ -174,16 +175,31 @@ function normalizeStrongEmphasisLine(line: string): string {
       if (trailingWhitespace > 0) {
         removals.push({ start: marker.start - trailingWhitespace, end: marker.start });
       }
+
+      const trailingCharacter = Array.from(content.trimEnd()).at(-1);
+      const followingCharacter = Array.from(line.slice(marker.end))[0];
+      if (
+        trailingCharacter && /[\p{P}\p{S}]/u.test(trailingCharacter)
+        && followingCharacter && !/\s/u.test(followingCharacter)
+        && !/[\p{P}\p{S}]/u.test(followingCharacter)
+      ) {
+        insertions.push(marker.start);
+      }
     }
     openMarkers.delete(marker.value);
   });
 
-  return removals
-    .sort((left, right) => right.start - left.start)
-    .reduce((normalized, removal) => `${normalized.slice(0, removal.start)}${normalized.slice(removal.end)}`, line);
+  const edits = [
+    ...removals.map((removal) => ({ ...removal, value: '' })),
+    ...insertions.map((start) => ({ end: start, start, value: boundaryMarker })),
+  ].sort((left, right) => right.start - left.start);
+
+  return edits.reduce((normalized, edit) => (
+    `${normalized.slice(0, edit.start)}${edit.value}${normalized.slice(edit.end)}`
+  ), line);
 }
 
-function normalizeStrongEmphasisSpacing(markdown: string): string {
+function normalizeStrongEmphasisSpacing(markdown: string, boundaryMarker: string): string {
   let fence: { marker: string; length: number } | null = null;
 
   return markdown.split('\n').map((line) => {
@@ -197,8 +213,16 @@ function normalizeStrongEmphasisSpacing(markdown: string): string {
       return line;
     }
 
-    return fence ? line : normalizeStrongEmphasisLine(line);
+    return fence ? line : normalizeStrongEmphasisLine(line, boundaryMarker);
   }).join('\n');
+}
+
+function createStrongBoundaryMarker(markdown: string): string {
+  let marker = '\uE000';
+  while (markdown.includes(marker)) {
+    marker += '\uE000';
+  }
+  return marker;
 }
 
 const languageAliases = new Map([
@@ -644,7 +668,8 @@ export function filterHeadingTree(nodes: HeadingNode[], query: string): HeadingN
 
 export function renderMarkdown(markdown: string): string {
   const md = new MarkdownIt({ breaks: true, html: false, linkify: true, typographer: true });
-  const normalizedMarkdown = normalizeStrongEmphasisSpacing(markdown);
+  const strongBoundaryMarker = createStrongBoundaryMarker(markdown);
+  const normalizedMarkdown = normalizeStrongEmphasisSpacing(markdown, strongBoundaryMarker);
   const slug = createSlugger();
   const sourceLineTokenTypes = new Set([
     'blockquote_open',
@@ -754,5 +779,5 @@ export function renderMarkdown(markdown: string): string {
     return `${self.renderToken(tokens, index, options)}</div>`;
   };
 
-  return md.render(normalizedMarkdown);
+  return md.render(normalizedMarkdown).replaceAll(strongBoundaryMarker, '');
 }
