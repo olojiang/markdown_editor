@@ -120,6 +120,87 @@ export function normalizeMermaidSource(source: string): string {
   return normalizeQuadrantChartSource(normalizeFlowchartSource(sequenceNormalized));
 }
 
+function isEscaped(value: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === '\\'; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function normalizeStrongEmphasisLine(line: string): string {
+  const markers: Array<{ end: number; start: number; value: string }> = [];
+  let codeSpanLength = 0;
+
+  for (let index = 0; index < line.length;) {
+    if (line[index] === '`' && !isEscaped(line, index)) {
+      let end = index + 1;
+      while (line[end] === '`') {
+        end += 1;
+      }
+      const delimiterLength = end - index;
+      codeSpanLength = codeSpanLength === delimiterLength ? 0 : codeSpanLength || delimiterLength;
+      index = end;
+      continue;
+    }
+
+    if (codeSpanLength === 0 && !isEscaped(line, index)) {
+      const marker = line.slice(index, index + 2);
+      if (marker === '**' || marker === '__') {
+        markers.push({ end: index + 2, start: index, value: marker });
+        index += 2;
+        continue;
+      }
+    }
+    index += 1;
+  }
+
+  const removals: Array<{ end: number; start: number }> = [];
+  const openMarkers = new Map<string, number>();
+  markers.forEach((marker) => {
+    const openIndex = openMarkers.get(marker.value);
+    if (openIndex === undefined) {
+      openMarkers.set(marker.value, marker.end);
+      return;
+    }
+
+    const content = line.slice(openIndex, marker.start);
+    if (content.trim()) {
+      const leadingWhitespace = content.match(/^\s+/)?.[0].length ?? 0;
+      const trailingWhitespace = content.match(/\s+$/)?.[0].length ?? 0;
+      if (leadingWhitespace > 0) {
+        removals.push({ start: openIndex, end: openIndex + leadingWhitespace });
+      }
+      if (trailingWhitespace > 0) {
+        removals.push({ start: marker.start - trailingWhitespace, end: marker.start });
+      }
+    }
+    openMarkers.delete(marker.value);
+  });
+
+  return removals
+    .sort((left, right) => right.start - left.start)
+    .reduce((normalized, removal) => `${normalized.slice(0, removal.start)}${normalized.slice(removal.end)}`, line);
+}
+
+function normalizeStrongEmphasisSpacing(markdown: string): string {
+  let fence: { marker: string; length: number } | null = null;
+
+  return markdown.split('\n').map((line) => {
+    const fenceMarker = line.match(/^ {0,3}(`{3,}|~{3,})/)?.[1];
+    if (fenceMarker) {
+      if (!fence) {
+        fence = { marker: fenceMarker[0], length: fenceMarker.length };
+      } else if (fenceMarker[0] === fence.marker && fenceMarker.length >= fence.length) {
+        fence = null;
+      }
+      return line;
+    }
+
+    return fence ? line : normalizeStrongEmphasisLine(line);
+  }).join('\n');
+}
+
 const languageAliases = new Map([
   ['bash', 'shell'],
   ['cjs', 'javascript'],
@@ -563,6 +644,7 @@ export function filterHeadingTree(nodes: HeadingNode[], query: string): HeadingN
 
 export function renderMarkdown(markdown: string): string {
   const md = new MarkdownIt({ breaks: true, html: false, linkify: true, typographer: true });
+  const normalizedMarkdown = normalizeStrongEmphasisSpacing(markdown);
   const slug = createSlugger();
   const sourceLineTokenTypes = new Set([
     'blockquote_open',
@@ -672,5 +754,5 @@ export function renderMarkdown(markdown: string): string {
     return `${self.renderToken(tokens, index, options)}</div>`;
   };
 
-  return md.render(markdown);
+  return md.render(normalizedMarkdown);
 }

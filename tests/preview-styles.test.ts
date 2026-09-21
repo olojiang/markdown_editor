@@ -25,4 +25,14 @@ describe('preview styles', () => {
     expect(previewStyles).toContain('li > ul,');
     expect(previewStyles).toContain('padding-left: 1.1em;');
   });
+
+  it('sizes Markdown table columns from their content', () => {
+    const stylesSource = fs.readFileSync('src/renderer/styles.less', 'utf8');
+    const previewStart = stylesSource.indexOf('.preview {');
+    const previewEnd = stylesSource.indexOf('.html-preview-frame', previewStart);
+    const previewStyles = stylesSource.slice(previewStart, previewEnd);
+
+    expect(previewStyles).toMatch(/table-layout:\s*auto;/);
+    expect(previewStyles).not.toMatch(/table-layout:\s*fixed;/);
+  });
 });

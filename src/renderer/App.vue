@@ -281,6 +281,7 @@ const previewZoom = ref(1);
 const activeMermaidDiagram = shallowRef<ActiveMermaidDiagram | null>(null);
 const activeImagePreview = shallowRef<ActiveImagePreview | null>(null);
 const preview = ref<HTMLElement | null>(null);
+const activeMermaidDiagramIndex = ref(0);
 const tocScroller = ref<HTMLElement | null>(null);
 const editor = ref<EditorSurface | null>(null);
 const status = ref('请选择或打开一个支持的文档');
@@ -328,6 +329,8 @@ let isNavigatingCursorHistory = false;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
 let isRestoringDocumentScroll = false;
+let isMermaidNavigationInProgress = false;
+let mermaidNavigationTimer: number | undefined;
 let activeViewRevision = 0;
 let removeExternalOpenListener: (() => void) | undefined;
 let removeMarkdownFileChangedListener: (() => void) | undefined;
@@ -363,6 +366,7 @@ const currentEncoding = computed(() => normalizeTextEncoding(currentFile.value?.
 const currentEncodingLabel = computed(() => textEncodingLabel(currentEncoding.value));
 const hasPreviewPane = computed(() => isPreviewableDocumentKind(currentDocumentKind.value));
 const previewHtml = computed(() => rewriteLocalImageSources(`${renderDocumentPreview(source.value, currentDocumentKind.value)}<!-- theme:${session.value.theme} -->`));
+const mermaidDiagramCount = computed(() => previewHtml.value.match(/class="mermaid-panzoom"/g)?.length ?? 0);
 const headingTree = computed(() => applyCollapsedState(buildDocumentHeadingTree(source.value, currentDocumentKind.value)));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
 const title = computed(() => currentFile.value?.name ?? 'Markdown 纪');
@@ -1846,6 +1850,43 @@ function previewNodeScrollTop(node: HTMLElement, container: HTMLElement): number
   return Math.max(0, node.offsetTop);
 }
 
+function mermaidContainers(): HTMLElement[] {
+  return Array.from(preview.value?.querySelectorAll<HTMLElement>('.mermaid-panzoom') ?? []);
+}
+
+function updateActiveMermaidDiagramIndex(): void {
+  const container = preview.value;
+  const diagrams = mermaidContainers();
+  if (!container || diagrams.length === 0) {
+    activeMermaidDiagramIndex.value = 0;
+    return;
+  }
+
+  const markerTop = container.scrollTop + 48;
+  activeMermaidDiagramIndex.value = diagrams.reduce((activeIndex, diagram, index) => (
+    previewNodeScrollTop(diagram, container) <= markerTop ? index : activeIndex
+  ), 0);
+}
+
+function navigateToMermaidDiagram(index: number): void {
+  const container = preview.value;
+  const diagram = mermaidContainers()[index];
+  if (!container || !diagram) {
+    return;
+  }
+
+  activeMermaidDiagramIndex.value = index;
+  isMermaidNavigationInProgress = true;
+  if (mermaidNavigationTimer !== undefined) {
+    window.clearTimeout(mermaidNavigationTimer);
+  }
+  mermaidNavigationTimer = window.setTimeout(() => {
+    isMermaidNavigationInProgress = false;
+    mermaidNavigationTimer = undefined;
+  }, 800);
+  container.scrollTo({ top: Math.max(0, previewNodeScrollTop(diagram, container) - 24) });
+}
+
 function previewAnchors(): ScrollAnchor[] {
   const container = preview.value;
   if (!container) {
@@ -2019,6 +2060,17 @@ function onEditorFocusLineChange(): void {
 function onPreviewScroll(event: Event): void {
   if (isRestoringDocumentScroll) {
     return;
+  }
+  if (isMermaidNavigationInProgress) {
+    if (mermaidNavigationTimer !== undefined) {
+      window.clearTimeout(mermaidNavigationTimer);
+    }
+    mermaidNavigationTimer = window.setTimeout(() => {
+      isMermaidNavigationInProgress = false;
+      mermaidNavigationTimer = undefined;
+    }, 120);
+  } else {
+    updateActiveMermaidDiagramIndex();
   }
   updateActiveHeadingFromPreview();
   syncScroll('preview');
@@ -5372,6 +5424,9 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  if (mermaidNavigationTimer !== undefined) {
+    window.clearTimeout(mermaidNavigationTimer);
+  }
   if (scrollSyncFrame !== undefined) {
     window.cancelAnimationFrame(scrollSyncFrame);
   }
@@ -6009,6 +6064,46 @@ onBeforeUnmount(() => {
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.search" /></svg>
             </button>
           </div>
+          <nav v-if="mermaidDiagramCount > 1" class="mermaid-navigation" data-testid="mermaid-navigation" aria-label="Mermaid 图导航">
+            <button
+              class="icon-button mermaid-navigation__previous"
+              data-testid="mermaid-previous"
+              type="button"
+              aria-label="上一张 Mermaid 图"
+              title="上一张 Mermaid 图"
+              :disabled="activeMermaidDiagramIndex === 0"
+              @click="navigateToMermaidDiagram(activeMermaidDiagramIndex - 1)"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.chevronRight" /></svg>
+            </button>
+            <div class="mermaid-page-indicators" role="group" aria-label="选择 Mermaid 图">
+              <button
+                v-for="index in mermaidDiagramCount"
+                :key="index"
+                class="mermaid-page-dot"
+                :class="{ active: activeMermaidDiagramIndex === index - 1 }"
+                :data-testid="`mermaid-page-dot-${index - 1}`"
+                type="button"
+                :aria-label="`跳转到第 ${index} 张 Mermaid 图`"
+                :aria-current="activeMermaidDiagramIndex === index - 1 ? 'page' : undefined"
+                :title="`第 ${index} 张 Mermaid 图`"
+                @click="navigateToMermaidDiagram(index - 1)"
+              >
+                <span aria-hidden="true" />
+              </button>
+            </div>
+            <button
+              class="icon-button"
+              data-testid="mermaid-next"
+              type="button"
+              aria-label="下一张 Mermaid 图"
+              title="下一张 Mermaid 图"
+              :disabled="activeMermaidDiagramIndex >= mermaidDiagramCount - 1"
+              @click="navigateToMermaidDiagram(activeMermaidDiagramIndex + 1)"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.chevronRight" /></svg>
+            </button>
+          </nav>
           <button
             data-testid="fullscreen-preview"
             class="icon-button"

@@ -48,6 +48,21 @@ describe('buildHeadingTree', () => {
 });
 
 describe('renderMarkdown', () => {
+  it('renders strong text when a closing delimiter has whitespace before it', () => {
+    const html = renderMarkdown('**类型安全约束答案形式，不保证语义正确。 ** **候选分数总为 100%，不等于现实正确率 100%。**');
+
+    expect(html.match(/<strong>/g)).toHaveLength(2);
+    expect(html).not.toContain('**');
+    expect(html).toContain('<strong>类型安全约束答案形式，不保证语义正确。</strong>');
+  });
+
+  it('does not normalize strong delimiters inside code', () => {
+    const html = renderMarkdown('`** literal **`\n\n```text\n** literal **\n```');
+
+    expect(html).toContain('<code>** literal **</code>');
+    expect(html).toContain('<code>** literal **');
+  });
+
   it('renders headings with ids and replaces mermaid fences with diagrams', () => {
     const html = renderMarkdown('# Flow\n\n```mermaid\ngraph TD\nA-->B\n```');
 

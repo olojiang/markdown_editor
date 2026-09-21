@@ -1754,6 +1754,59 @@ describe('App', () => {
     expect(wrapper.classes()).toContain('preview-fullscreen');
   });
 
+  it('navigates between Mermaid diagrams with arrows and page dots', async () => {
+    const content = [
+      '# Diagrams',
+      '',
+      '```mermaid',
+      'graph TD\nA-->B',
+      '```',
+      '',
+      '```mermaid',
+      'graph TD\nC-->D',
+      '```',
+      '',
+      '```mermaid',
+      'graph TD\nE-->F',
+      '```',
+    ].join('\n');
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="editor"]').setValue(content);
+    await vi.dynamicImportSettled();
+
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
+    const diagrams = wrapper.findAll<HTMLElement>('.mermaid-panzoom');
+    diagrams.forEach((diagram, index) => {
+      Object.defineProperty(diagram.element, 'offsetTop', { configurable: true, value: (index + 1) * 400 });
+    });
+    Object.defineProperty(preview, 'scrollTo', {
+      configurable: true,
+      value: vi.fn(({ top }: ScrollToOptions) => {
+        preview.scrollTop = top ?? 0;
+      }),
+    });
+    preview.scrollTop = 0;
+    await wrapper.find('[data-testid="preview"]').trigger('scroll');
+
+    expect(wrapper.findAll('.mermaid-page-dot')).toHaveLength(3);
+    expect(wrapper.findAll('.mermaid-page-dot')[0].attributes('aria-current')).toBe('page');
+
+    await wrapper.find('[data-testid="mermaid-next"]').trigger('click');
+    expect(preview.scrollTop).toBe(776);
+    expect(wrapper.findAll('.mermaid-page-dot')[1].attributes('aria-current')).toBe('page');
+    await wrapper.find('[data-testid="preview"]').trigger('scroll');
+    expect(wrapper.findAll('.mermaid-page-dot')[1].attributes('aria-current')).toBe('page');
+
+    await wrapper.findAll('.mermaid-page-dot')[2].trigger('click');
+    expect(preview.scrollTop).toBe(1176);
+    expect(wrapper.findAll('.mermaid-page-dot')[2].attributes('aria-current')).toBe('page');
+
+    await wrapper.find('[data-testid="mermaid-previous"]').trigger('click');
+    expect(preview.scrollTop).toBe(776);
+    expect(wrapper.findAll('.mermaid-page-dot')[1].attributes('aria-current')).toBe('page');
+  });
+
   it('opens rendered Mermaid diagrams in fullscreen', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
