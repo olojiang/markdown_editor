@@ -17,9 +17,56 @@ import {
   normalizeSession,
   normalizeSessionTabs,
   removeRecentFile,
+  renameSessionFileReferences,
 } from '@/renderer/lib/session';
 
 describe('session helpers', () => {
+  it('moves saved session references to a renamed file without changing unrelated entries', () => {
+    const oldPath = '/docs/readme.md';
+    const nextPath = '/docs/guide.md';
+    const session = {
+      ...createDefaultSession(),
+      recentFiles: [oldPath, '/docs/other.md'],
+      bookmarks: [{
+        id: 'bookmark-1',
+        tabId: `file:${oldPath}`,
+        filePath: oldPath,
+        fileName: 'readme.md',
+        lineNumber: 1,
+        column: 1,
+        excerpt: '# Readme',
+        createdAt: 1,
+        updatedAt: 2,
+      }],
+      fileEncodings: [
+        { filePath: oldPath, encoding: 'gbk', customized: true, updatedAt: 3 },
+        { filePath: '/docs/other.md', encoding: 'utf-8', customized: false, updatedAt: 4 },
+      ],
+      fileScrollPositions: [
+        { filePath: oldPath, scrollTop: 42, updatedAt: 5 },
+        { filePath: '/docs/other.md', scrollTop: 12, updatedAt: 6 },
+      ],
+    };
+
+    expect(renameSessionFileReferences(session, oldPath, nextPath, 'guide.md')).toEqual({
+      recentFiles: [nextPath, '/docs/other.md'],
+      bookmarks: [expect.objectContaining({
+        tabId: `file:${nextPath}`,
+        filePath: nextPath,
+        fileName: 'guide.md',
+      })],
+      fileEncodings: [
+        { filePath: nextPath, encoding: 'gbk', customized: true, updatedAt: 3 },
+        { filePath: '/docs/other.md', encoding: 'utf-8', customized: false, updatedAt: 4 },
+      ],
+      fileScrollPositions: [
+        { filePath: nextPath, scrollTop: 42, updatedAt: 5 },
+        { filePath: '/docs/other.md', scrollTop: 12, updatedAt: 6 },
+      ],
+    });
+    expect(session.recentFiles).toContain(oldPath);
+  });
+
   it('creates an empty session when no previous file exists', () => {
     expect(createDefaultSession()).toEqual({
       filePath: null,

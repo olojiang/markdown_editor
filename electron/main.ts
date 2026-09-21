@@ -16,6 +16,11 @@ import {
   rotateSessionBackupsSync,
   sessionBackupCount,
 } from './session-storage';
+import {
+  isSupportedDocumentPath,
+  renameDocumentFile,
+  supportedDocumentExtensions,
+} from './file-operations';
 
 interface MarkdownSession {
   filePath: string | null;
@@ -187,7 +192,6 @@ if (process.env.MARKDOWN_EDITOR_USER_DATA_DIR) {
   app.setPath('userData', process.env.MARKDOWN_EDITOR_USER_DATA_DIR);
 }
 const imageAssetExtensions = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
-const supportedDocumentExtensions = ['md', 'markdown', 'mdown', 'html', 'htm', 'txt', 'text', 'json'];
 const imageMimeTypes = new Map([
   ['.avif', 'image/avif'],
   ['.gif', 'image/gif'],
@@ -891,10 +895,6 @@ function writeSessionSnapshotSync(session: MarkdownSession, requestId: number, s
     }
     throw error;
   }
-}
-
-function isSupportedDocumentPath(filePath: string): boolean {
-  return supportedDocumentExtensions.includes(path.extname(filePath).slice(1).toLowerCase());
 }
 
 function markdownPathFromLaunchValue(value: string): string | null {
@@ -1975,6 +1975,15 @@ ipcMain.handle('markdown:save', async (_event, filePath: string, content: string
   const normalizedEncoding = normalizeTextEncoding(encoding);
   await fs.writeFile(filePath, encodeTextBuffer(content, normalizedEncoding));
   return readMarkdownFile(filePath, normalizedEncoding);
+});
+
+ipcMain.handle('markdown:rename', async (_event, filePath: string, newName: string) => {
+  const resolvedPath = path.resolve(filePath);
+  const encoding = markdownFileEncodings.get(resolvedPath);
+  const renamedPath = await renameDocumentFile(resolvedPath, newName);
+  closeMarkdownWatcher(resolvedPath);
+  markdownFileEncodings.delete(resolvedPath);
+  return readMarkdownFile(renamedPath, encoding);
 });
 
 ipcMain.handle('markdown:save-as', async (_event, content: string, defaultName: string, encoding?: string) => {

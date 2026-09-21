@@ -73,6 +73,50 @@ test('opens a markdown file supplied as a launch argument', async () => {
   }
 });
 
+test('renames an open file from its context menu without overwriting another document', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-rename-e2e-'));
+  const sourcePath = path.join(tempDir, 'readme.md');
+  const renamedPath = path.join(tempDir, 'guide.md');
+  const existingPath = path.join(tempDir, 'existing.md');
+  const sourceContent = '# Rename E2E\n\nThe file contents should survive a rename.';
+  const existingContent = '# Existing';
+  await fs.writeFile(sourcePath, sourceContent, 'utf8');
+  await fs.writeFile(existingPath, existingContent, 'utf8');
+  const launched = await launchEditor(['.', pathToFileURL(sourcePath).href]);
+
+  try {
+    const page = await launched.app.firstWindow();
+    const tab = page.getByTestId('tab-readme.md');
+    await expect(tab).toBeVisible();
+    await tab.click({ button: 'right' });
+    await expect(page.getByTestId('tab-context-menu')).toBeVisible();
+    await expect(page.getByTestId('tab-rename').locator('svg')).toBeVisible();
+    await page.screenshot({ path: '/tmp/markdown-editor-rename-context-menu.png' });
+
+    await page.getByTestId('tab-rename').click();
+    await expect(page.getByTestId('rename-file-dialog')).toBeVisible();
+    await page.screenshot({ path: '/tmp/markdown-editor-rename-dialog.png' });
+    await page.getByTestId('rename-file-input').fill('guide.md');
+    await page.getByTestId('rename-file-input').press('Enter');
+
+    await expect(page.getByTestId('tab-guide.md')).toBeVisible();
+    await expect.poll(() => fs.readFile(renamedPath, 'utf8')).toBe(sourceContent);
+    await expect(fs.access(sourcePath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await page.getByTestId('tab-guide.md').click({ button: 'right' });
+    await page.getByTestId('tab-rename').click();
+    await page.getByTestId('rename-file-input').fill('existing.md');
+    await page.getByTestId('rename-file-input').press('Enter');
+
+    await expect(page.getByTestId('rename-file-error')).toContainText('同名文件已存在');
+    await expect.poll(() => fs.readFile(renamedPath, 'utf8')).toBe(sourceContent);
+    await expect.poll(() => fs.readFile(existingPath, 'utf8')).toBe(existingContent);
+  } finally {
+    await closeEditor(launched);
+    await fs.rm(tempDir, { force: true, recursive: true });
+  }
+});
+
 test('keeps the preview pane aligned after collapsing the table of contents', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-collapsed-toc-'));
   const markdownPath = path.join(tempDir, 'collapsed toc.md');

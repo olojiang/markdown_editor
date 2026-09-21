@@ -129,6 +129,11 @@ describe('App', () => {
         name: defaultName,
         content,
       })),
+      renameMarkdownFile: vi.fn().mockImplementation(async (filePath: string, newName: string) => ({
+        path: `${filePath.slice(0, filePath.lastIndexOf('/') + 1)}${newName}`,
+        name: newName,
+        content: openFile.content,
+      })),
       revealInFolder: vi.fn().mockResolvedValue(undefined),
       openExternalLink: vi.fn().mockResolvedValue(true),
       htmlPreviewUrl: vi.fn().mockImplementation(async ({ filePath }: { filePath: string | null; content: string }) =>
@@ -3430,6 +3435,109 @@ describe('App', () => {
     await wrapper.find('[data-testid="tab-save-as"]').trigger('click');
     await vi.dynamicImportSettled();
     expect(window.markdownBridge?.saveMarkdownFileAs).toHaveBeenCalledWith(openFile.content, 'readme 副本.md');
+  });
+
+  it('renames an open file from its tab context menu and preserves dirty edits and session references', async () => {
+    const renamedFile = {
+      ...openFile,
+      path: '/docs/renamed.md',
+      name: 'renamed.md',
+    };
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValueOnce({
+      filePath: openFile.path,
+      tabs: [],
+      activeTabId: null,
+      recentFiles: [openFile.path, recentFile.path],
+      bookmarks: [{
+        id: 'bookmark-1',
+        tabId: `file:${openFile.path}`,
+        filePath: openFile.path,
+        fileName: openFile.name,
+        lineNumber: 1,
+        column: 1,
+        excerpt: '# Readme',
+        createdAt: 10,
+        updatedAt: 10,
+      }],
+      fileEncodings: [{
+        filePath: openFile.path,
+        encoding: 'gbk',
+        customized: true,
+        updatedAt: 10,
+      }],
+      fileScrollPositions: [{ filePath: openFile.path, scrollTop: 42, updatedAt: 10 }],
+    });
+    vi.mocked(window.markdownBridge!.renameMarkdownFile).mockResolvedValueOnce(renamedFile);
+    vi.mocked(window.markdownBridge!.readLastMarkdownFile).mockResolvedValueOnce({ ...openFile, encoding: 'gbk' });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.get('[data-testid="editor"]').setValue('# Unsaved edit');
+
+    await wrapper.get('[data-testid="tab-readme.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
+    expect(wrapper.get('[data-testid="tab-rename"]').find('svg').exists()).toBe(true);
+    await wrapper.get('[data-testid="tab-rename"]').trigger('click');
+    expect(wrapper.get('[data-testid="rename-file-input"]').element).toHaveProperty('value', openFile.name);
+
+    await wrapper.get('[data-testid="rename-file-input"]').setValue('renamed.md');
+    await wrapper.get('[data-testid="rename-file-form"]').trigger('submit');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.renameMarkdownFile).toHaveBeenCalledWith(openFile.path, 'renamed.md');
+    expect(wrapper.find('[data-testid="rename-file-dialog"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="tab-renamed.md"]').classes()).toContain('dirty');
+    expect(wrapper.get('[data-testid="editor"]').element).toHaveProperty('value', '# Unsaved edit');
+
+    const renamedSession = vi.mocked(window.markdownBridge!.saveSession).mock.calls
+      .map(([savedSession]) => savedSession)
+      .find((savedSession) => savedSession.filePath === renamedFile.path);
+    expect(renamedSession).toEqual(expect.objectContaining({
+      filePath: renamedFile.path,
+      activeTabId: `file:${renamedFile.path}`,
+      tabs: expect.arrayContaining([
+        expect.objectContaining({ id: `file:${renamedFile.path}`, filePath: renamedFile.path, name: renamedFile.name }),
+      ]),
+      recentFiles: expect.arrayContaining([renamedFile.path]),
+      bookmarks: [expect.objectContaining({
+        tabId: `file:${renamedFile.path}`,
+        filePath: renamedFile.path,
+        fileName: renamedFile.name,
+      })],
+      fileEncodings: [expect.objectContaining({ filePath: renamedFile.path, encoding: 'gbk', customized: true })],
+      fileScrollPositions: [expect.objectContaining({ filePath: renamedFile.path, scrollTop: 42 })],
+    }));
+
+    await wrapper.get('[data-testid="save-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalledWith(renamedFile.path, '# Unsaved edit', 'gbk');
+  });
+
+  it('keeps the rename dialog open with an error when the destination name is unavailable', async () => {
+    vi.mocked(window.markdownBridge!.renameMarkdownFile).mockRejectedValueOnce(new Error('同名文件已存在'));
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.get('[data-testid="tab-readme.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
+    await wrapper.get('[data-testid="tab-rename"]').trigger('click');
+    await wrapper.get('[data-testid="rename-file-input"]').setValue('recent.md');
+    await wrapper.get('[data-testid="rename-file-form"]').trigger('submit');
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="rename-file-dialog"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="rename-file-error"]').text()).toContain('同名文件已存在');
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
+  });
+
+  it('does not offer file rename for an untitled tab', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true }));
+    await vi.dynamicImportSettled();
+
+    const draft = wrapper.find('[data-testid^="tab-未命名"]');
+    await draft.trigger('contextmenu', { clientX: 80, clientY: 40 });
+
+    expect(wrapper.find('[data-testid="tab-rename"]').exists()).toBe(false);
   });
 
   it('auto-refreshes externally changed clean files without overwriting dirty edits', async () => {

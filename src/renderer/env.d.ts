@@ -201,6 +201,7 @@ interface MarkdownBridge {
   readMarkdownFile(path: string, encoding?: string): Promise<MarkdownFile>;
   getPathForFile(file: File): string;
   saveMarkdownFile(path: string, content: string, encoding?: string): Promise<MarkdownFile>;
+  renameMarkdownFile(path: string, newName: string): Promise<MarkdownFile>;
   saveMarkdownFileAs(content: string, defaultName: string, encoding?: string): Promise<MarkdownFile | null>;
   revealInFolder(path: string): Promise<void>;
   openExternalLink(url: string, baseMarkdownPath?: string | null): Promise<boolean>;

@@ -56,6 +56,7 @@ import {
   normalizeFileEncodings,
   normalizeRecentFiles,
   normalizeSession,
+  renameSessionFileReferences,
   rememberFileEncoding,
   removeRecentFile,
   tabIdForPath,
@@ -109,6 +110,13 @@ interface TabContextMenu {
   tabId: string;
   x: number;
   y: number;
+}
+
+interface RenameFileDialog {
+  tabId: string;
+  name: string;
+  error: string;
+  isRenaming: boolean;
 }
 
 interface HelpItem {
@@ -226,11 +234,13 @@ const icons = {
   archive: 'M21 8v13H3V8 M1 3h22v5H1z M10 12h4',
   bookmark: 'M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
   bookOpen: 'M2 4.5A3 3 0 0 1 5 3h5v18H5a3 3 0 0 0-3 3V4.5z M22 4.5A3 3 0 0 0 19 3h-5v18h5a3 3 0 0 1 3 3V4.5z',
+  check: 'm5 12 4 4L19 6',
   chevronDown: 'm6 9 6 6 6-6',
   chevronUp: 'm18 15-6-6-6 6',
   chevronRight: 'm9 18 6-6-6-6',
   code: 'm16 18 6-6-6-6 M8 6l-6 6 6 6',
   columns: 'M3 5h18 M3 12h18 M3 19h18 M8 5v14 M16 5v14',
+  copy: 'M8 8h12v13H8z M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3',
   cloudUpload: 'M16 16l-4-4-4 4 M12 12v9 M20 17.6A5 5 0 0 0 18 8h-1.3A7 7 0 1 0 5.1 15.8',
   download: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3',
   edit: 'M12 20h9 M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z',
@@ -305,6 +315,8 @@ const selectedAssetPath = ref('');
 const imageUploadMode = ref<ImageUploadMode>(loadImageUploadMode());
 const cloudUploadDialog = ref<CloudUploadDialog | null>(null);
 const tabContextMenu = ref<TabContextMenu | null>(null);
+const renameFileDialog = ref<RenameFileDialog | null>(null);
+const renameFileInput = ref<HTMLInputElement | null>(null);
 const editorConfigDialogOpen = ref(false);
 const editorConfigDraft = ref('');
 const editorConfigError = ref('');
@@ -371,6 +383,7 @@ const headingTree = computed(() => applyCollapsedState(buildDocumentHeadingTree(
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
 const title = computed(() => currentFile.value?.name ?? 'Markdown 纪');
 const activeTab = computed(() => openTabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
+const contextMenuTab = computed(() => openTabs.value.find((tab) => tab.id === tabContextMenu.value?.tabId) ?? null);
 const appVersion = __APP_VERSION__;
 const activeMermaidStyle = computed(() => {
   const diagram = activeMermaidDiagram.value;
@@ -2567,6 +2580,100 @@ function openTabContextMenu(tabId: string, event: MouseEvent): void {
   };
 }
 
+function openRenameFileDialog(tabId: string): void {
+  const tab = openTabs.value.find((item) => item.id === tabId);
+  if (!tab?.file.path) {
+    return;
+  }
+
+  closeTabContextMenu();
+  renameFileDialog.value = {
+    tabId,
+    name: tab.file.name,
+    error: '',
+    isRenaming: false,
+  };
+  void nextTick(() => {
+    renameFileInput.value?.focus();
+    renameFileInput.value?.select();
+  });
+}
+
+function closeRenameFileDialog(): void {
+  if (renameFileDialog.value?.isRenaming) {
+    return;
+  }
+  renameFileDialog.value = null;
+  void nextTick(() => editor.value?.focus());
+}
+
+function renamedSiblingPath(filePath: string, newName: string): string {
+  const separatorIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  return `${filePath.slice(0, separatorIndex + 1)}${newName}`;
+}
+
+async function submitRenameFile(): Promise<void> {
+  const dialog = renameFileDialog.value;
+  const tab = openTabs.value.find((item) => item.id === dialog?.tabId);
+  const newName = dialog?.name.trim() ?? '';
+  if (!dialog || !tab?.file.path || dialog.isRenaming) {
+    return;
+  }
+  if (!newName || newName === '.' || newName === '..' || /[\\/\0]/.test(newName)) {
+    dialog.error = '请输入有效的文件名';
+    return;
+  }
+  if (newName === tab.file.name) {
+    closeRenameFileDialog();
+    return;
+  }
+  if (!bridge?.renameMarkdownFile) {
+    dialog.error = '当前环境不支持文件重命名';
+    return;
+  }
+
+  const oldPath = tab.file.path;
+  const oldName = tab.file.name;
+  const targetPath = renamedSiblingPath(oldPath, newName);
+  if (openTabs.value.some((item) => item !== tab && item.id === tabIdForPath(targetPath))) {
+    dialog.error = '该文件已在另一个标签页打开';
+    return;
+  }
+
+  dialog.isRenaming = true;
+  dialog.error = '';
+  try {
+    const renamedFile = await bridge.renameMarkdownFile(oldPath, newName);
+    if (!renamedFile.path) {
+      throw new Error('重命名后没有返回有效的文件路径');
+    }
+    const previousTabId = tab.id;
+    const nextTabId = tabIdForPath(renamedFile.path);
+    tab.id = nextTabId;
+    tab.file = setFileEncoding({ ...renamedFile, content: tab.source }, renamedFile.encoding ?? tab.file.encoding);
+    if (activeTabId.value === previousTabId) {
+      activeTabId.value = nextTabId;
+      currentFile.value = tab.file;
+    }
+
+    const sessionReferences = renameSessionFileReferences(session.value, oldPath, renamedFile.path, renamedFile.name);
+    persistTabSession({
+      ...sessionReferences,
+      filePath: renamedFile.path,
+      activeTabId: nextTabId,
+    }, { syncActive: false });
+    status.value = `已将 ${oldName} 重命名为 ${renamedFile.name}`;
+    dialog.isRenaming = false;
+    closeRenameFileDialog();
+  } catch (error) {
+    dialog.error = error instanceof Error ? error.message : '重命名失败';
+  } finally {
+    if (renameFileDialog.value === dialog) {
+      dialog.isRenaming = false;
+    }
+  }
+}
+
 function closeTabContextMenu(): void {
   tabContextMenu.value = null;
 }
@@ -4577,6 +4684,11 @@ function executeAppMenuCommand(command: AppMenuCommand): void {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && renameFileDialog.value) {
+    closeRenameFileDialog();
+    event.preventDefault();
+    return;
+  }
   if (event.key === 'Escape' && activeMermaidDiagram.value) {
     activeMermaidDiagram.value = null;
     event.preventDefault();
@@ -5804,6 +5916,7 @@ onBeforeUnmount(() => {
         :class="{ active: tab.id === activeTabId, dirty: tab.source !== tab.lastSavedContent }"
         :title="tabTitle(tab, index)"
         :data-testid="`tab-${tab.file.name}`"
+        :data-tab-id="tab.id"
         draggable="true"
         @click="activateTab(tab.id)"
         @contextmenu="openTabContextMenu(tab.id, $event)"
@@ -5837,21 +5950,79 @@ onBeforeUnmount(() => {
       :style="{ left: `${tabContextMenu.x}px`, top: `${tabContextMenu.y}px` }"
       @click.stop
     >
-      <button type="button" role="menuitem" data-testid="tab-duplicate" @click="duplicateTab(tabContextMenu.tabId)">
-        Duplicate
+      <button
+        v-if="contextMenuTab?.file.path"
+        type="button"
+        role="menuitem"
+        class="tab-context-menu__item"
+        data-testid="tab-rename"
+        @click="openRenameFileDialog(tabContextMenu.tabId)"
+      >
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.edit" /></svg>
+        <span>重命名</span>
       </button>
-      <button type="button" role="menuitem" data-testid="tab-copy-path" @click="copyTabPath(tabContextMenu.tabId)">
-        复制路径
+      <button type="button" role="menuitem" class="tab-context-menu__item" data-testid="tab-duplicate" @click="duplicateTab(tabContextMenu.tabId)">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.copy" /></svg>
+        <span>Duplicate</span>
       </button>
-      <button type="button" role="menuitem" data-testid="tab-copy-content" @click="copyTabContent(tabContextMenu.tabId)">
-        复制内容
+      <button type="button" role="menuitem" class="tab-context-menu__item" data-testid="tab-copy-path" @click="copyTabPath(tabContextMenu.tabId)">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.fileText" /></svg>
+        <span>复制路径</span>
       </button>
-      <button type="button" role="menuitem" data-testid="tab-save-as" @click="saveContextTabAs(tabContextMenu.tabId)">
-        另存为
+      <button type="button" role="menuitem" class="tab-context-menu__item" data-testid="tab-copy-content" @click="copyTabContent(tabContextMenu.tabId)">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.archive" /></svg>
+        <span>复制内容</span>
       </button>
-      <button type="button" role="menuitem" data-testid="tab-reveal-in-folder" @click="revealTabInFolder(tabContextMenu.tabId)">
-        在文件夹中显示
+      <button type="button" role="menuitem" class="tab-context-menu__item" data-testid="tab-save-as" @click="saveContextTabAs(tabContextMenu.tabId)">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.save" /></svg>
+        <span>另存为</span>
       </button>
+      <button type="button" role="menuitem" class="tab-context-menu__item" data-testid="tab-reveal-in-folder" @click="revealTabInFolder(tabContextMenu.tabId)">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.open" /></svg>
+        <span>在文件夹中显示</span>
+      </button>
+    </div>
+
+    <div
+      v-if="renameFileDialog"
+      class="rename-file-modal"
+      data-testid="rename-file-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="rename-file-title"
+      @click.self="closeRenameFileDialog"
+    >
+      <form class="rename-file-dialog" data-testid="rename-file-form" @submit.prevent="submitRenameFile">
+        <header class="rename-file-dialog__header">
+          <h2 id="rename-file-title">重命名文件</h2>
+        </header>
+        <div class="rename-file-dialog__body">
+          <label for="rename-file-input">文件名</label>
+          <input
+            id="rename-file-input"
+            ref="renameFileInput"
+            v-model="renameFileDialog.name"
+            data-testid="rename-file-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="rename-file-hint"
+            :disabled="renameFileDialog.isRenaming"
+          />
+          <p id="rename-file-hint">文件会保留在原文件夹中，扩展名需为支持的文档类型。</p>
+          <p v-if="renameFileDialog.error" class="rename-file-error" data-testid="rename-file-error" role="alert">
+            {{ renameFileDialog.error }}
+          </p>
+        </div>
+        <footer class="rename-file-dialog__actions">
+          <button class="icon-button" type="button" aria-label="取消重命名" title="取消" :disabled="renameFileDialog.isRenaming" @click="closeRenameFileDialog">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.x" /></svg>
+          </button>
+          <button class="icon-button primary-button" type="submit" aria-label="保存新文件名" title="保存" :disabled="renameFileDialog.isRenaming">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.check" /></svg>
+          </button>
+        </footer>
+      </form>
     </div>
 
     <section class="workspace" :style="gridStyle">

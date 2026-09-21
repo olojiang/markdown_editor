@@ -156,7 +156,8 @@ describe('Electron build configuration', () => {
     expect(mainSource).toContain('window.maximize()');
     expect(mainSource).toContain('window.show()');
     expect(mainSource).toContain("ipcMain.on('session:save-sync'");
-    expect(mainSource).toContain("import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, shell");
+    expect(mainSource).toContain("ipcMain.handle('markdown:rename'");
+    expect(preloadSource).toContain("ipcRenderer.invoke('markdown:rename'");
     expect(mainSource).toContain("'markdown:reveal-in-folder'");
     expect(mainSource).toContain('shell.showItemInFolder');
     expect(mainSource).toContain("'app:open-external-link'");

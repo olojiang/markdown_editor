@@ -136,6 +136,36 @@ export function removeRecentFile(recentFiles: unknown, filePath: string): string
   return normalizeRecentFiles(recentFiles).filter((recent) => recentFileKey(recent) !== removedKey);
 }
 
+export function renameSessionFileReferences(
+  session: Pick<MarkdownSession, 'bookmarks' | 'recentFiles' | 'fileEncodings' | 'fileScrollPositions'>,
+  oldPath: string,
+  newPath: string,
+  newName: string,
+): Pick<MarkdownSession, 'bookmarks' | 'recentFiles' | 'fileEncodings' | 'fileScrollPositions'> {
+  const replacePath = (filePath: string): string => filePath === oldPath ? newPath : filePath;
+  const nextTabId = tabIdForPath(newPath);
+
+  return {
+    recentFiles: normalizeRecentFiles(session.recentFiles.map(replacePath)),
+    bookmarks: session.bookmarks.map((bookmark) => bookmark.filePath === oldPath
+      ? {
+        ...bookmark,
+        tabId: bookmark.tabId === tabIdForPath(oldPath) ? nextTabId : bookmark.tabId,
+        filePath: newPath,
+        fileName: newName,
+      }
+      : bookmark),
+    fileEncodings: normalizeFileEncodings(session.fileEncodings.map((preference) => ({
+      ...preference,
+      filePath: replacePath(preference.filePath),
+    }))),
+    fileScrollPositions: normalizeFileScrollPositions(session.fileScrollPositions.map((position) => ({
+      ...position,
+      filePath: replacePath(position.filePath),
+    }))),
+  };
+}
+
 export function normalizeFileScrollPositions(positions: unknown): FileScrollPosition[] {
   if (!Array.isArray(positions)) {
     return [];

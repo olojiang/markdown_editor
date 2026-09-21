@@ -85,6 +85,8 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   saveMarkdownFile: (filePath: string, content: string, encoding?: string) =>
     ipcRenderer.invoke('markdown:save', filePath, content, encoding),
+  renameMarkdownFile: (filePath: string, newName: string) =>
+    ipcRenderer.invoke('markdown:rename', filePath, newName),
   saveMarkdownFileAs: (content: string, defaultName: string, encoding?: string) =>
     ipcRenderer.invoke('markdown:save-as', content, defaultName, encoding),
   revealInFolder: (filePath: string) => ipcRenderer.invoke('markdown:reveal-in-folder', filePath),
