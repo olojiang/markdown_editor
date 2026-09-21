@@ -338,8 +338,11 @@ let untitledCounter = 1;
 const untitledDraftNamePattern = /^未命名-\d+\.md$/;
 let cursorHistoryIndex = -1;
 let isNavigatingCursorHistory = false;
+const scrollSyncIdleDelayMs = 120;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
+let scrollSyncInteractionSource: 'editor' | 'preview' | null = null;
+let scrollSyncInteractionTimer: number | undefined;
 let isRestoringDocumentScroll = false;
 let isMermaidNavigationInProgress = false;
 let mermaidNavigationTimer: number | undefined;
@@ -1985,6 +1988,19 @@ function syncPreviewToLine(line: number, lock = true, viewportOffset = 0): void 
   }
 }
 
+function resetScrollSyncLock(): void {
+  if (scrollSyncFrame !== undefined) {
+    window.cancelAnimationFrame(scrollSyncFrame);
+    scrollSyncFrame = undefined;
+  }
+  if (scrollSyncInteractionTimer !== undefined) {
+    window.clearTimeout(scrollSyncInteractionTimer);
+    scrollSyncInteractionTimer = undefined;
+  }
+  scrollSyncSource = null;
+  scrollSyncInteractionSource = null;
+}
+
 function lockScrollSync(source: 'editor' | 'preview'): void {
   scrollSyncSource = source;
   if (scrollSyncFrame !== undefined) {
@@ -1996,7 +2012,26 @@ function lockScrollSync(source: 'editor' | 'preview'): void {
   });
 }
 
+function claimScrollSync(source: 'editor' | 'preview'): void {
+  scrollSyncInteractionSource = source;
+  if (scrollSyncFrame !== undefined) {
+    window.cancelAnimationFrame(scrollSyncFrame);
+    scrollSyncFrame = undefined;
+  }
+  scrollSyncSource = null;
+  if (scrollSyncInteractionTimer !== undefined) {
+    window.clearTimeout(scrollSyncInteractionTimer);
+  }
+  scrollSyncInteractionTimer = window.setTimeout(() => {
+    scrollSyncInteractionSource = null;
+    scrollSyncInteractionTimer = undefined;
+  }, scrollSyncIdleDelayMs);
+}
+
 function syncScroll(from: 'editor' | 'preview', lock = true): void {
+  if (lock && scrollSyncInteractionSource && scrollSyncInteractionSource !== from) {
+    return;
+  }
   if (lock && scrollSyncSource && scrollSyncSource !== from) {
     return;
   }
@@ -5399,6 +5434,7 @@ function onPreviewClick(event: MouseEvent): void {
 }
 
 function onPreviewWheel(event: WheelEvent): void {
+  claimScrollSync('preview');
   const target = (event.target as HTMLElement).closest<HTMLElement>('.mermaid-panzoom');
   if (!target || !event.metaKey && !event.ctrlKey) {
     return;
@@ -5416,6 +5452,7 @@ function onPreviewPointerDown(event: PointerEvent): void {
     return;
   }
 
+  claimScrollSync('preview');
   const target = (event.target as HTMLElement).closest<HTMLElement>('.mermaid-panzoom');
   if (!target) {
     return;
@@ -5646,9 +5683,7 @@ onBeforeUnmount(() => {
   if (mermaidNavigationTimer !== undefined) {
     window.clearTimeout(mermaidNavigationTimer);
   }
-  if (scrollSyncFrame !== undefined) {
-    window.cancelAnimationFrame(scrollSyncFrame);
-  }
+  resetScrollSyncLock();
   if (sessionSaveTimer !== undefined) {
     saveSessionNow();
   }
@@ -6294,7 +6329,7 @@ onBeforeUnmount(() => {
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
           </button>
         </div>
-        <div class="source-editor-shell">
+        <div class="source-editor-shell" @wheel="claimScrollSync('editor')" @pointerdown="claimScrollSync('editor')">
           <MarkdownMonacoEditor
             ref="editor"
             v-model="source"

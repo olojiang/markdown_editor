@@ -4185,4 +4185,29 @@ describe('App', () => {
     await nextTick();
     expect(regexBtn.classes()).toContain('active');
   });
+
+  it('keeps a delayed preview scroll event from pulling back an actively scrolling editor', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+    });
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]');
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]');
+    setScrollMetrics(editor.element, 1200, 200);
+    setScrollMetrics(preview.element, 2200, 200);
+
+    await editor.trigger('wheel');
+    editor.element.scrollTop = 300;
+    await editor.trigger('scroll');
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 20));
+
+    preview.element.scrollTop = 900;
+    await preview.trigger('scroll');
+
+    expect(editor.element.scrollTop).toBe(300);
+    wrapper.unmount();
+  });
 });
