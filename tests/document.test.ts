@@ -141,6 +141,57 @@ describe('document helpers', () => {
     `)).toBe(['前文', '', '**粗体内容**', '', '后文'].join('\n'));
   });
 
+  it('keeps formatted text runs together inside copied Draft blocks', () => {
+    expect(htmlToMarkdown(`
+      <div data-contents="true">
+        <div class="longform-unstyled" data-block="true">
+          <div class="public-DraftStyleDefault-block">
+            <span><span data-text="true">开头文字</span></span><span style="font-weight: bold;"><span data-text="true">重点</span></span><span><span data-text="true">结尾文字。</span></span>
+          </div>
+        </div>
+      </div>
+    `)).toBe('开头文字**重点**结尾文字。');
+  });
+
+  it('keeps copied Draft paragraphs separated while preserving inline bold', () => {
+    expect(htmlToMarkdown(`
+      <div data-contents="true">
+        <div class="longform-unstyled" data-block="true">
+          <div class="public-DraftStyleDefault-block">
+            <span>第一段</span><span style="font-weight: bold;">加粗句号。</span>
+          </div>
+        </div>
+        <div class="longform-unstyled" data-block="true">
+          <div class="public-DraftStyleDefault-block"><span>第二段</span></div>
+        </div>
+      </div>
+    `)).toBe(['第一段**加粗句号。**', '', '第二段'].join('\n'));
+  });
+
+  it('keeps copied longform headings and images between their surrounding paragraphs', () => {
+    expect(htmlToMarkdown(`
+      <div data-contents="true">
+        <div dir="ltr"><h2 class="longform-header-two"><div><span><span data-text="true">章节标题</span></span></div></h2></div>
+        <div class="longform-unstyled" data-block="true"><div class="public-DraftStyleDefault-block"><span>图片之前。</span></div></div>
+        <section contenteditable="false"><div><img alt="图像" src="assets/images/example.jpg"></div></section>
+        <div class="longform-unstyled" data-block="true"><div class="public-DraftStyleDefault-block"><span>图片之后。</span></div></div>
+      </div>
+    `)).toBe([
+      '## 章节标题',
+      '',
+      '图片之前。',
+      '',
+      '![图像](assets/images/example.jpg)',
+      '',
+      '图片之后。',
+    ].join('\n'));
+  });
+
+  it('preserves valid Markdown syntax for copied images inside links', () => {
+    expect(htmlToMarkdown('<div><a href="/article/media/123"><img alt="图像" src="assets/images/example.jpg"></a></div>'))
+      .toBe('[![图像](assets/images/example.jpg)](/article/media/123)');
+  });
+
   it('converts copied HTML tables into Markdown tables', () => {
     expect(htmlToMarkdown('<table><tr><th>Name</th><th>Count</th></tr><tr><td>Rules</td><td>27</td></tr></table>')).toBe([
       '| Name | Count |',

@@ -188,7 +188,7 @@ function inlineMarkdownForNode(node: Node): string {
     if (!href || isUnsafeUrl(href)) {
       return children;
     }
-    return `[${children.trim().replace(/]/g, '\\]')}](${escapeMarkdownUrl(href)})`;
+    return `[${children.trim()}](${escapeMarkdownUrl(href)})`;
   }
 
   return children;
@@ -242,6 +242,11 @@ function listMarkdownForElement(list: Element, depth: number): string {
   }).join('\n');
 }
 
+const markdownBlockTags = new Set([
+  'article', 'blockquote', 'body', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'main', 'ol', 'p', 'pre',
+  'section', 'table', 'ul',
+]);
+
 function blockMarkdownForElement(element: Element, depth = 0): string {
   const tagName = element.tagName.toLowerCase();
   if (tagName === 'script' || tagName === 'style' || tagName === 'meta') {
@@ -276,6 +281,9 @@ function blockMarkdownForElement(element: Element, depth = 0): string {
   }
   if (tagName === 'img') {
     return inlineMarkdownForNode(element);
+  }
+  if (tagName === 'div' && !Array.from(element.children).some((child) => markdownBlockTags.has(child.tagName.toLowerCase()))) {
+    return inlineMarkdownForElement(element);
   }
   if (['div', 'section', 'article', 'main', 'body'].includes(tagName)) {
     return blockMarkdownForNodes(Array.from(element.childNodes), depth);
