@@ -8,9 +8,11 @@ import { pathToFileURL } from 'node:url';
 
 async function launchEditor(args: string[] = ['.']): Promise<{ app: ElectronApplication; userDataDir: string }> {
   const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-user-data-'));
+  const executablePath = process.env.MARKDOWN_EDITOR_ELECTRON_EXECUTABLE;
   try {
     const app = await electron.launch({
-      args,
+      ...(executablePath ? { executablePath } : {}),
+      args: executablePath ? args.filter((arg) => arg !== '.') : args,
       env: {
         ...process.env,
         MARKDOWN_EDITOR_FORCE_PROD: '1',
@@ -36,6 +38,15 @@ async function ensureEditorVisible(page: Page): Promise<void> {
   }
   await expect(editor).toBeVisible();
   await editor.click();
+}
+
+async function firstVisibleEditorLine(page: Page): Promise<number> {
+  const text = await page.locator('.view-lines').textContent();
+  const match = text?.match(/Scroll\s+item\s+(\d+)/);
+  if (!match) {
+    throw new Error(`No numbered source line is visible: ${text?.slice(0, 160) ?? 'missing view-lines'}`);
+  }
+  return Number(match[1]);
 }
 
 test('launches the Electron editor shell', async () => {
@@ -371,6 +382,7 @@ test('keeps editor scroll ownership while a pointer remains held', async () => {
   try {
     const page = await launched.app.firstWindow();
     await page.setViewportSize({ width: 1178, height: 768 });
+    await expect(page.getByTestId('preview')).toBeVisible();
     await expect(page.getByTestId('preview')).toContainText('Scroll item 1');
     await ensureEditorVisible(page);
 
@@ -380,23 +392,14 @@ test('keeps editor scroll ownership while a pointer remains held', async () => {
       throw new Error('Missing editor viewport');
     }
 
-    const firstVisibleLine = async (): Promise<number> => {
-      const text = await page.locator('.view-lines').textContent();
-      const match = text?.match(/Scroll\s+item\s+(\d+)/);
-      if (!match) {
-        throw new Error(`No numbered source line is visible: ${text?.slice(0, 160) ?? 'missing view-lines'}`);
-      }
-      return Number(match[1]);
-    };
-
     await page.mouse.move(editorBounds.x + editorBounds.width / 2, editorBounds.y + editorBounds.height / 2);
     await page.mouse.down();
     try {
       await page.waitForTimeout(180);
       await page.mouse.wheel(0, 720);
-      await expect.poll(firstVisibleLine).toBeGreaterThan(1);
+      await expect.poll(() => firstVisibleEditorLine(page)).toBeGreaterThan(1);
 
-      const scrollPosition = await firstVisibleLine();
+      const scrollPosition = await firstVisibleEditorLine(page);
       await page.waitForTimeout(180);
       await page.evaluate(() => {
         const preview = document.querySelector<HTMLElement>('[data-testid="preview"]');
@@ -407,10 +410,70 @@ test('keeps editor scroll ownership while a pointer remains held', async () => {
         preview.dispatchEvent(new Event('scroll', { bubbles: true }));
       });
       await page.waitForTimeout(50);
-      expect(await firstVisibleLine()).toBe(scrollPosition);
+      expect(await firstVisibleEditorLine(page)).toBe(scrollPosition);
     } finally {
       await page.mouse.up();
     }
+  } finally {
+    await closeEditor(launched);
+    await fs.rm(tempDir, { force: true, recursive: true });
+  }
+});
+
+test('keeps editor scrolling forward during a continuous wheel gesture', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-continuous-scroll-'));
+  const markdownPath = path.join(tempDir, 'continuous scroll.md');
+  const lines = Array.from({ length: 240 }, (_, index) => `Scroll item ${index + 1}`);
+  await fs.writeFile(markdownPath, ['# Continuous Scroll', '', ...lines].join('\n'), 'utf8');
+
+  const launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
+
+  try {
+    const page = await launched.app.firstWindow();
+    await page.setViewportSize({ width: 1178, height: 768 });
+    await expect(page.getByTestId('preview')).toBeVisible();
+    await expect(page.getByTestId('preview')).toContainText('Scroll item 1');
+    await ensureEditorVisible(page);
+
+    const editorBounds = await page.locator('.source-editor-shell').boundingBox();
+    if (!editorBounds) {
+      throw new Error('Missing editor viewport');
+    }
+    await page.mouse.move(editorBounds.x + editorBounds.width / 2, editorBounds.y + editorBounds.height / 2);
+
+    const initialLine = await firstVisibleEditorLine(page);
+    await page.evaluate(() => {
+      const root = document.documentElement;
+      root.dataset.editorScrollSamples = JSON.stringify([]);
+      let lastLine = -1;
+      const sample = (): void => {
+        const text = document.querySelector('.view-lines')?.textContent ?? '';
+        const match = text.match(/Scroll\s+item\s+(\d+)/);
+        if (match) {
+          const line = Number(match[1]);
+          if (line !== lastLine) {
+            const samples = JSON.parse(root.dataset.editorScrollSamples ?? '[]') as number[];
+            samples.push(line);
+            root.dataset.editorScrollSamples = JSON.stringify(samples);
+            lastLine = line;
+          }
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+
+    for (let index = 0; index < 18; index += 1) {
+      await page.mouse.wheel(0, 160);
+      await page.waitForTimeout(35);
+    }
+
+    const visibleLines = await page.evaluate(() => JSON.parse(
+      document.documentElement.dataset.editorScrollSamples ?? '[]',
+    ) as number[]);
+    expect(visibleLines.at(-1)).toBeGreaterThan(initialLine);
+    const backwardSteps = visibleLines.filter((line, index) => index > 0 && line < visibleLines[index - 1]);
+    expect(backwardSteps, `Visible lines during wheel gesture: ${visibleLines.join(' -> ')}`).toEqual([]);
   } finally {
     await closeEditor(launched);
     await fs.rm(tempDir, { force: true, recursive: true });

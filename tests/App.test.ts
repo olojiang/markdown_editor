@@ -4243,4 +4243,33 @@ describe('App', () => {
     expect(editor.element.scrollTop).toBe(300);
     wrapper.unmount();
   });
+
+  it('keeps editor scroll ownership while momentum scroll continues after wheel input', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+    });
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]');
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]');
+    setScrollMetrics(editor.element, 1200, 200);
+    setScrollMetrics(preview.element, 2200, 200);
+
+    await editor.trigger('wheel');
+    editor.element.scrollTop = 300;
+    await editor.trigger('scroll');
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 140));
+
+    editor.element.scrollTop = 400;
+    await editor.trigger('scroll');
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 20));
+
+    preview.element.scrollTop = 0;
+    await preview.trigger('scroll');
+
+    expect(editor.element.scrollTop).toBe(400);
+    wrapper.unmount();
+  });
 });

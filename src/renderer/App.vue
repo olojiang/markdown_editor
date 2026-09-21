@@ -2043,6 +2043,13 @@ function claimScrollSync(source: 'editor' | 'preview', idleDelay = scrollSyncIdl
   }
 }
 
+function refreshScrollSyncFromScroll(source: 'editor' | 'preview'): void {
+  if (isScrollSyncBlocked(source)) {
+    return;
+  }
+  claimScrollSync(source);
+}
+
 function beginScrollSyncPointer(source: 'editor' | 'preview'): void {
   scrollSyncPointerSource = source;
   claimScrollSync(source, 0);
@@ -2099,6 +2106,7 @@ function onEditorScroll(): void {
   if (isRestoringDocumentScroll) {
     return;
   }
+  refreshScrollSyncFromScroll('editor');
   syncScroll('editor');
   updateActiveHeadingFromPreview();
   rememberScroll(activeScrollTop());
@@ -2135,6 +2143,7 @@ function onPreviewScroll(event: Event): void {
   if (isRestoringDocumentScroll) {
     return;
   }
+  refreshScrollSyncFromScroll('preview');
   if (isMermaidNavigationInProgress) {
     if (mermaidNavigationTimer !== undefined) {
       window.clearTimeout(mermaidNavigationTimer);
