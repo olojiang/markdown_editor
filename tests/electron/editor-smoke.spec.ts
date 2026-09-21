@@ -359,3 +359,60 @@ test('keeps the editor aligned when preview scrolls inside a line-preserving par
     await fs.rm(tempDir, { force: true, recursive: true });
   }
 });
+
+test('keeps editor scroll ownership while a pointer remains held', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-editor-scroll-'));
+  const markdownPath = path.join(tempDir, 'editor scroll.md');
+  const lines = Array.from({ length: 180 }, (_, index) => `Scroll item ${index + 1}`);
+  await fs.writeFile(markdownPath, ['# Editor Scroll', '', ...lines].join('\n'), 'utf8');
+
+  const launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
+
+  try {
+    const page = await launched.app.firstWindow();
+    await page.setViewportSize({ width: 1178, height: 768 });
+    await expect(page.getByTestId('preview')).toContainText('Scroll item 1');
+    await ensureEditorVisible(page);
+
+    const editorShell = page.locator('.source-editor-shell');
+    const editorBounds = await editorShell.boundingBox();
+    if (!editorBounds) {
+      throw new Error('Missing editor viewport');
+    }
+
+    const firstVisibleLine = async (): Promise<number> => {
+      const text = await page.locator('.view-lines').textContent();
+      const match = text?.match(/Scroll\s+item\s+(\d+)/);
+      if (!match) {
+        throw new Error(`No numbered source line is visible: ${text?.slice(0, 160) ?? 'missing view-lines'}`);
+      }
+      return Number(match[1]);
+    };
+
+    await page.mouse.move(editorBounds.x + editorBounds.width / 2, editorBounds.y + editorBounds.height / 2);
+    await page.mouse.down();
+    try {
+      await page.waitForTimeout(180);
+      await page.mouse.wheel(0, 720);
+      await expect.poll(firstVisibleLine).toBeGreaterThan(1);
+
+      const scrollPosition = await firstVisibleLine();
+      await page.waitForTimeout(180);
+      await page.evaluate(() => {
+        const preview = document.querySelector<HTMLElement>('[data-testid="preview"]');
+        if (!preview) {
+          throw new Error('Missing preview pane');
+        }
+        preview.scrollTop = 0;
+        preview.dispatchEvent(new Event('scroll', { bubbles: true }));
+      });
+      await page.waitForTimeout(50);
+      expect(await firstVisibleLine()).toBe(scrollPosition);
+    } finally {
+      await page.mouse.up();
+    }
+  } finally {
+    await closeEditor(launched);
+    await fs.rm(tempDir, { force: true, recursive: true });
+  }
+});

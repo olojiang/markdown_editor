@@ -4208,6 +4208,39 @@ describe('App', () => {
     await preview.trigger('scroll');
 
     expect(editor.element.scrollTop).toBe(300);
+
+    window.dispatchEvent(new Event('pointerup'));
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+    preview.element.scrollTop = 950;
+    await preview.trigger('scroll');
+
+    expect(editor.element.scrollTop).toBe(475);
+    wrapper.unmount();
+  });
+
+  it('keeps editor scroll ownership while its scrollbar is held longer than the idle delay', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+    });
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]');
+    const editorShell = wrapper.find('.source-editor-shell');
+    const preview = wrapper.find<HTMLElement>('[data-testid="preview"]');
+    setScrollMetrics(editor.element, 1200, 200);
+    setScrollMetrics(preview.element, 2200, 200);
+
+    await editorShell.trigger('pointerdown');
+    editor.element.scrollTop = 300;
+    await editor.trigger('scroll');
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+
+    preview.element.scrollTop = 900;
+    await preview.trigger('scroll');
+
+    expect(editor.element.scrollTop).toBe(300);
     wrapper.unmount();
   });
 });

@@ -343,6 +343,7 @@ let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
 let scrollSyncInteractionSource: 'editor' | 'preview' | null = null;
 let scrollSyncInteractionTimer: number | undefined;
+let scrollSyncPointerSource: 'editor' | 'preview' | null = null;
 let isRestoringDocumentScroll = false;
 let isMermaidNavigationInProgress = false;
 let mermaidNavigationTimer: number | undefined;
@@ -1959,7 +1960,7 @@ function interpolatePreviewScrollFromLine(line: number): number | null {
 }
 
 function syncPreviewToLine(line: number, lock = true, viewportOffset = 0): void {
-  if (lock && scrollSyncSource && scrollSyncSource !== 'editor') {
+  if (isScrollSyncBlocked('editor', lock)) {
     return;
   }
 
@@ -1999,6 +2000,7 @@ function resetScrollSyncLock(): void {
   }
   scrollSyncSource = null;
   scrollSyncInteractionSource = null;
+  scrollSyncPointerSource = null;
 }
 
 function lockScrollSync(source: 'editor' | 'preview'): void {
@@ -2012,7 +2014,18 @@ function lockScrollSync(source: 'editor' | 'preview'): void {
   });
 }
 
-function claimScrollSync(source: 'editor' | 'preview'): void {
+function isScrollSyncBlocked(source: 'editor' | 'preview', lock = true): boolean {
+  return lock && (
+    (scrollSyncPointerSource !== null && scrollSyncPointerSource !== source)
+    || (scrollSyncInteractionSource !== null && scrollSyncInteractionSource !== source)
+    || (scrollSyncSource !== null && scrollSyncSource !== source)
+  );
+}
+
+function claimScrollSync(source: 'editor' | 'preview', idleDelay = scrollSyncIdleDelayMs): void {
+  if (scrollSyncPointerSource && scrollSyncPointerSource !== source) {
+    return;
+  }
   scrollSyncInteractionSource = source;
   if (scrollSyncFrame !== undefined) {
     window.cancelAnimationFrame(scrollSyncFrame);
@@ -2022,17 +2035,30 @@ function claimScrollSync(source: 'editor' | 'preview'): void {
   if (scrollSyncInteractionTimer !== undefined) {
     window.clearTimeout(scrollSyncInteractionTimer);
   }
-  scrollSyncInteractionTimer = window.setTimeout(() => {
-    scrollSyncInteractionSource = null;
-    scrollSyncInteractionTimer = undefined;
-  }, scrollSyncIdleDelayMs);
+  if (idleDelay > 0) {
+    scrollSyncInteractionTimer = window.setTimeout(() => {
+      scrollSyncInteractionSource = null;
+      scrollSyncInteractionTimer = undefined;
+    }, idleDelay);
+  }
+}
+
+function beginScrollSyncPointer(source: 'editor' | 'preview'): void {
+  scrollSyncPointerSource = source;
+  claimScrollSync(source, 0);
+}
+
+function endScrollSyncPointer(): void {
+  const source = scrollSyncPointerSource;
+  if (!source) {
+    return;
+  }
+  scrollSyncPointerSource = null;
+  claimScrollSync(source);
 }
 
 function syncScroll(from: 'editor' | 'preview', lock = true): void {
-  if (lock && scrollSyncInteractionSource && scrollSyncInteractionSource !== from) {
-    return;
-  }
-  if (lock && scrollSyncSource && scrollSyncSource !== from) {
+  if (isScrollSyncBlocked(from, lock)) {
     return;
   }
 
@@ -5434,7 +5460,6 @@ function onPreviewClick(event: MouseEvent): void {
 }
 
 function onPreviewWheel(event: WheelEvent): void {
-  claimScrollSync('preview');
   const target = (event.target as HTMLElement).closest<HTMLElement>('.mermaid-panzoom');
   if (!target || !event.metaKey && !event.ctrlKey) {
     return;
@@ -5452,7 +5477,6 @@ function onPreviewPointerDown(event: PointerEvent): void {
     return;
   }
 
-  claimScrollSync('preview');
   const target = (event.target as HTMLElement).closest<HTMLElement>('.mermaid-panzoom');
   if (!target) {
     return;
@@ -5677,6 +5701,8 @@ onMounted(async () => {
   window.addEventListener('beforeunload', saveSessionBeforeUnload);
   window.addEventListener('pointermove', onResizeMove);
   window.addEventListener('pointerup', stopResize);
+  window.addEventListener('pointerup', endScrollSyncPointer, true);
+  window.addEventListener('pointercancel', endScrollSyncPointer, true);
 });
 
 onBeforeUnmount(() => {
@@ -5701,6 +5727,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', saveSessionBeforeUnload);
   window.removeEventListener('pointermove', onResizeMove);
   window.removeEventListener('pointerup', stopResize);
+  window.removeEventListener('pointerup', endScrollSyncPointer, true);
+  window.removeEventListener('pointercancel', endScrollSyncPointer, true);
 });
 </script>
 
@@ -6329,7 +6357,11 @@ onBeforeUnmount(() => {
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
           </button>
         </div>
-        <div class="source-editor-shell" @wheel="claimScrollSync('editor')" @pointerdown="claimScrollSync('editor')">
+        <div
+          class="source-editor-shell"
+          @wheel.capture="claimScrollSync('editor')"
+          @pointerdown.capture="beginScrollSyncPointer('editor')"
+        >
           <MarkdownMonacoEditor
             ref="editor"
             v-model="source"
@@ -6477,8 +6509,10 @@ onBeforeUnmount(() => {
           data-testid="preview"
           :style="previewZoomStyle"
           @scroll="onPreviewScroll"
+          @wheel.capture="claimScrollSync('preview')"
           @wheel="onPreviewWheel"
           @click="onPreviewClick"
+          @pointerdown.capture="beginScrollSyncPointer('preview')"
           @pointerdown="onPreviewPointerDown"
           @pointermove="onPreviewPointerMove"
           v-html="previewHtml"
