@@ -133,6 +133,14 @@ describe('document helpers', () => {
     ].join('\n'));
   });
 
+  it('preserves CSS bold spans without adding extra blank lines around paragraphs', () => {
+    expect(htmlToMarkdown(`
+      <p>前文</p>
+      <p><span style="font-weight: 700;">粗体内容</span></p>
+      <p>后文</p>
+    `)).toBe(['前文', '', '**粗体内容**', '', '后文'].join('\n'));
+  });
+
   it('converts copied HTML tables into Markdown tables', () => {
     expect(htmlToMarkdown('<table><tr><th>Name</th><th>Count</th></tr><tr><td>Rules</td><td>27</td></tr></table>')).toBe([
       '| Name | Count |',

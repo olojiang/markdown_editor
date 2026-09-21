@@ -106,6 +106,8 @@ contextBridge.exposeInMainWorld('markdownBridge', {
   }) => ipcRenderer.invoke('markdown:export-pdf', payload),
   saveImageAsset: (markdownPath: string, fileName: string, data: ArrayBuffer, mimeType: string) =>
     ipcRenderer.invoke('asset:save-image', markdownPath, fileName, data, mimeType),
+  downloadImageAsset: (markdownPath: string, sourceUrl: string) =>
+    ipcRenderer.invoke('asset:download-image', markdownPath, sourceUrl),
   saveTempImageAsset: (fileName: string, data: ArrayBuffer, mimeType: string) =>
     ipcRenderer.invoke('asset:save-temp-image', fileName, data, mimeType),
   uploadCloudImage: (payload: {

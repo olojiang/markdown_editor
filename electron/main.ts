@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFile, execFileSync } from 'node:child_process';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
@@ -197,6 +197,8 @@ const imageMimeTypes = new Map([
   ['.svg', 'image/svg+xml'],
   ['.webp', 'image/webp'],
 ]);
+const imageAssetMimeTypes = new Set(imageMimeTypes.values());
+const maxDownloadedImageBytes = 20 * 1024 * 1024;
 const cloudUploadBaseUrl = 'https://test.sheepwall.com/fe-dash/api/oss/aliyun/resource';
 const externalUrlProtocols = new Set(['http:', 'https:', 'mailto:', 'tel:']);
 const htmlPreviewMimeTypes = new Map([
@@ -1467,6 +1469,134 @@ async function saveImageAsset(
   };
 }
 
+async function downloadImageAsset(markdownPath: string, sourceUrl: string): Promise<ImageAsset> {
+  const source = sourceUrl.trim();
+  let mimeType = '';
+  let data: Buffer;
+  let sourceName = 'clipboard-image';
+
+  if (/^data:/i.test(source)) {
+    if (source.length > maxDownloadedImageBytes * 3 + 1024) {
+      throw new Error('Clipboard image exceeds the 20 MB limit.');
+    }
+    const commaIndex = source.indexOf(',');
+    if (commaIndex < 0) {
+      throw new Error('Clipboard image data is invalid.');
+    }
+    const metadata = source.slice(5, commaIndex).split(';');
+    mimeType = metadata[0]?.toLowerCase() ?? '';
+    if (!imageAssetMimeTypes.has(mimeType)) {
+      throw new Error('Clipboard data does not contain a supported image.');
+    }
+    const payload = source.slice(commaIndex + 1);
+    if (metadata.slice(1).some((value) => value.toLowerCase() === 'base64')) {
+      data = Buffer.from(payload, 'base64');
+    } else {
+      const bytes: number[] = [];
+      for (let index = 0; index < payload.length; index += 1) {
+        if (payload[index] === '%') {
+          const byte = Number.parseInt(payload.slice(index + 1, index + 3), 16);
+          if (!Number.isFinite(byte)) {
+            throw new Error('Clipboard image data is invalid.');
+          }
+          bytes.push(byte);
+          index += 2;
+        } else {
+          const character = String.fromCodePoint(payload.codePointAt(index) ?? 0);
+          for (const byte of Buffer.from(character)) {
+            bytes.push(byte);
+          }
+          index += character.length - 1;
+        }
+      }
+      data = Buffer.from(bytes);
+    }
+    if (data.byteLength > maxDownloadedImageBytes) {
+      throw new Error('Clipboard image exceeds the 20 MB limit.');
+    }
+  } else {
+    let url: URL;
+    try {
+      url = new URL(source);
+    } catch {
+      throw new Error('Image URL is invalid.');
+    }
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      throw new Error('Only HTTP and HTTPS images can be downloaded.');
+    }
+    if (url.username || url.password) {
+      throw new Error('Image URLs cannot contain credentials.');
+    }
+    try {
+      sourceName = path.basename(decodeURIComponent(url.pathname)) || sourceName;
+    } catch {
+      sourceName = path.basename(url.pathname) || sourceName;
+    }
+
+    const signal = AbortSignal.timeout(20_000);
+    let response: Response;
+    let redirectCount = 0;
+    while (true) {
+      response = await net.fetch(url.toString(), {
+        credentials: 'include',
+        redirect: 'manual',
+        signal,
+      });
+      if (response.status < 300 || response.status >= 400) {
+        break;
+      }
+      const location = response.headers.get('location');
+      if (!location || redirectCount >= 5) {
+        throw new Error('Image download exceeded the redirect limit.');
+      }
+      await response.body?.cancel();
+      url = new URL(location, url);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+        throw new Error('Image redirect URL is not supported.');
+      }
+      redirectCount += 1;
+    }
+    if (!response.ok) {
+      throw new Error(`Image download failed with status ${response.status}.`);
+    }
+    mimeType = (response.headers.get('content-type') ?? '').split(';', 1)[0].trim().toLowerCase();
+    if (!imageAssetMimeTypes.has(mimeType)) {
+      throw new Error('The downloaded file is not a supported image.');
+    }
+    const contentLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(contentLength) && contentLength > maxDownloadedImageBytes) {
+      throw new Error('Downloaded image exceeds the 20 MB limit.');
+    }
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('Image download returned no data.');
+    }
+    const chunks: Buffer[] = [];
+    let byteLength = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      byteLength += value.byteLength;
+      if (byteLength > maxDownloadedImageBytes) {
+        await reader.cancel();
+        throw new Error('Downloaded image exceeds the 20 MB limit.');
+      }
+      chunks.push(Buffer.from(value));
+    }
+    data = Buffer.concat(chunks, byteLength);
+  }
+
+  if (data.byteLength === 0) {
+    throw new Error('Image download returned no data.');
+  }
+
+  const baseName = path.basename(sourceName, path.extname(sourceName)) || 'clipboard-image';
+  const fileName = `${baseName}${imageExtensionFromMime(mimeType)}`;
+  return saveImageAsset(markdownPath, fileName, data, mimeType);
+}
+
 async function saveTempImageAsset(fileName: string, data: ArrayBuffer | Uint8Array, mimeType: string): Promise<TempImageAsset> {
   const targetPath = await uniqueTempImagePath(fileName, mimeType);
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
@@ -1873,6 +2003,10 @@ ipcMain.handle('markdown:export-pdf', async (_event, payload: ExportDocumentPayl
 
 ipcMain.handle('asset:save-image', async (_event, markdownPath: string, fileName: string, data: ArrayBuffer, mimeType: string) => {
   return saveImageAsset(markdownPath, fileName, data, mimeType);
+});
+
+ipcMain.handle('asset:download-image', async (_event, markdownPath: string, sourceUrl: string) => {
+  return downloadImageAsset(markdownPath, sourceUrl);
 });
 
 ipcMain.handle('asset:save-temp-image', async (_event, fileName: string, data: ArrayBuffer, mimeType: string) => {

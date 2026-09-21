@@ -136,6 +136,7 @@ describe('App', () => {
       exportHtml: vi.fn().mockResolvedValue('/docs/readme.html'),
       exportPdf: vi.fn().mockResolvedValue('/docs/readme.pdf'),
       saveImageAsset: vi.fn().mockResolvedValue(imageAsset),
+      downloadImageAsset: vi.fn().mockResolvedValue(imageAsset),
       saveTempImageAsset: vi.fn().mockResolvedValue({
         name: '1778054400000.webp',
         absolutePath: '/tmp/1778054400000.webp',
@@ -825,6 +826,36 @@ describe('App', () => {
       '',
       '- `polish`',
     ].join('\n'));
+  });
+
+  it('downloads images embedded in rich clipboard HTML and inserts local asset links', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await enableRichPasteConversion(wrapper);
+
+    const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [],
+        getData: vi.fn((type: string) => (type === 'text/html'
+          ? '<p>咖啡图片：</p><p><img src="//example.com/images/coffee.png" alt="咖啡"></p>'
+          : '咖啡图片：')),
+      },
+    });
+
+    editor.dispatchEvent(event);
+    await vi.dynamicImportSettled();
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(window.markdownBridge?.downloadImageAsset).toHaveBeenCalledWith(
+      openFile.path,
+      'https://example.com/images/coffee.png',
+    );
+    expect(editor.value).toContain('![咖啡](assets/images/diagram.png)');
+    expect(editor.value).not.toContain('https://example.com/images/coffee.png');
   });
 
   it('falls back to the Electron clipboard HTML when the paste event only exposes plain text', async () => {

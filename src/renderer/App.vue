@@ -3266,7 +3266,91 @@ function richClipboardConversionSkipReason(html: string): 'code-block-source' | 
   return null;
 }
 
-function insertRichClipboardMarkdown(html: string, sourceName: 'clipboard' | 'paste-event'): boolean {
+function canConvertRichClipboardHtml(html: string): boolean {
+  return isMarkdownDocument.value
+    && !richClipboardConversionSkipReason(html)
+    && Boolean(htmlToMarkdown(html).trim());
+}
+
+async function markdownFromRichClipboardHtml(html: string): Promise<{
+  markdown: string;
+  savedImageCount: number;
+  failedImageCount: number;
+} | null> {
+  if (typeof DOMParser === 'undefined') {
+    return { markdown: htmlToMarkdown(html), savedImageCount: 0, failedImageCount: 0 };
+  }
+
+  const clipboardDocument = new DOMParser().parseFromString(html, 'text/html');
+  const images = Array.from(clipboardDocument.querySelectorAll<HTMLImageElement>('img'));
+  if (images.length === 0 || !bridge?.downloadImageAsset) {
+    return {
+      markdown: htmlToMarkdown(html),
+      savedImageCount: 0,
+      failedImageCount: images.length,
+    };
+  }
+
+  let markdownPath = currentFilePath();
+  if (!markdownPath) {
+    if (!await saveCurrentFileAndReport()) {
+      return null;
+    }
+    markdownPath = currentFilePath();
+  }
+  if (!markdownPath) {
+    return null;
+  }
+
+  const baseUrl = clipboardDocument.querySelector('base[href]')?.getAttribute('href') ?? undefined;
+  const downloadedAssets = new Map<string, ImageAsset>();
+  let savedImageCount = 0;
+  let failedImageCount = 0;
+
+  for (const image of images) {
+    const source = image.getAttribute('src')?.trim() ?? '';
+    try {
+      const sourceUrl = /^data:image\//i.test(source)
+        ? source
+        : source.startsWith('//') && !baseUrl
+          ? `https:${source}`
+          : new URL(source, baseUrl).toString();
+      if (!/^https?:\/\//i.test(sourceUrl) && !/^data:image\//i.test(sourceUrl)) {
+        throw new Error('Unsupported clipboard image source.');
+      }
+
+      let asset = downloadedAssets.get(sourceUrl);
+      if (!asset) {
+        asset = await bridge.downloadImageAsset(markdownPath, sourceUrl);
+        downloadedAssets.set(sourceUrl, asset);
+      }
+      image.setAttribute('src', asset.relativePath);
+      savedImageCount += 1;
+    } catch (error) {
+      failedImageCount += 1;
+      debugLog('editor.paste.richText.image-save-failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (savedImageCount > 0) {
+    try {
+      await refreshImageAssets(markdownPath);
+    } catch (error) {
+      debugLog('editor.paste.richText.asset-refresh-failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return {
+    markdown: htmlToMarkdown(clipboardDocument.body.innerHTML),
+    savedImageCount,
+    failedImageCount,
+  };
+}
+
+async function insertRichClipboardMarkdown(html: string, sourceName: 'clipboard' | 'paste-event'): Promise<boolean> {
   if (!isMarkdownDocument.value) {
     return false;
   }
@@ -3276,26 +3360,26 @@ function insertRichClipboardMarkdown(html: string, sourceName: 'clipboard' | 'pa
     return false;
   }
 
-  const markdown = htmlToMarkdown(html);
+  const insertionRange = editorInsertionRange();
+  const result = await markdownFromRichClipboardHtml(html);
+  if (!result) {
+    return false;
+  }
+  const { markdown, savedImageCount, failedImageCount } = result;
   if (!markdown.trim()) {
     return false;
   }
 
-  replaceSelection(markdown);
-  status.value = '已将富文本转换为 Markdown';
-  debugLog('editor.paste.richText.converted', {
-    htmlLength: html.length,
-    markdownLength: markdown.length,
-    source: sourceName,
-  });
+  replaceEditorRange(markdown, insertionRange);
+  reportRichClipboardConversion(html, markdown, sourceName, savedImageCount, failedImageCount);
   return true;
 }
 
-function replaceRangeWithRichClipboardMarkdown(
+async function replaceRangeWithRichClipboardMarkdown(
   html: string,
   sourceName: 'clipboard' | 'monaco-paste-event',
   range: EditorInsertionRange,
-): boolean {
+): Promise<boolean> {
   if (!isMarkdownDocument.value) {
     return false;
   }
@@ -3305,19 +3389,39 @@ function replaceRangeWithRichClipboardMarkdown(
     return false;
   }
 
-  const markdown = htmlToMarkdown(html);
+  const result = await markdownFromRichClipboardHtml(html);
+  if (!result) {
+    return false;
+  }
+  const { markdown, savedImageCount, failedImageCount } = result;
   if (!markdown.trim()) {
     return false;
   }
 
   replaceEditorRange(markdown, range);
-  status.value = '已将富文本转换为 Markdown';
+  reportRichClipboardConversion(html, markdown, sourceName, savedImageCount, failedImageCount);
+  return true;
+}
+
+function reportRichClipboardConversion(
+  html: string,
+  markdown: string,
+  sourceName: 'clipboard' | 'paste-event' | 'monaco-paste-event',
+  savedImageCount: number,
+  failedImageCount: number,
+): void {
+  status.value = failedImageCount > 0
+    ? `已转换富文本，${failedImageCount} 张图片未能保存`
+    : savedImageCount > 0
+      ? `已转换富文本并保存 ${savedImageCount} 张图片`
+      : '已将富文本转换为 Markdown';
   debugLog('editor.paste.richText.converted', {
+    failedImageCount,
     htmlLength: html.length,
     markdownLength: markdown.length,
+    savedImageCount,
     source: sourceName,
   });
-  return true;
 }
 
 function readBridgeClipboardHtml(): { formats: string[]; html: string; textLength: number } | null {
@@ -3626,12 +3730,12 @@ async function onEditorPaste(event: ClipboardEvent): Promise<void> {
       plainTextLength: plainText.length,
       types: clipboardTypes,
     });
-    if (isMarkdownDocument.value && richHtml.trim()) {
-      if (insertRichClipboardMarkdown(richHtml, 'paste-event')) {
-        event.preventDefault();
-      }
-    } else if (fallbackClipboard && insertRichClipboardMarkdown(fallbackClipboard.html, 'clipboard')) {
+    if (isMarkdownDocument.value && richHtml.trim() && canConvertRichClipboardHtml(richHtml)) {
       event.preventDefault();
+      void insertRichClipboardMarkdown(richHtml, 'paste-event');
+    } else if (fallbackClipboard && canConvertRichClipboardHtml(fallbackClipboard.html)) {
+      event.preventDefault();
+      void insertRichClipboardMarkdown(fallbackClipboard.html, 'clipboard');
     } else if (isMarkdownDocument.value) {
       debugLog('editor.paste.richText.skipped', {
         fallbackFormats: fallbackClipboard?.formats ?? [],
@@ -3672,10 +3776,12 @@ function onEditorMonacoPaste(event: MonacoPasteEvent): void {
   });
 
   if (richHtml.trim()) {
-    if (replaceRangeWithRichClipboardMarkdown(richHtml, 'monaco-paste-event', range)) {
+    if (canConvertRichClipboardHtml(richHtml)) {
+      void replaceRangeWithRichClipboardMarkdown(richHtml, 'monaco-paste-event', range);
       return;
     }
-  } else if (fallbackClipboard && replaceRangeWithRichClipboardMarkdown(fallbackClipboard.html, 'clipboard', range)) {
+  } else if (fallbackClipboard && canConvertRichClipboardHtml(fallbackClipboard.html)) {
+    void replaceRangeWithRichClipboardMarkdown(fallbackClipboard.html, 'clipboard', range);
     return;
   }
 
@@ -3711,9 +3817,10 @@ function onEditorPasteShortcut(event: PasteShortcutEvent): void {
     plainTextLength: clipboard.textLength,
   });
 
-  if (insertRichClipboardMarkdown(clipboard.html, 'clipboard')) {
+  if (canConvertRichClipboardHtml(clipboard.html)) {
     event.preventDefault();
     event.stopPropagation();
+    void insertRichClipboardMarkdown(clipboard.html, 'clipboard');
   } else if (isMarkdownDocument.value) {
     debugLog('editor.paste.richText.skipped', {
       formats: clipboard.formats,

@@ -1,5 +1,6 @@
 import { _electron as electron, expect, test } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
+import { createServer } from 'node:http';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -143,20 +144,37 @@ test('loads remote images in markdown preview', async () => {
 test('converts rich clipboard HTML to Markdown in the Monaco editor', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-rich-paste-'));
   const markdownPath = path.join(tempDir, 'rich paste.md');
+  const imageData = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXcAAAAASUVORK5CYII=', 'base64');
+  let imageRequestCount = 0;
+  const imageServer = createServer((_request, response) => {
+    imageRequestCount += 1;
+    response.writeHead(200, { 'content-length': imageData.length, 'content-type': 'image/png' });
+    response.end(imageData);
+  });
+  await new Promise<void>((resolve, reject) => {
+    imageServer.once('error', reject);
+    imageServer.listen(0, '127.0.0.1', resolve);
+  });
+  const address = imageServer.address();
+  if (!address || typeof address === 'string') {
+    throw new Error('Could not start clipboard image test server.');
+  }
+  let launched: Awaited<ReturnType<typeof launchEditor>> | null = null;
   await fs.writeFile(markdownPath, '# Start\n\n', 'utf8');
 
-  const launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
-
   try {
+    launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
     const page = await launched.app.firstWindow();
     await expect(page.getByTestId('preview')).toContainText('Start');
     await expect(page.getByTitle(markdownPath)).toBeVisible();
+    await ensureEditorVisible(page);
+    await page.getByTestId('rich-paste-on').click();
     await ensureEditorVisible(page);
 
     await launched.app.evaluate(({ clipboard }, payload) => {
       clipboard.write(payload);
     }, {
-      html: '<h2>Why Impeccable?</h2><p>Use <strong>7 files</strong> and <a href="https://example.com">source</a>.</p><ul><li><code>polish</code></li></ul>',
+      html: `<h2>Why Impeccable?</h2><p>Use <strong>7 files</strong> and <a href="https://example.com">source</a>.</p><ul><li><code>polish</code></li></ul><p><img src="http://127.0.0.1:${address.port}/coffee.png" alt="咖啡"></p>`,
       text: 'Why Impeccable?\nUse 7 files and source.\npolish',
     });
 
@@ -165,13 +183,23 @@ test('converts rich clipboard HTML to Markdown in the Monaco editor', async () =
     await expect(page.locator('.view-lines')).toContainText('## Why Impeccable?');
     await expect(page.locator('.view-lines')).toContainText('Use **7 files** and [source](https://example.com).');
     await expect(page.locator('.view-lines')).toContainText('- `polish`');
+    await expect(page.locator('.view-lines')).toContainText(/!\[咖啡\]\(assets\/images\/coffee-\d+\.png\)/);
+
+    const assetNames = await fs.readdir(path.join(tempDir, 'assets', 'images'));
+    expect(assetNames).toHaveLength(1);
+    expect(assetNames[0]).toMatch(/^coffee-\d+\.png$/);
+    expect(await fs.readFile(path.join(tempDir, 'assets', 'images', assetNames[0]!))).toEqual(imageData);
+    expect(imageRequestCount).toBe(1);
 
     const debugLog = await fs.readFile(path.join(launched.userDataDir, 'markdown-editor-debug.log'), 'utf8');
     expect(debugLog).toContain('renderer.editor.paste.shortcut.detected');
     expect(debugLog).toContain('renderer.editor.paste.richText.converted');
   } finally {
-    await launched.app.evaluate(({ app }) => app.exit(0)).catch(() => undefined);
-    await fs.rm(launched.userDataDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }).catch(() => undefined);
+    if (launched) {
+      await launched.app.evaluate(({ app }) => app.exit(0)).catch(() => undefined);
+      await fs.rm(launched.userDataDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }).catch(() => undefined);
+    }
+    await new Promise<void>((resolve) => imageServer.close(() => resolve()));
     await fs.rm(tempDir, { force: true, recursive: true });
   }
 });

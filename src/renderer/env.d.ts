@@ -208,6 +208,7 @@ interface MarkdownBridge {
   exportHtml(payload: ExportDocumentPayload): Promise<string | null>;
   exportPdf(payload: ExportDocumentPayload): Promise<string | null>;
   saveImageAsset(markdownPath: string, fileName: string, data: ArrayBuffer, mimeType: string): Promise<ImageAsset>;
+  downloadImageAsset(markdownPath: string, sourceUrl: string): Promise<ImageAsset>;
   saveTempImageAsset(fileName: string, data: ArrayBuffer, mimeType: string): Promise<TempImageAsset>;
   uploadCloudImage(payload: CloudImageUploadPayload): Promise<CloudImageUploadResult>;
   importImageAsset(markdownPath: string): Promise<ImageAsset | null>;

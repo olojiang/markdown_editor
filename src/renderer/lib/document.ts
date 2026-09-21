@@ -91,6 +91,19 @@ function normalizeInlineWhitespace(value: string): string {
   return value.replace(/[ \t\r\n]+/g, ' ');
 }
 
+function isBoldElement(element: HTMLElement, tagName: string): boolean {
+  if (tagName === 'strong' || tagName === 'b') {
+    return true;
+  }
+  if (tagName !== 'span') {
+    return false;
+  }
+
+  const fontWeight = element.style.fontWeight.trim().toLowerCase();
+  return /^(?:bold|bolder|[6-9]00)$/.test(fontWeight)
+    || /(?:^|\s)(?:bold|font-bold)(?:\s|$)/i.test(element.className);
+}
+
 function trimMarkdownBlock(value: string): string {
   return value
     .split('\n')
@@ -160,7 +173,7 @@ function inlineMarkdownForNode(node: Node): string {
   if (!children.trim()) {
     return '';
   }
-  if (tagName === 'strong' || tagName === 'b') {
+  if (isBoldElement(element, tagName)) {
     return `**${children.trim()}**`;
   }
   if (tagName === 'em' || tagName === 'i') {
@@ -292,7 +305,7 @@ export function htmlToMarkdown(source: string): string {
   }
 
   const document = new DOMParser().parseFromString(source, 'text/html');
-  return trimMarkdownBlock(blockMarkdownForElement(document.body));
+  return trimMarkdownBlock(blockMarkdownForElement(document.body)).replace(/\n{3,}/g, '\n\n');
 }
 
 function headingLineNumber(source: string, level: number, text: string, index: number): number {
