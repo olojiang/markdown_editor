@@ -2908,7 +2908,7 @@ function createNewMarkdownTab(content = '', name?: string): void {
     activeHeadingId: '',
     collapsedHeadingIds: [],
     editorVisible: true,
-    previewHidden: false,
+    previewHidden: true,
     previewFullscreen: false,
     editorWidth: session.value.editorWidth,
   };
@@ -2924,7 +2924,7 @@ function createNewMarkdownTab(content = '', name?: string): void {
   imageAssets.value = [];
   isPreviewFullscreen.value = false;
   status.value = '未保存的新 Markdown 文件';
-  persistTabSession({ editorVisible: true, previewHidden: false }, { syncActive: false });
+  persistTabSession({ editorVisible: true, previewHidden: true }, { syncActive: false });
   scheduleActiveTabRestore(tab.id);
   void renderMermaid();
 }

@@ -3353,10 +3353,29 @@ describe('App', () => {
 
     expect(wrapper.find('[data-testid^="tab-未命名"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', '');
+    expect(wrapper.classes()).toContain('preview-hidden');
     expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
       expect.objectContaining({
         tabs: expect.arrayContaining([
-          expect.objectContaining({ filePath: null, content: '' }),
+          expect.objectContaining({ filePath: null, content: '', editorVisible: true, previewHidden: true }),
+        ]),
+      }),
+    );
+  });
+
+  it('creates an editor-only untitled tab from the new-file button', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.get('[data-testid="new-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid^="tab-未命名"]').exists()).toBe(true);
+    expect(wrapper.classes()).toContain('preview-hidden');
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ filePath: null, editorVisible: true, previewHidden: true }),
         ]),
       }),
     );
