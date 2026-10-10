@@ -105,6 +105,13 @@ describe('App', () => {
     window.localStorage.clear();
     window.markdownBridge = {
       openMarkdownFile: vi.fn().mockResolvedValue(openFile),
+      chooseDirectory: vi.fn().mockResolvedValue('/workspace'),
+      listDirectory: vi.fn().mockImplementation(async (_rootPath: string, directoryPath: string) => directoryPath === '/workspace/docs'
+        ? [{ name: 'guide.md', path: '/workspace/docs/guide.md', isDirectory: false }]
+        : [
+            { name: 'docs', path: '/workspace/docs', isDirectory: true },
+            { name: 'readme.md', path: '/workspace/readme.md', isDirectory: false },
+          ]),
       takeLaunchMarkdownFile: vi.fn().mockResolvedValue(null),
       notifyReadyForExternalOpen: vi.fn().mockResolvedValue(undefined),
       onExternalMarkdownFile: vi.fn().mockReturnValue(() => {}),
@@ -3062,6 +3069,28 @@ describe('App', () => {
 
     expect(wrapper.classes()).not.toContain('toc-collapsed');
     expect(wrapper.find('.workspace').attributes('style')).toContain('300px 6px');
+  });
+
+  it('switches to the workspace file tree and opens a selected document', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.get('[data-testid="sidebar-files-tab"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.get('[data-testid="sidebar-heading"]').text()).toBe('文件');
+    await wrapper.get('[data-testid="choose-workspace-folder"]').trigger('click');
+    await nextTick();
+    expect(window.markdownBridge?.chooseDirectory).toHaveBeenCalledOnce();
+    expect(wrapper.text()).toContain('readme.md');
+
+    await wrapper.get('[aria-label="展开文件夹 docs"]').trigger('click');
+    await nextTick();
+    expect(window.markdownBridge?.listDirectory).toHaveBeenCalledWith('/workspace', '/workspace/docs');
+    await wrapper.get('[data-testid="workspace-file-/workspace/docs/guide.md"]').trigger('click');
+    await nextTick();
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith('/workspace/docs/guide.md');
+    expect(wrapper.get('[data-testid="editor"]').element).toHaveProperty('value', '# Title\n\n## Alpha\n\nhello alpha\n\n## Beta\n\nhello beta\n\n```mermaid\ngraph TD\nA-->B\n```');
   });
 
   it('replaces all source matches in the editor', async () => {

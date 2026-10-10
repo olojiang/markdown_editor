@@ -887,6 +887,119 @@ select:disabled {
   }
 }
 
+.sidebar-mode-switch {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+
+  .icon-button {
+    border: 0;
+    height: 28px;
+    min-height: 28px;
+    min-width: 30px;
+    width: 30px;
+
+    &:hover,
+    &:focus-visible {
+      background: var(--surface-muted);
+    }
+
+    &.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+  }
+}
+
+.workspace-file-tree {
+  min-width: 0;
+}
+
+.workspace-tree-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 12px 8px;
+}
+
+.file-tree-list,
+.file-tree-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.file-tree-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  gap: 7px;
+  min-height: 28px;
+  overflow: hidden;
+  padding-right: 8px;
+  text-align: left;
+  width: 100%;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--surface-elevated);
+    outline: none;
+  }
+
+  &.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  span:first-of-type {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.file-tree-chevron,
+.file-tree-icon {
+  fill: none;
+  flex: 0 0 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  width: 14px;
+}
+
+.file-tree-chevron {
+  transition: transform 160ms ease;
+
+  &.expanded {
+    transform: rotate(90deg);
+  }
+}
+
+.file-tree-icon.folder {
+  fill: var(--accent-soft);
+}
+
+.file-tree-hint,
+.file-tree-empty,
+.file-tree-error {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.file-tree-empty,
+.file-tree-error {
+  margin: 3px 0 5px;
+}
+
 .resize-handle {
   background: var(--app-bg);
   border-left: 1px solid var(--border);

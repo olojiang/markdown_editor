@@ -190,6 +190,8 @@ interface CloudImageUploadResult {
 
 interface MarkdownBridge {
   openMarkdownFile(): Promise<MarkdownFile | null>;
+  chooseDirectory?(): Promise<string | null>;
+  listDirectory?(rootPath: string, directoryPath: string): Promise<DirectoryEntry[]>;
   takeLaunchMarkdownFile(): Promise<MarkdownOpenRequest | null>;
   notifyReadyForExternalOpen(): Promise<void>;
   onExternalMarkdownFile(callback: (request: MarkdownOpenRequest) => void): () => void;
@@ -226,6 +228,12 @@ interface MarkdownBridge {
   readClipboardImage?(): Promise<{ data: ArrayBuffer; mimeType: string } | null>;
   searchInFiles?(request: FileSearchRequest): Promise<FileSearchMatch[]>;
   debugLog?(event: string, payload?: Record<string, unknown>): Promise<void>;
+}
+
+interface DirectoryEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
 }
 
 interface Window {

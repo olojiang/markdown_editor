@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import MarkdownMonacoEditor from '@/renderer/components/MarkdownMonacoEditor.vue';
+import FileTree from '@/renderer/components/FileTree.vue';
 import SearchPanel from '@/renderer/components/SearchPanel.vue';
 import TocTree from '@/renderer/components/TocTree.vue';
 import {
@@ -298,6 +299,10 @@ const status = ref('请选择或打开一个支持的文档');
 const activeEditorLine = ref(1);
 const activeEditorColumn = ref(1);
 const tocSearch = ref('');
+const sidebarView = ref<'outline' | 'files'>('outline');
+const workspacePath = ref(window.localStorage.getItem('markdown-editor.workspace-path') ?? '');
+const workspaceEntries = ref<DirectoryEntry[]>([]);
+const workspaceError = ref('');
 const collapsedHeadingIds = ref(new Set<string>());
 const activeHeadingId = ref('');
 const editorSearchVisible = ref(false);
@@ -2933,6 +2938,25 @@ async function openFile(): Promise<void> {
   const file = await bridge?.openMarkdownFile();
   if (file) {
     setFile(file, 0);
+  }
+}
+
+async function chooseWorkspaceFolder(): Promise<void> {
+  const selectedPath = await bridge?.chooseDirectory?.();
+  if (!selectedPath) return;
+  workspacePath.value = selectedPath;
+  window.localStorage.setItem('markdown-editor.workspace-path', selectedPath);
+  await loadWorkspaceEntries();
+}
+
+async function loadWorkspaceEntries(): Promise<void> {
+  if (!workspacePath.value || !bridge?.listDirectory) return;
+  workspaceError.value = '';
+  try {
+    workspaceEntries.value = await bridge.listDirectory(workspacePath.value, workspacePath.value);
+  } catch {
+    workspaceEntries.value = [];
+    workspaceError.value = '无法读取此文件夹';
   }
 }
 
@@ -5682,6 +5706,7 @@ async function restoreSessionTabs(): Promise<boolean> {
 
 onMounted(async () => {
   isRestoringStartup = true;
+  await loadWorkspaceEntries();
   const savedSession = await bridge?.getSession();
   session.value = normalizeSession(savedSession as Partial<MarkdownSession> | null | undefined);
   removeExternalOpenListener = bridge?.onExternalMarkdownFile(queueMarkdownOpenRequest);
@@ -6110,8 +6135,34 @@ onBeforeUnmount(() => {
         <div v-show="!fileSearchVisible" ref="tocScroller" class="toc-content" @scroll="onTocScroll">
           <div class="panel-toolbar">
             <div class="toc-toolbar-row">
-              <h2>目录</h2>
+              <h2 data-testid="sidebar-heading">{{ sidebarView === 'outline' ? '目录' : '文件' }}</h2>
               <div class="toc-actions">
+                <div class="sidebar-mode-switch" role="group" aria-label="侧栏视图">
+                  <button
+                    data-testid="sidebar-outline-tab"
+                    class="icon-button"
+                    :class="{ active: sidebarView === 'outline' }"
+                    type="button"
+                    aria-label="目录树"
+                    title="目录树"
+                    :aria-pressed="sidebarView === 'outline'"
+                    @click="sidebarView = 'outline'"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h3v3H5zM11 6.5h8M5 11h3v3H5zM11 12.5h8M5 17h3v3H5zM11 18.5h8" /></svg>
+                  </button>
+                  <button
+                    data-testid="sidebar-files-tab"
+                    class="icon-button"
+                    :class="{ active: sidebarView === 'files' }"
+                    type="button"
+                    aria-label="文件树"
+                    title="文件树"
+                    :aria-pressed="sidebarView === 'files'"
+                    @click="sidebarView = 'files'"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20v9.8H3.5z" /><path d="M3.5 9h16.5" /></svg>
+                  </button>
+                </div>
                 <button
                   data-testid="toggle-toc-panel"
                   class="icon-button toc-panel-toggle"
@@ -6122,24 +6173,54 @@ onBeforeUnmount(() => {
                 >
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="isTocPanelCollapsed ? icons.sidebarShow : icons.sidebarHide" /></svg>
                 </button>
-                <button data-testid="expand-toc" class="icon-button" type="button" aria-label="展开全部标题" title="展开全部标题" @click="expandAllHeadings">
+                <template v-if="sidebarView === 'outline'">
+                  <button data-testid="expand-toc" class="icon-button" type="button" aria-label="展开全部标题" title="展开全部标题" @click="expandAllHeadings">
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocExpandAll" /></svg>
-                </button>
-                <button data-testid="collapse-toc" class="icon-button" type="button" aria-label="收起全部标题" title="收起全部标题" @click="collapseAllHeadings">
+                  </button>
+                  <button data-testid="collapse-toc" class="icon-button" type="button" aria-label="收起全部标题" title="收起全部标题" @click="collapseAllHeadings">
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocCollapseAll" /></svg>
+                  </button>
+                </template>
+                <button
+                  v-else
+                  data-testid="choose-workspace-folder"
+                  class="icon-button"
+                  type="button"
+                  :aria-label="workspacePath ? '更换工作目录' : '选择工作目录'"
+                  :title="workspacePath ? '更换工作目录' : '选择工作目录'"
+                  @click="chooseWorkspaceFolder"
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20v9.8H3.5z" /><path d="M12 12v4M10 14h4" /></svg>
                 </button>
               </div>
             </div>
-            <input v-model="tocSearch" data-testid="toc-search" type="search" placeholder="搜索目录" />
+            <input v-if="sidebarView === 'outline'" v-model="tocSearch" data-testid="toc-search" type="search" placeholder="搜索目录" />
           </div>
-          <TocTree
-            v-if="visibleHeadingTree.length"
-            :nodes="visibleHeadingTree"
-            :active-id="activeHeadingId"
-            @toggle="toggleNode"
-            @jump="jumpToHeading"
-          />
-          <p v-else class="empty">暂无标题</p>
+          <template v-if="sidebarView === 'outline'">
+            <TocTree
+              v-if="visibleHeadingTree.length"
+              :nodes="visibleHeadingTree"
+              :active-id="activeHeadingId"
+              @toggle="toggleNode"
+              @jump="jumpToHeading"
+            />
+            <p v-else class="empty">暂无标题</p>
+          </template>
+          <div v-else class="workspace-file-tree" data-testid="workspace-file-tree">
+            <p v-if="workspaceError" class="empty" role="alert">{{ workspaceError }}</p>
+            <p v-else-if="!workspacePath" class="workspace-tree-empty">尚未打开文件夹</p>
+            <p v-else-if="workspaceEntries.length === 0" class="workspace-tree-empty">此文件夹中没有支持的文档</p>
+            <ul v-else class="file-tree-list">
+              <FileTree
+                v-for="entry in workspaceEntries"
+                :key="entry.path"
+                :root-path="workspacePath"
+                :entry="entry"
+                :active-path="currentFilePath() ?? undefined"
+                @open="openFilePath"
+              />
+            </ul>
+          </div>
         </div>
       </aside>
 
