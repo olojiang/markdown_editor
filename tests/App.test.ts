@@ -107,10 +107,10 @@ describe('App', () => {
       openMarkdownFile: vi.fn().mockResolvedValue(openFile),
       chooseDirectory: vi.fn().mockResolvedValue('/workspace'),
       listDirectory: vi.fn().mockImplementation(async (_rootPath: string, directoryPath: string) => directoryPath === '/workspace/docs'
-        ? [{ name: 'guide.md', path: '/workspace/docs/guide.md', isDirectory: false }]
+        ? [{ name: 'guide.md', path: '/workspace/docs/guide.md', isDirectory: false, size: 100, modifiedAt: 20 }]
         : [
-            { name: 'docs', path: '/workspace/docs', isDirectory: true },
-            { name: 'readme.md', path: '/workspace/readme.md', isDirectory: false },
+            { name: 'docs', path: '/workspace/docs', isDirectory: true, size: null, modifiedAt: 30 },
+            { name: 'readme.md', path: '/workspace/readme.md', isDirectory: false, size: 500, modifiedAt: 10 },
           ]),
       takeLaunchMarkdownFile: vi.fn().mockResolvedValue(null),
       notifyReadyForExternalOpen: vi.fn().mockResolvedValue(undefined),
@@ -3078,7 +3078,7 @@ describe('App', () => {
     await wrapper.get('[data-testid="sidebar-files-tab"]').trigger('click');
     await nextTick();
 
-    expect(wrapper.get('[data-testid="sidebar-heading"]').text()).toBe('文件');
+    expect(wrapper.get('[data-testid="sidebar-heading"]').text()).toBe('文档目录');
     await wrapper.get('[data-testid="choose-workspace-folder"]').trigger('click');
     await nextTick();
     expect(window.markdownBridge?.chooseDirectory).toHaveBeenCalledOnce();
@@ -3091,6 +3091,42 @@ describe('App', () => {
     await nextTick();
     expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith('/workspace/docs/guide.md');
     expect(wrapper.get('[data-testid="editor"]').element).toHaveProperty('value', '# Title\n\n## Alpha\n\nhello alpha\n\n## Beta\n\nhello beta\n\n```mermaid\ngraph TD\nA-->B\n```');
+  });
+
+  it('persists the selected workspace and file-tree view across app restarts', async () => {
+    const firstRun = mount(App);
+    await vi.dynamicImportSettled();
+    await firstRun.get('[data-testid="sidebar-files-tab"]').trigger('click');
+    await firstRun.get('[data-testid="choose-workspace-folder"]').trigger('click');
+
+    expect(window.localStorage.getItem('markdown-editor.workspace-path')).toBe('/workspace');
+    expect(window.localStorage.getItem('markdown-editor.sidebar-view')).toBe('files');
+    firstRun.unmount();
+
+    const restarted = mount(App);
+    await vi.waitFor(() => expect(window.markdownBridge?.listDirectory).toHaveBeenCalledWith('/workspace', '/workspace'));
+    expect(restarted.get('[data-testid="sidebar-files-tab"]').attributes('aria-pressed')).toBe('true');
+  });
+
+  it('searches nested files and filters or sorts the workspace tree', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.get('[data-testid="sidebar-files-tab"]').trigger('click');
+    await wrapper.get('[data-testid="choose-workspace-folder"]').trigger('click');
+    await wrapper.get('[data-testid="workspace-search"]').setValue('guide');
+    await vi.waitFor(() => expect(wrapper.text()).toContain('guide.md'), { timeout: 3000 });
+    expect(window.markdownBridge?.listDirectory).toHaveBeenCalledWith('/workspace', '/workspace/docs');
+
+    await wrapper.get('[data-testid="workspace-search"]').setValue('');
+    await wrapper.get('[data-testid="workspace-filter-folders"]').trigger('click');
+    expect(wrapper.find('[data-testid="workspace-file-/workspace/docs"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="workspace-file-/workspace/readme.md"]').exists()).toBe(false);
+
+    await wrapper.get('[data-testid="workspace-filter-all"]').trigger('click');
+    await wrapper.get('[data-testid="workspace-sort"]').setValue('size');
+    expect(wrapper.get('[data-testid="workspace-sort-direction"]').attributes('aria-label')).toBe('降序排列');
+    await wrapper.get('[data-testid="workspace-sort-direction"]').trigger('click');
+    expect(wrapper.get('[data-testid="workspace-sort-direction"]').attributes('aria-label')).toBe('升序排列');
   });
 
   it('replaces all source matches in the editor', async () => {

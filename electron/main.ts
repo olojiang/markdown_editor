@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { listWorkspaceDirectory } from './directory-operations';
 import {
   decodeTextBuffer,
   defaultTextEncoding,
@@ -1939,38 +1940,7 @@ ipcMain.handle('directory:choose', async () => {
 });
 
 ipcMain.handle('directory:list', async (_event, rootPath: string, directoryPath: string) => {
-  const root = await fs.realpath(path.resolve(rootPath));
-  const directory = await fs.realpath(path.resolve(directoryPath));
-  const relative = path.relative(root, directory);
-  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error('Directory is outside the selected workspace');
-  }
-
-  const entries = await fs.readdir(directory, { withFileTypes: true });
-  const visibleEntries = await Promise.all(entries
-    .filter((entry) => !entry.name.startsWith('.') && entry.name !== 'node_modules')
-    .map(async (entry) => {
-      const entryPath = path.join(directory, entry.name);
-      try {
-        const resolvedEntryPath = await fs.realpath(entryPath);
-        const entryRelative = path.relative(root, resolvedEntryPath);
-        if (entryRelative === '..' || entryRelative.startsWith(`..${path.sep}`) || path.isAbsolute(entryRelative)) {
-          return null;
-        }
-        const stat = await fs.stat(resolvedEntryPath);
-        const isDirectory = stat.isDirectory();
-        if (!isDirectory && (!stat.isFile() || !supportedDocumentExtensions.includes(path.extname(entry.name).slice(1).toLowerCase()))) {
-          return null;
-        }
-        return { name: entry.name, path: entryPath, isDirectory };
-      } catch {
-        return null;
-      }
-    }));
-
-  return visibleEntries
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-    .sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  return listWorkspaceDirectory(rootPath, directoryPath);
 });
 
 ipcMain.handle('markdown:take-launch-file', async () => {

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
+import { filterWorkspaceEntries, type WorkspaceTreeFilter } from '@/renderer/lib/workspace-tree';
 
 const props = defineProps<{
   rootPath: string;
   entry: DirectoryEntry;
   activePath?: string;
   depth?: number;
+  filter: WorkspaceTreeFilter;
 }>();
 const emit = defineEmits<{ open: [path: string] }>();
 const expanded = ref(false);
@@ -13,6 +15,7 @@ const loaded = ref(false);
 const loading = ref(false);
 const error = ref('');
 const children = ref<DirectoryEntry[]>([]);
+const visibleChildren = computed(() => filterWorkspaceEntries(children.value, props.filter));
 
 async function toggleDirectory(): Promise<void> {
   expanded.value = !expanded.value;
@@ -37,6 +40,7 @@ async function toggleDirectory(): Promise<void> {
       class="file-tree-row"
       :style="{ paddingLeft: `${8 + (depth ?? 0) * 14}px` }"
       type="button"
+      :data-testid="`workspace-file-${entry.path}`"
       :aria-expanded="expanded"
       :aria-label="`${expanded ? '收起' : '展开'}文件夹 ${entry.name}`"
       @click="toggleDirectory"
@@ -53,6 +57,7 @@ async function toggleDirectory(): Promise<void> {
       :style="{ paddingLeft: `${30 + (depth ?? 0) * 14}px` }"
       type="button"
       :data-testid="`workspace-file-${entry.path}`"
+      :title="`${entry.path}\n${entry.size === null ? '' : `${entry.size.toLocaleString()} B · `}${new Date(entry.modifiedAt).toLocaleString()}`"
       @click="emit('open', entry.path)"
     >
       <svg class="file-tree-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M3 1.5h6l4 4v9H3z" /><path d="M9 1.5v4h4" /></svg>
@@ -61,15 +66,16 @@ async function toggleDirectory(): Promise<void> {
     <p v-if="error" class="file-tree-error" :style="{ paddingLeft: `${30 + (depth ?? 0) * 14}px` }">{{ error }}</p>
     <ul v-if="entry.isDirectory && expanded && loaded" class="file-tree-children">
       <FileTree
-        v-for="child in children"
+        v-for="child in visibleChildren"
         :key="child.path"
         :root-path="rootPath"
         :entry="child"
         :active-path="activePath"
         :depth="(depth ?? 0) + 1"
+        :filter="filter"
         @open="emit('open', $event)"
       />
-      <li v-if="children.length === 0" class="file-tree-empty" :style="{ paddingLeft: `${30 + (depth ?? 0) * 14}px` }">空文件夹</li>
+      <li v-if="visibleChildren.length === 0" class="file-tree-empty" :style="{ paddingLeft: `${30 + (depth ?? 0) * 14}px` }">{{ children.length ? '没有匹配项' : '空文件夹' }}</li>
     </ul>
   </li>
 </template>

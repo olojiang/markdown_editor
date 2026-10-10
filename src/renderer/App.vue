@@ -41,6 +41,13 @@ import {
 } from '@/renderer/lib/heading-scroll';
 import { rendererLog } from '@/renderer/lib/logger';
 import {
+  filterWorkspaceEntries,
+  type SortDirection,
+  type WorkspaceEntryKind,
+  type WorkspaceSortKey,
+  type WorkspaceTreeFilter,
+} from '@/renderer/lib/workspace-tree';
+import {
   filterHeadingTree,
   type HeadingNode,
 } from '@/renderer/lib/markdown';
@@ -299,10 +306,19 @@ const status = ref('请选择或打开一个支持的文档');
 const activeEditorLine = ref(1);
 const activeEditorColumn = ref(1);
 const tocSearch = ref('');
-const sidebarView = ref<'outline' | 'files'>('outline');
+const sidebarView = ref<'outline' | 'files'>(window.localStorage.getItem('markdown-editor.sidebar-view') === 'files' ? 'files' : 'outline');
 const workspacePath = ref(window.localStorage.getItem('markdown-editor.workspace-path') ?? '');
 const workspaceEntries = ref<DirectoryEntry[]>([]);
+const workspaceSearchResults = ref<DirectoryEntry[]>([]);
+const workspaceSearch = ref('');
+const workspaceKind = ref<WorkspaceEntryKind>('all');
+const workspaceSortBy = ref<WorkspaceSortKey>('name');
+const workspaceSortDirection = ref<SortDirection>('asc');
+const workspaceIsSearching = ref(false);
+const workspaceSearchLimited = ref(false);
 const workspaceError = ref('');
+let workspaceSearchTimer: number | undefined;
+let workspaceSearchGeneration = 0;
 const collapsedHeadingIds = ref(new Set<string>());
 const activeHeadingId = ref('');
 const editorSearchVisible = ref(false);
@@ -390,6 +406,21 @@ const previewHtml = computed(() => rewriteLocalImageSources(`${renderDocumentPre
 const mermaidDiagramCount = computed(() => previewHtml.value.match(/class="mermaid-panzoom"/g)?.length ?? 0);
 const headingTree = computed(() => applyCollapsedState(buildDocumentHeadingTree(source.value, currentDocumentKind.value)));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
+const workspaceTreeFilter = computed<WorkspaceTreeFilter>(() => ({
+  query: workspaceSearch.value,
+  kind: workspaceKind.value,
+  sortBy: workspaceSortBy.value,
+  direction: workspaceSortDirection.value,
+}));
+const visibleWorkspaceEntries = computed(() => filterWorkspaceEntries(
+  workspaceSearch.value.trim() ? workspaceSearchResults.value : workspaceEntries.value,
+  { ...workspaceTreeFilter.value, query: workspaceSearch.value.trim() && workspaceSearchResults.value.length ? '' : workspaceTreeFilter.value.query },
+));
+const workspaceChildFilter = computed(() => ({
+  ...workspaceTreeFilter.value,
+  query: workspaceSearch.value.trim() && workspaceSearchResults.value.length ? '' : workspaceSearch.value,
+}));
+const workspaceName = computed(() => workspacePath.value.split(/[\\/]/).filter(Boolean).at(-1) ?? workspacePath.value);
 const title = computed(() => currentFile.value?.name ?? 'Markdown 纪');
 const activeTab = computed(() => openTabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
 const contextMenuTab = computed(() => openTabs.value.find((tab) => tab.id === tabContextMenu.value?.tabId) ?? null);
@@ -2946,6 +2977,8 @@ async function chooseWorkspaceFolder(): Promise<void> {
   if (!selectedPath) return;
   workspacePath.value = selectedPath;
   window.localStorage.setItem('markdown-editor.workspace-path', selectedPath);
+  workspaceSearch.value = '';
+  workspaceSearchResults.value = [];
   await loadWorkspaceEntries();
 }
 
@@ -2959,6 +2992,61 @@ async function loadWorkspaceEntries(): Promise<void> {
     workspaceError.value = '无法读取此文件夹';
   }
 }
+
+function setSidebarView(view: 'outline' | 'files'): void {
+  sidebarView.value = view;
+  window.localStorage.setItem('markdown-editor.sidebar-view', view);
+}
+
+function setWorkspaceSort(event: Event): void {
+  workspaceSortBy.value = (event.target as HTMLSelectElement).value as WorkspaceSortKey;
+  workspaceSortDirection.value = workspaceSortBy.value === 'name' ? 'asc' : 'desc';
+}
+
+async function searchWorkspace(query: string, generation: number): Promise<void> {
+  if (!bridge?.listDirectory || !workspacePath.value) {
+    workspaceIsSearching.value = false;
+    return;
+  }
+
+  const pending = [workspacePath.value];
+  const matches: DirectoryEntry[] = [];
+  let inspectedEntries = 0;
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  while (pending.length && inspectedEntries < 10_000) {
+    if (generation !== workspaceSearchGeneration) return;
+    const directoryPath = pending.shift()!;
+    try {
+      const entries = await bridge.listDirectory(workspacePath.value, directoryPath);
+      inspectedEntries += entries.length;
+      entries.forEach((entry) => {
+        if (entry.name.toLocaleLowerCase().includes(normalizedQuery)) matches.push(entry);
+        if (entry.isDirectory) pending.push(entry.path);
+      });
+    } catch {
+      // Unreadable child folders do not prevent searching the rest of the workspace.
+    }
+  }
+
+  if (generation === workspaceSearchGeneration) {
+    workspaceSearchResults.value = matches;
+    workspaceSearchLimited.value = pending.length > 0;
+    workspaceIsSearching.value = false;
+  }
+}
+
+watch(workspaceSearch, (query) => {
+  const generation = ++workspaceSearchGeneration;
+  window.clearTimeout(workspaceSearchTimer);
+  workspaceSearchResults.value = [];
+  workspaceSearchLimited.value = false;
+  if (!query.trim()) {
+    workspaceIsSearching.value = false;
+    return;
+  }
+  workspaceIsSearching.value = true;
+  workspaceSearchTimer = window.setTimeout(() => void searchWorkspace(query, generation), 250);
+});
 
 async function openFilePath(filePath: string, encoding?: TextEncoding): Promise<void> {
   if (!bridge) {
@@ -6135,7 +6223,7 @@ onBeforeUnmount(() => {
         <div v-show="!fileSearchVisible" ref="tocScroller" class="toc-content" @scroll="onTocScroll">
           <div class="panel-toolbar">
             <div class="toc-toolbar-row">
-              <h2 data-testid="sidebar-heading">{{ sidebarView === 'outline' ? '目录' : '文件' }}</h2>
+              <h2 data-testid="sidebar-heading">文档目录</h2>
               <div class="toc-actions">
                 <div class="sidebar-mode-switch" role="group" aria-label="侧栏视图">
                   <button
@@ -6146,7 +6234,7 @@ onBeforeUnmount(() => {
                     aria-label="目录树"
                     title="目录树"
                     :aria-pressed="sidebarView === 'outline'"
-                    @click="sidebarView = 'outline'"
+                    @click="setSidebarView('outline')"
                   >
                     <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h3v3H5zM11 6.5h8M5 11h3v3H5zM11 12.5h8M5 17h3v3H5zM11 18.5h8" /></svg>
                   </button>
@@ -6158,7 +6246,7 @@ onBeforeUnmount(() => {
                     aria-label="文件树"
                     title="文件树"
                     :aria-pressed="sidebarView === 'files'"
-                    @click="sidebarView = 'files'"
+                    @click="setSidebarView('files')"
                   >
                     <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20v9.8H3.5z" /><path d="M3.5 9h16.5" /></svg>
                   </button>
@@ -6175,7 +6263,7 @@ onBeforeUnmount(() => {
                 </button>
                 <template v-if="sidebarView === 'outline'">
                   <button data-testid="expand-toc" class="icon-button" type="button" aria-label="展开全部标题" title="展开全部标题" @click="expandAllHeadings">
-                  <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocExpandAll" /></svg>
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocExpandAll" /></svg>
                   </button>
                   <button data-testid="collapse-toc" class="icon-button" type="button" aria-label="收起全部标题" title="收起全部标题" @click="collapseAllHeadings">
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.tocCollapseAll" /></svg>
@@ -6194,7 +6282,41 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </div>
-            <input v-if="sidebarView === 'outline'" v-model="tocSearch" data-testid="toc-search" type="search" placeholder="搜索目录" />
+            <input v-if="sidebarView === 'outline'" v-model="tocSearch" data-testid="toc-search" type="search" placeholder="搜索标题" />
+            <template v-else>
+              <div v-if="workspacePath" class="workspace-root-label" :title="workspacePath">
+                <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M1.5 4.5h5l1.4 1.6h6.6v6.4H1.5z" /></svg>
+                <span>{{ workspaceName }}</span>
+              </div>
+              <label class="workspace-search-field">
+                <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.8" cy="8.8" r="5.5" /><path d="m13 13 4 4" /></svg>
+                <input v-model="workspaceSearch" data-testid="workspace-search" type="search" placeholder="搜索文件和文件夹" />
+              </label>
+              <div class="workspace-controls">
+                <div class="workspace-kind-switch" role="group" aria-label="显示内容类型">
+                  <button class="icon-button" :class="{ active: workspaceKind === 'folders' }" data-testid="workspace-filter-folders" type="button" aria-label="仅显示文件夹" title="仅显示文件夹" :aria-pressed="workspaceKind === 'folders'" @click="workspaceKind = workspaceKind === 'folders' ? 'all' : 'folders'">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20v10H3.5z" /></svg>
+                  </button>
+                  <button class="icon-button" :class="{ active: workspaceKind === 'files' }" data-testid="workspace-filter-files" type="button" aria-label="仅显示文件" title="仅显示文件" :aria-pressed="workspaceKind === 'files'" @click="workspaceKind = workspaceKind === 'files' ? 'all' : 'files'">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3.5h9l5 5v12H5z" /><path d="M14 3.5v5h5" /></svg>
+                  </button>
+                  <button class="icon-button" :class="{ active: workspaceKind === 'all' }" data-testid="workspace-filter-all" type="button" aria-label="显示文件和文件夹" title="显示文件和文件夹" :aria-pressed="workspaceKind === 'all'" @click="workspaceKind = 'all'">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20v10H3.5z" /><path d="M6 12h11M6 15h8" /></svg>
+                  </button>
+                </div>
+                <label class="workspace-sort-select">
+                  <span class="sr-only">排序方式</span>
+                  <select data-testid="workspace-sort" aria-label="排序方式" :value="workspaceSortBy" @change="setWorkspaceSort">
+                    <option value="name">名称</option>
+                    <option value="size">文件大小</option>
+                    <option value="modifiedAt">最近修改</option>
+                  </select>
+                </label>
+                <button class="icon-button workspace-sort-direction" data-testid="workspace-sort-direction" type="button" :aria-label="workspaceSortDirection === 'asc' ? '升序排列' : '降序排列'" :title="workspaceSortDirection === 'asc' ? '升序排列' : '降序排列'" @click="workspaceSortDirection = workspaceSortDirection === 'asc' ? 'desc' : 'asc'">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="workspaceSortDirection === 'asc' ? 'M7 14 12 9l5 5 M4 19h16' : 'M7 10l5 5 5-5 M4 5h16'" /></svg>
+                </button>
+              </div>
+            </template>
           </div>
           <template v-if="sidebarView === 'outline'">
             <TocTree
@@ -6209,17 +6331,21 @@ onBeforeUnmount(() => {
           <div v-else class="workspace-file-tree" data-testid="workspace-file-tree">
             <p v-if="workspaceError" class="empty" role="alert">{{ workspaceError }}</p>
             <p v-else-if="!workspacePath" class="workspace-tree-empty">尚未打开文件夹</p>
-            <p v-else-if="workspaceEntries.length === 0" class="workspace-tree-empty">此文件夹中没有支持的文档</p>
+            <p v-else-if="workspaceIsSearching" class="workspace-tree-empty" role="status">正在搜索工作目录…</p>
+            <p v-else-if="workspaceSearch.trim() && visibleWorkspaceEntries.length === 0" class="workspace-tree-empty">没有匹配的文件或文件夹</p>
+            <p v-else-if="visibleWorkspaceEntries.length === 0" class="workspace-tree-empty">此文件夹中没有符合条件的内容</p>
             <ul v-else class="file-tree-list">
               <FileTree
-                v-for="entry in workspaceEntries"
+                v-for="entry in visibleWorkspaceEntries"
                 :key="entry.path"
                 :root-path="workspacePath"
                 :entry="entry"
                 :active-path="currentFilePath() ?? undefined"
+                :filter="workspaceChildFilter"
                 @open="openFilePath"
               />
             </ul>
+            <p v-if="workspaceSearchLimited" class="workspace-search-limit">已达到 10,000 项扫描上限</p>
           </div>
         </div>
       </aside>
