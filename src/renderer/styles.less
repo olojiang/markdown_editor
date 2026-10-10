@@ -1024,21 +1024,33 @@ select:disabled {
   }
 }
 
-.workspace-sort-select {
+.workspace-sort-switch {
+  align-items: center;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  gap: 2px;
   min-width: 0;
+  padding: 2px;
 
-  select {
-    appearance: none;
-    background: var(--surface-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text);
-    cursor: pointer;
-    font: inherit;
-    height: 34px;
+  .icon-button {
+    border: 0;
+    flex: 1 1 0;
+    height: 30px;
+    min-height: 30px;
     min-width: 0;
-    padding: 0 28px 0 10px;
-    width: 100%;
+    width: auto;
+
+    &:hover,
+    &:focus-visible {
+      background: var(--surface-muted);
+    }
+
+    &.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
   }
 }
 
@@ -1049,8 +1061,7 @@ select:disabled {
   width: 34px;
 }
 
-.workspace-controls svg,
-.workspace-sort-direction svg {
+.workspace-controls svg {
   height: 16px;
   width: 16px;
 }

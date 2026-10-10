@@ -3005,9 +3005,9 @@ function setSidebarView(view: 'outline' | 'files'): void {
   window.localStorage.setItem('markdown-editor.sidebar-view', view);
 }
 
-function setWorkspaceSort(event: Event): void {
-  workspaceSortBy.value = (event.target as HTMLSelectElement).value as WorkspaceSortKey;
-  workspaceSortDirection.value = workspaceSortBy.value === 'name' ? 'asc' : 'desc';
+function setWorkspaceSort(sortBy: WorkspaceSortKey): void {
+  workspaceSortBy.value = sortBy;
+  workspaceSortDirection.value = sortBy === 'name' ? 'asc' : 'desc';
 }
 
 async function searchWorkspace(query: string, generation: number): Promise<void> {
@@ -6311,14 +6311,17 @@ onBeforeUnmount(() => {
                     <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20v10H3.5z" /><path d="M6 12h11M6 15h8" /></svg>
                   </button>
                 </div>
-                <label class="workspace-sort-select">
-                  <span class="sr-only">排序方式</span>
-                  <select data-testid="workspace-sort" aria-label="排序方式" :value="workspaceSortBy" @change="setWorkspaceSort">
-                    <option value="name">名称</option>
-                    <option value="size">文件大小</option>
-                    <option value="modifiedAt">最近修改</option>
-                  </select>
-                </label>
+                <div class="workspace-sort-switch" role="group" aria-label="排序方式">
+                  <button class="icon-button" :class="{ active: workspaceSortBy === 'name' }" data-testid="workspace-sort-name" type="button" aria-label="按名称排序" title="按名称排序" :aria-pressed="workspaceSortBy === 'name'" @click="setWorkspaceSort('name')">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h3v3H4zM10 6.5h10M4 11h3v3H4zM10 12.5h10M4 17h3v3H4zM10 18.5h10" /></svg>
+                  </button>
+                  <button class="icon-button" :class="{ active: workspaceSortBy === 'size' }" data-testid="workspace-sort-size" type="button" aria-label="按文件大小排序" title="按文件大小排序" :aria-pressed="workspaceSortBy === 'size'" @click="setWorkspaceSort('size')">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3.5h9l5 5v12H5zM14 3.5v5h5M8 17h2M12 14v3M16 11v6" /></svg>
+                  </button>
+                  <button class="icon-button" :class="{ active: workspaceSortBy === 'modifiedAt' }" data-testid="workspace-sort-modifiedAt" type="button" aria-label="按最近修改排序" title="按最近修改排序" :aria-pressed="workspaceSortBy === 'modifiedAt'" @click="setWorkspaceSort('modifiedAt')">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" /><path d="M12 7v5l3.5 2" /></svg>
+                  </button>
+                </div>
                 <button class="icon-button workspace-sort-direction" data-testid="workspace-sort-direction" type="button" :aria-label="workspaceSortDirection === 'asc' ? '升序排列' : '降序排列'" :title="workspaceSortDirection === 'asc' ? '升序排列' : '降序排列'" @click="workspaceSortDirection = workspaceSortDirection === 'asc' ? 'desc' : 'asc'">
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="workspaceSortDirection === 'asc' ? 'M7 14 12 9l5 5 M4 19h16' : 'M7 10l5 5 5-5 M4 5h16'" /></svg>
                 </button>

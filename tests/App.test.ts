@@ -3099,7 +3099,7 @@ describe('App', () => {
     await firstRun.get('[data-testid="sidebar-files-tab"]').trigger('click');
     await firstRun.get('[data-testid="choose-workspace-folder"]').trigger('click');
     await firstRun.get('[data-testid="workspace-filter-folders"]').trigger('click');
-    await firstRun.get('[data-testid="workspace-sort"]').setValue('modifiedAt');
+    await firstRun.get('[data-testid="workspace-sort-modifiedAt"]').trigger('click');
     await firstRun.get('[data-testid="workspace-sort-direction"]').trigger('click');
 
     expect(window.localStorage.getItem('markdown-editor.workspace-path')).toBe('/workspace');
@@ -3113,7 +3113,7 @@ describe('App', () => {
     await vi.waitFor(() => expect(window.markdownBridge?.listDirectory).toHaveBeenCalledWith('/workspace', '/workspace'));
     expect(restarted.get('[data-testid="sidebar-files-tab"]').attributes('aria-pressed')).toBe('true');
     expect(restarted.get('[data-testid="workspace-filter-folders"]').attributes('aria-pressed')).toBe('true');
-    expect(restarted.get('[data-testid="workspace-sort"]').element).toHaveProperty('value', 'modifiedAt');
+    expect(restarted.get('[data-testid="workspace-sort-modifiedAt"]').attributes('aria-pressed')).toBe('true');
     expect(restarted.get('[data-testid="workspace-sort-direction"]').attributes('aria-label')).toBe('升序排列');
   });
 
@@ -3132,10 +3132,15 @@ describe('App', () => {
     expect(wrapper.find('[data-testid="workspace-file-/workspace/readme.md"]').exists()).toBe(false);
 
     await wrapper.get('[data-testid="workspace-filter-all"]').trigger('click');
-    await wrapper.get('[data-testid="workspace-sort"]').setValue('size');
+    await wrapper.get('[data-testid="workspace-sort-size"]').trigger('click');
+    expect(wrapper.get('[data-testid="workspace-sort-size"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-testid="workspace-sort-name"]').attributes('aria-pressed')).toBe('false');
     expect(wrapper.get('[data-testid="workspace-sort-direction"]').attributes('aria-label')).toBe('降序排列');
     await wrapper.get('[data-testid="workspace-sort-direction"]').trigger('click');
     expect(wrapper.get('[data-testid="workspace-sort-direction"]').attributes('aria-label')).toBe('升序排列');
+
+    await wrapper.get('[data-testid="workspace-sort-name"]').trigger('click');
+    expect(wrapper.get('[data-testid="workspace-sort-name"]').attributes('aria-pressed')).toBe('true');
   });
 
   it('replaces all source matches in the editor', async () => {
