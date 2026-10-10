@@ -3098,14 +3098,23 @@ describe('App', () => {
     await vi.dynamicImportSettled();
     await firstRun.get('[data-testid="sidebar-files-tab"]').trigger('click');
     await firstRun.get('[data-testid="choose-workspace-folder"]').trigger('click');
+    await firstRun.get('[data-testid="workspace-filter-folders"]').trigger('click');
+    await firstRun.get('[data-testid="workspace-sort"]').setValue('modifiedAt');
+    await firstRun.get('[data-testid="workspace-sort-direction"]').trigger('click');
 
     expect(window.localStorage.getItem('markdown-editor.workspace-path')).toBe('/workspace');
     expect(window.localStorage.getItem('markdown-editor.sidebar-view')).toBe('files');
+    expect(window.localStorage.getItem('markdown-editor.workspace-preferences')).toBe(
+      '{"kind":"folders","sortBy":"modifiedAt","direction":"asc"}',
+    );
     firstRun.unmount();
 
     const restarted = mount(App);
     await vi.waitFor(() => expect(window.markdownBridge?.listDirectory).toHaveBeenCalledWith('/workspace', '/workspace'));
     expect(restarted.get('[data-testid="sidebar-files-tab"]').attributes('aria-pressed')).toBe('true');
+    expect(restarted.get('[data-testid="workspace-filter-folders"]').attributes('aria-pressed')).toBe('true');
+    expect(restarted.get('[data-testid="workspace-sort"]').element).toHaveProperty('value', 'modifiedAt');
+    expect(restarted.get('[data-testid="workspace-sort-direction"]').attributes('aria-label')).toBe('升序排列');
   });
 
   it('searches nested files and filters or sorts the workspace tree', async () => {

@@ -40,6 +40,7 @@ import {
   tocScrollTarget,
 } from '@/renderer/lib/heading-scroll';
 import { rendererLog } from '@/renderer/lib/logger';
+import { loadWorkspacePreferences, saveWorkspacePreferences } from '@/renderer/lib/workspace-preferences';
 import {
   filterWorkspaceEntries,
   type SortDirection,
@@ -308,12 +309,13 @@ const activeEditorColumn = ref(1);
 const tocSearch = ref('');
 const sidebarView = ref<'outline' | 'files'>(window.localStorage.getItem('markdown-editor.sidebar-view') === 'files' ? 'files' : 'outline');
 const workspacePath = ref(window.localStorage.getItem('markdown-editor.workspace-path') ?? '');
+const savedWorkspacePreferences = loadWorkspacePreferences(window.localStorage);
 const workspaceEntries = ref<DirectoryEntry[]>([]);
 const workspaceSearchResults = ref<DirectoryEntry[]>([]);
 const workspaceSearch = ref('');
-const workspaceKind = ref<WorkspaceEntryKind>('all');
-const workspaceSortBy = ref<WorkspaceSortKey>('name');
-const workspaceSortDirection = ref<SortDirection>('asc');
+const workspaceKind = ref<WorkspaceEntryKind>(savedWorkspacePreferences.kind);
+const workspaceSortBy = ref<WorkspaceSortKey>(savedWorkspacePreferences.sortBy);
+const workspaceSortDirection = ref<SortDirection>(savedWorkspacePreferences.direction);
 const workspaceIsSearching = ref(false);
 const workspaceSearchLimited = ref(false);
 const workspaceError = ref('');
@@ -420,6 +422,11 @@ const workspaceChildFilter = computed(() => ({
   ...workspaceTreeFilter.value,
   query: workspaceSearch.value.trim() && workspaceSearchResults.value.length ? '' : workspaceSearch.value,
 }));
+watch(
+  () => [workspaceKind.value, workspaceSortBy.value, workspaceSortDirection.value] as const,
+  ([kind, sortBy, direction]) => saveWorkspacePreferences(window.localStorage, { kind, sortBy, direction }),
+  { flush: 'sync' },
+);
 const workspaceName = computed(() => workspacePath.value.split(/[\\/]/).filter(Boolean).at(-1) ?? workspacePath.value);
 const title = computed(() => currentFile.value?.name ?? 'Markdown 纪');
 const activeTab = computed(() => openTabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
