@@ -40,6 +40,13 @@ import {
   tocScrollTarget,
 } from '@/renderer/lib/heading-scroll';
 import { rendererLog } from '@/renderer/lib/logger';
+import {
+  createTabGroup,
+  moveTabToGroup,
+  removeTabFromGroups,
+  toggleTabGroup,
+  type TabGroup,
+} from '@/renderer/lib/tab-groups';
 import { loadWorkspacePreferences, saveWorkspacePreferences } from '@/renderer/lib/workspace-preferences';
 import {
   filterWorkspaceEntries,
@@ -120,6 +127,8 @@ interface TabContextMenu {
   x: number;
   y: number;
 }
+
+type TabBarItem = { type: 'tab'; tab: OpenTab; index: number } | { type: 'group'; group: TabGroup };
 
 interface RenameFileDialog {
   tabId: string;
@@ -244,6 +253,7 @@ const icons = {
   bookmark: 'M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
   bookOpen: 'M2 4.5A3 3 0 0 1 5 3h5v18H5a3 3 0 0 0-3 3V4.5z M22 4.5A3 3 0 0 0 19 3h-5v18h5a3 3 0 0 1 3 3V4.5z',
   check: 'm5 12 4 4L19 6',
+  close: 'M18 6 6 18 M6 6l12 12',
   chevronDown: 'm6 9 6 6 6-6',
   chevronUp: 'm18 15-6-6-6 6',
   chevronRight: 'm9 18 6-6-6-6',
@@ -256,6 +266,9 @@ const icons = {
   expand: 'M8 3H5a2 2 0 0 0-2 2v3 M16 3h3a2 2 0 0 1 2 2v3 M8 21H5a2 2 0 0 1-2-2v-3 M16 21h3a2 2 0 0 0 2-2v-3',
   externalLink: 'M15 3h6v6 M10 14 21 3 M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
   fileText: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13h8 M8 17h8 M8 9h2',
+  folder: 'M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M3 7V5a2 2 0 0 1 2-2h4l2 2h4',
+  folderPlus: 'M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M3 7V5a2 2 0 0 1 2-2h4l2 2h4 M15 12v6 M12 15h6',
+  folderMinus: 'M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M3 7V5a2 2 0 0 1 2-2h4l2 2h4 M12 15h6',
   image: 'M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z M8.5 11.5 11 14l2-2.5L17 16 M8 9h.01',
   info: 'M12 17v-5 M12 8h.01 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z',
   keyboard: 'M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M6 10h.01 M10 10h.01 M14 10h.01 M18 10h.01 M7 14h10',
@@ -338,6 +351,8 @@ const selectedAssetPath = ref('');
 const imageUploadMode = ref<ImageUploadMode>(loadImageUploadMode());
 const cloudUploadDialog = ref<CloudUploadDialog | null>(null);
 const tabContextMenu = ref<TabContextMenu | null>(null);
+const tabGroupDialog = ref<{ tabId: string; name: string } | null>(null);
+const tabGroupNameInput = ref<HTMLInputElement | null>(null);
 const renameFileDialog = ref<RenameFileDialog | null>(null);
 const renameFileInput = ref<HTMLInputElement | null>(null);
 const editorConfigDialogOpen = ref(false);
@@ -353,6 +368,25 @@ const htmlPreviewSrc = ref('');
 const recentFilesOpen = ref(false);
 const isTocPanelCollapsed = ref(false);
 const draggedTabId = ref<string | null>(null);
+const tabGroups = computed(() => session.value.tabGroups);
+const tabBarItems = computed<TabBarItem[]>(() => {
+  const groupsByTab = new Map(tabGroups.value.flatMap((group) => group.tabIds.map((id) => [id, group] as const)));
+  const emittedGroups = new Set<string>();
+  return openTabs.value.flatMap((tab, index): TabBarItem[] => {
+    const group = groupsByTab.get(tab.id);
+    if (!group) return [{ type: 'tab', tab, index }];
+    if (emittedGroups.has(group.id)) return [];
+    emittedGroups.add(group.id);
+    return [
+      { type: 'group', group },
+      ...(group.collapsed ? [] : group.tabIds.flatMap((id): TabBarItem[] => {
+        const memberIndex = openTabs.value.findIndex((item) => item.id === id);
+        const member = openTabs.value[memberIndex];
+        return member ? [{ type: 'tab', tab: member, index: memberIndex }] : [];
+      })),
+    ];
+  });
+});
 const activeResize = ref<'toc' | 'editor' | null>(null);
 const cursorHistory = ref<CursorHistoryEntry[]>([]);
 const scrollBackToTopVisible = ref(false);
@@ -431,6 +465,10 @@ const workspaceName = computed(() => workspacePath.value.split(/[\\/]/).filter(B
 const title = computed(() => currentFile.value?.name ?? 'Markdown 纪');
 const activeTab = computed(() => openTabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
 const contextMenuTab = computed(() => openTabs.value.find((tab) => tab.id === tabContextMenu.value?.tabId) ?? null);
+const contextMenuTabIsGrouped = computed(() => {
+  const tab = contextMenuTab.value;
+  return tab ? tabGroups.value.some((group) => group.tabIds.includes(tab.id)) : false;
+});
 const appVersion = __APP_VERSION__;
 const activeMermaidStyle = computed(() => {
   const diagram = activeMermaidDiagram.value;
@@ -1321,6 +1359,7 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
   const normalized = normalizeSession(snapshot ?? persistableSession());
   return {
     filePath: normalized.filePath,
+    tabGroups: normalized.tabGroups.map((group) => ({ ...group, tabIds: [...group.tabIds] })),
     tabs: normalized.tabs.map((tab) => ({
       id: tab.id,
       filePath: tab.filePath,
@@ -2677,6 +2716,46 @@ function dropTabOn(tabId: string, event: DragEvent): void {
   const [movedTab] = openTabs.value.splice(sourceIndex, 1);
   openTabs.value.splice(targetIndex, 0, movedTab);
   persistTabSession();
+}
+
+function dropTabIntoGroup(groupId: string, event: DragEvent): void {
+  const tabId = draggedTabId.value ?? event.dataTransfer?.getData('text/plain');
+  draggedTabId.value = null;
+  if (!tabId || !openTabs.value.some((tab) => tab.id === tabId)) return;
+  persistTabSession({ tabGroups: moveTabToGroup(tabGroups.value, tabId, groupId) });
+}
+
+function createGroupForTab(tabId: string): void {
+  closeTabContextMenu();
+  tabGroupDialog.value = { tabId, name: '' };
+  void nextTick(() => tabGroupNameInput.value?.focus());
+}
+
+function submitTabGroup(): void {
+  const dialog = tabGroupDialog.value;
+  const name = dialog?.name.trim();
+  if (!dialog || !name) return;
+  const id = `group:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`;
+  persistTabSession({ tabGroups: createTabGroup(tabGroups.value, id, name, dialog.tabId) });
+  tabGroupDialog.value = null;
+}
+
+function addTabToGroup(tabId: string, groupId: string): void {
+  persistTabSession({ tabGroups: moveTabToGroup(tabGroups.value, tabId, groupId) });
+  closeTabContextMenu();
+}
+
+function removeTabFromGroup(tabId: string): void {
+  persistTabSession({ tabGroups: removeTabFromGroups(tabGroups.value, tabId) });
+  closeTabContextMenu();
+}
+
+function removeContextTabFromGroup(): void {
+  if (tabContextMenu.value) removeTabFromGroup(tabContextMenu.value.tabId);
+}
+
+function toggleGroup(groupId: string): void {
+  persistTabSession({ tabGroups: toggleTabGroup(tabGroups.value, groupId) });
 }
 
 function finishTabDrag(): void {
@@ -6100,37 +6179,38 @@ onBeforeUnmount(() => {
 
     <nav class="tabbar" aria-label="打开的文件">
       <div
-        v-for="(tab, index) in openTabs"
-        :key="tab.id"
-        class="tab-button"
-        role="button"
-        tabindex="0"
-        :class="{ active: tab.id === activeTabId, dirty: tab.source !== tab.lastSavedContent }"
-        :title="tabTitle(tab, index)"
-        :data-testid="`tab-${tab.file.name}`"
-        :data-tab-id="tab.id"
-        draggable="true"
-        @click="activateTab(tab.id)"
-        @contextmenu="openTabContextMenu(tab.id, $event)"
-        @dragstart="startTabDrag(tab.id, $event)"
+        v-for="item in tabBarItems"
+        :key="item.type === 'group' ? item.group.id : item.tab.id"
+        v-bind="item.type === 'group' ? { class: 'tab-group', role: 'button', tabindex: 0, 'aria-label': `${item.group.name} 分组，${item.group.tabIds.length} 个标签`, 'aria-expanded': !item.group.collapsed, 'data-testid': `tab-group-${item.group.id}` } : { class: 'tab-button', role: 'button', tabindex: 0, 'data-testid': `tab-${item.tab.file.name}`, 'data-tab-id': item.tab.id, draggable: 'true', title: tabTitle(item.tab, item.index) }"
+        :class="item.type === 'group' ? { collapsed: item.group.collapsed } : { active: item.tab.id === activeTabId, dirty: item.tab.source !== item.tab.lastSavedContent, grouped: tabGroups.some((group) => group.tabIds.includes(item.tab.id)) }"
+        @click="item.type === 'group' ? toggleGroup(item.group.id) : activateTab(item.tab.id)"
+        @contextmenu="item.type === 'tab' && openTabContextMenu(item.tab.id, $event)"
+        @dragstart="item.type === 'tab' && startTabDrag(item.tab.id, $event)"
         @dragover.prevent
-        @drop.stop.prevent="dropTabOn(tab.id, $event)"
+        @drop.stop.prevent="item.type === 'group' ? dropTabIntoGroup(item.group.id, $event) : dropTabOn(item.tab.id, $event)"
         @dragend="finishTabDrag"
-        @keydown.enter.prevent="activateTab(tab.id)"
-        @keydown.space.prevent="activateTab(tab.id)"
+        @keydown.enter.prevent="item.type === 'group' ? toggleGroup(item.group.id) : activateTab(item.tab.id)"
+        @keydown.space.prevent="item.type === 'group' ? toggleGroup(item.group.id) : activateTab(item.tab.id)"
       >
-        <span>{{ tab.file.name }}</span>
-        <span v-if="tab.source !== tab.lastSavedContent" class="dirty-dot" aria-label="有未保存更改" />
-        <button
-          class="tab-close"
-          type="button"
-          :aria-label="`关闭 ${tab.file.name}`"
-          :title="`关闭 ${tab.file.name}`"
-          :data-testid="`close-tab-${tab.file.name}`"
-          @click="closeTab(tab.id, $event)"
-        >
-          ×
-        </button>
+        <template v-if="item.type === 'group'">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="item.group.collapsed ? icons.chevronRight : icons.chevronDown" /></svg>
+          <span>{{ item.group.name }}</span>
+          <span class="tab-group__count">{{ item.group.tabIds.length }}</span>
+        </template>
+        <template v-else>
+          <span>{{ item.tab.file.name }}</span>
+          <span v-if="item.tab.source !== item.tab.lastSavedContent" class="dirty-dot" aria-label="有未保存更改" />
+          <button
+            class="tab-close"
+            type="button"
+            :aria-label="`关闭 ${item.tab.file.name}`"
+            :title="`关闭 ${item.tab.file.name}`"
+            :data-testid="`close-tab-${item.tab.file.name}`"
+            @click="closeTab(item.tab.id, $event)"
+          >
+            ×
+          </button>
+        </template>
       </div>
     </nav>
 
@@ -6142,6 +6222,28 @@ onBeforeUnmount(() => {
       :style="{ left: `${tabContextMenu.x}px`, top: `${tabContextMenu.y}px` }"
       @click.stop
     >
+      <div class="tab-context-menu__section-label">添加到分组</div>
+      <button type="button" role="menuitem" class="tab-context-menu__item" data-testid="tab-create-group" @click="createGroupForTab(tabContextMenu.tabId)">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.folderPlus" /></svg>
+        <span>新建分组</span>
+      </button>
+      <button
+        v-for="group in tabGroups"
+        :key="group.id"
+        type="button"
+        role="menuitem"
+        class="tab-context-menu__item"
+        :data-testid="`tab-add-to-group-${group.id}`"
+        @click="addTabToGroup(tabContextMenu.tabId, group.id)"
+      >
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.folder" /></svg>
+        <span>{{ group.name }}</span>
+      </button>
+      <button v-if="contextMenuTabIsGrouped" type="button" role="menuitem" class="tab-context-menu__item" data-testid="tab-remove-from-group" @click="removeContextTabFromGroup">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.folderMinus" /></svg>
+        <span>移出分组</span>
+      </button>
+      <div class="tab-context-menu__separator" />
       <button
         v-if="contextMenuTab?.file.path"
         type="button"
@@ -6173,6 +6275,33 @@ onBeforeUnmount(() => {
         <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.open" /></svg>
         <span>在文件夹中显示</span>
       </button>
+    </div>
+
+    <div
+      v-if="tabGroupDialog"
+      class="tab-group-modal-backdrop"
+      data-testid="tab-group-dialog"
+      role="presentation"
+      @click.self="tabGroupDialog = null"
+    >
+      <form class="tab-group-modal" role="dialog" aria-modal="true" aria-labelledby="tab-group-dialog-title" @submit.prevent="submitTabGroup">
+        <header class="tab-group-modal__header">
+          <h2 id="tab-group-dialog-title">新建标签分组</h2>
+          <button class="icon-button" type="button" aria-label="关闭" title="关闭" @click="tabGroupDialog = null">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.close" /></svg>
+          </button>
+        </header>
+        <label for="tab-group-name">分组名称</label>
+        <input id="tab-group-name" ref="tabGroupNameInput" v-model="tabGroupDialog.name" maxlength="40" required autofocus />
+        <footer class="tab-group-modal__actions">
+          <button class="icon-button" type="button" aria-label="取消" title="取消" @click="tabGroupDialog = null">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.close" /></svg>
+          </button>
+          <button class="icon-button" type="submit" aria-label="创建分组" title="创建分组" :disabled="!tabGroupDialog.name.trim()">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.check" /></svg>
+          </button>
+        </footer>
+      </form>
     </div>
 
     <div

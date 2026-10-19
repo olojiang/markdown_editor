@@ -3,6 +3,7 @@ import {
   normalizeEditorPreferences,
   type EditorPreferences,
 } from '@/renderer/lib/editorConfig';
+import { normalizeTabGroups, type TabGroup } from '@/renderer/lib/tab-groups';
 
 export type ThemeMode = 'light' | 'dark' | 'eye';
 export type BookmarkViewMode = 'all' | 'current';
@@ -64,6 +65,7 @@ export interface FileEncodingPreference {
 export interface MarkdownSession {
   filePath: string | null;
   tabs: MarkdownSessionTab[];
+  tabGroups: TabGroup[];
   activeTabId: string | null;
   bookmarks: MarkdownBookmark[];
   bookmarkViewMode: BookmarkViewMode;
@@ -83,6 +85,7 @@ export function createDefaultSession(): MarkdownSession {
   return {
     filePath: null,
     tabs: [],
+    tabGroups: [],
     activeTabId: null,
     bookmarks: [],
     bookmarkViewMode: 'all',
@@ -454,6 +457,7 @@ export function normalizeSession(session: Partial<MarkdownSession> | null | unde
     ...session,
     filePath: typeof session?.filePath === 'string' ? session.filePath : null,
     tabs,
+    tabGroups: normalizeTabGroups(session?.tabGroups, tabs.map((tab) => tab.id)),
     activeTabId,
     bookmarks: normalizeBookmarks(session?.bookmarks),
     bookmarkViewMode: normalizeBookmarkViewMode(session?.bookmarkViewMode),
@@ -475,16 +479,19 @@ export function mergeSession(
   patch: Partial<MarkdownSession>,
 ): MarkdownSession {
   const normalized = normalizeSession(current);
+  const tabs = patch.tabs === undefined
+    ? normalized.tabs
+    : normalizeSessionTabs(patch.tabs, {
+      editorVisible: normalized.editorVisible,
+      previewHidden: normalized.previewHidden,
+    });
+  const tabGroups = normalizeTabGroups(patch.tabGroups ?? normalized.tabGroups, tabs.map((tab) => tab.id));
   return {
     ...normalized,
     ...patch,
     filePath: patch.filePath === undefined ? normalized.filePath : patch.filePath,
-    tabs: patch.tabs === undefined
-      ? normalized.tabs
-      : normalizeSessionTabs(patch.tabs, {
-        editorVisible: normalized.editorVisible,
-        previewHidden: normalized.previewHidden,
-      }),
+    tabs,
+    tabGroups,
     activeTabId: patch.activeTabId === undefined ? normalized.activeTabId : patch.activeTabId,
     bookmarks: patch.bookmarks === undefined ? normalized.bookmarks : normalizeBookmarks(patch.bookmarks),
     bookmarkViewMode: patch.bookmarkViewMode === undefined

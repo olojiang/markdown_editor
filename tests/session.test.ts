@@ -21,6 +21,22 @@ import {
 } from '@/renderer/lib/session';
 
 describe('session helpers', () => {
+  it('persists only tab groups that reference open tabs and keeps collapse state', () => {
+    const normalized = normalizeSession({
+      ...createDefaultSession(),
+      tabs: [{
+        id: 'a', filePath: null, name: 'a.md', scrollTop: 0, editorScrollTop: 0,
+        previewScrollTop: 0, tocScrollTop: 0, cursorPosition: { lineNumber: 1, column: 1 },
+        activeHeadingId: '', collapsedHeadingIds: [], editorVisible: false,
+        previewHidden: false, previewFullscreen: false,
+      }],
+      tabGroups: [{ id: 'work', name: ' Work ', tabIds: ['a', 'gone'], collapsed: true }],
+    });
+
+    expect(normalized.tabGroups).toEqual([{ id: 'work', name: 'Work', tabIds: ['a'], collapsed: true }]);
+    expect(mergeSession(normalized, { tabs: [] }).tabGroups).toEqual([]);
+  });
+
   it('moves saved session references to a renamed file without changing unrelated entries', () => {
     const oldPath = '/docs/readme.md';
     const nextPath = '/docs/guide.md';
@@ -71,6 +87,7 @@ describe('session helpers', () => {
     expect(createDefaultSession()).toEqual({
       filePath: null,
       tabs: [],
+      tabGroups: [],
       activeTabId: null,
       bookmarks: [],
       bookmarkViewMode: 'all',
@@ -98,6 +115,7 @@ describe('session helpers', () => {
     ).toEqual({
       filePath: '/tmp/a.md',
       tabs: [],
+      tabGroups: [],
       activeTabId: null,
       bookmarks: [],
       bookmarkViewMode: 'all',

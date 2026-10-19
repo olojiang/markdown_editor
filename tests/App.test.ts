@@ -3535,6 +3535,34 @@ describe('App', () => {
     expect(window.markdownBridge?.saveMarkdownFileAs).toHaveBeenCalledWith(openFile.content, 'readme 副本.md');
   });
 
+  it('creates persistent tab groups from the context menu and collapses their tabs', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
+    await wrapper.find('[data-testid="tab-create-group"]').trigger('click');
+    expect(wrapper.find('[data-testid="tab-group-dialog"]').exists()).toBe(true);
+    await wrapper.find('#tab-group-name').setValue('Work');
+    await wrapper.find('.tab-group-modal').trigger('submit');
+
+    const groupHeader = wrapper.find('.tab-group');
+    expect(groupHeader.text()).toContain('Work');
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('contextmenu', { clientX: 80, clientY: 40 });
+    await wrapper.find('[data-testid="tab-duplicate"]').trigger('click');
+    const duplicate = wrapper.find('[data-testid="tab-readme 副本.md"]');
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn().mockReturnValue('draft:duplicate') };
+    await duplicate.trigger('dragstart', { dataTransfer });
+    await groupHeader.trigger('drop', { dataTransfer });
+    expect(groupHeader.text()).toContain('2');
+    await groupHeader.trigger('click');
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tab-readme 副本.md"]').exists()).toBe(false);
+    expect(window.markdownBridge?.saveSession).toHaveBeenCalled();
+    await groupHeader.trigger('click');
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
+  });
+
   it('renames an open file from its tab context menu and preserves dirty edits and session references', async () => {
     const renamedFile = {
       ...openFile,
