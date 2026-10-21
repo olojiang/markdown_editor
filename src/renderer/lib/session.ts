@@ -7,7 +7,7 @@ import { normalizeTabGroups, type TabGroup } from '@/renderer/lib/tab-groups';
 
 export type ThemeMode = 'light' | 'dark' | 'eye';
 export type BookmarkViewMode = 'all' | 'current';
-export const maxRecentFiles = 20;
+export const maxRecentFiles = 50;
 export const maxFileScrollPositions = 20;
 export const maxFileEncodings = 100;
 export const maxBookmarks = 500;

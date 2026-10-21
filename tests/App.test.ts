@@ -2316,6 +2316,25 @@ describe('App', () => {
     expect(optionLabels).toContain('finder launch.md (beta)');
   });
 
+  it('shows up to 50 recent files and filters them by name or path', async () => {
+    const recentFiles = Array.from({ length: 55 }, (_, index) => `/docs/folder-${index}/note-${index}.md`);
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: null, tabs: [], activeTabId: null, recentFiles,
+      scrollTop: 0, tocWidth: 260, editorWidth: 560,
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.find('[data-testid="recent-files"]').trigger('click');
+    await nextTick();
+
+    expect(wrapper.findAll('.recent-file-row')).toHaveLength(50);
+    const search = wrapper.find('[data-testid="recent-files-search"]');
+    await search.setValue('folder-4');
+    expect(wrapper.findAll('.recent-file-row')).toHaveLength(10);
+    expect(wrapper.findAll('.recent-file-row').map((row) => row.attributes('title')))
+      .toContain('/docs/folder-48/note-48.md');
+  });
+
   it('removes a recent file from the custom recent menu without opening it', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();

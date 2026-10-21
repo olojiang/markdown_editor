@@ -473,7 +473,7 @@ function normalizeRecentFiles(recentFiles: unknown): string[] {
     }
     seen.add(key);
     return [normalized];
-  }).slice(0, 20);
+  }).slice(0, 50);
 }
 
 function normalizeFileScrollPositions(positions: unknown): FileScrollPosition[] {

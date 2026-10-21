@@ -376,11 +376,11 @@ describe('session helpers', () => {
   });
 
   it('keeps recent files as a capped LRU list', () => {
-    const files = Array.from({ length: 25 }, (_, index) => `/tmp/${index}.md`);
+    const files = Array.from({ length: 55 }, (_, index) => `/tmp/${index}.md`);
     const recentFiles = files.reduce<string[]>((recent, filePath) => addRecentFile(recent, filePath), []);
 
     expect(recentFiles).toHaveLength(maxRecentFiles);
-    expect(recentFiles[0]).toBe('/tmp/24.md');
+    expect(recentFiles[0]).toBe('/tmp/54.md');
     expect(recentFiles).not.toContain('/tmp/0.md');
     expect(addRecentFile(recentFiles, '/tmp/20.md')[0]).toBe('/tmp/20.md');
   });

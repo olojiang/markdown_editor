@@ -555,6 +555,12 @@ const editorStatusText = computed(() => (
 ));
 const recentFilePaths = computed(() => normalizeRecentFiles(session.value.recentFiles));
 const recentFileOptions = computed(() => buildRecentFileOptions(recentFilePaths.value));
+const recentFileSearch = ref('');
+const filteredRecentFileOptions = computed(() => {
+  const query = recentFileSearch.value.trim().toLocaleLowerCase();
+  if (!query) return recentFileOptions.value;
+  return recentFileOptions.value.filter(({ path, label }) => `${label} ${path}`.toLocaleLowerCase().includes(query));
+});
 const shortcutModifier = computed(() => (navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl'));
 const openShortcutHint = computed(() => `打开文档 (${shortcutModifier.value}+O)`);
 const saveShortcutHint = computed(() => `保存 ${currentDocumentLabel.value} 文件 (${shortcutModifier.value}+S)`);
@@ -3277,6 +3283,7 @@ function toggleRecentFiles(): void {
     return;
   }
   recentFilesOpen.value = !recentFilesOpen.value;
+  if (recentFilesOpen.value) recentFileSearch.value = '';
 }
 
 async function openRecentFilePath(filePath: string): Promise<void> {
@@ -6023,7 +6030,7 @@ onBeforeUnmount(() => {
             class="recent-files-trigger"
             type="button"
             :disabled="recentFileOptions.length === 0"
-            :title="`最近打开文件（最多 20 个）`"
+            :title="`最近打开文件（最多 50 个）`"
             :aria-expanded="recentFilesOpen"
             aria-haspopup="menu"
             @click.stop="toggleRecentFiles"
@@ -6038,8 +6045,28 @@ onBeforeUnmount(() => {
             role="menu"
             @click.stop
           >
+            <label class="recent-files-search-field">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.search" /></svg>
+              <input
+                v-model="recentFileSearch"
+                data-testid="recent-files-search"
+                type="search"
+                aria-label="搜索最近打开的文件"
+                placeholder="搜索名称或路径"
+              />
+              <button
+                v-if="recentFileSearch"
+                class="icon-button recent-files-search-clear"
+                type="button"
+                aria-label="清除最近文件搜索"
+                title="清除搜索"
+                @click="recentFileSearch = ''"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.close" /></svg>
+              </button>
+            </label>
             <div
-              v-for="file in recentFileOptions"
+              v-for="file in filteredRecentFileOptions"
               :key="file.path"
               class="recent-file-row"
               role="none"
@@ -6065,6 +6092,7 @@ onBeforeUnmount(() => {
                 <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.trash" /></svg>
               </button>
             </div>
+            <p v-if="filteredRecentFileOptions.length === 0" class="recent-files-empty">没有匹配的文件</p>
           </div>
         </div>
         <button
