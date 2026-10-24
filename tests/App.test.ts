@@ -1468,7 +1468,7 @@ describe('App', () => {
     expect(preview.scrollTop).toBe(160);
   });
 
-  it('syncs preview and table-of-contents highlight from the editor cursor line', async () => {
+  it('keeps the preview stationary when the editor cursor moves inside its viewport', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
     await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
@@ -1493,12 +1493,12 @@ describe('App', () => {
     await wrapper.find('[data-testid="editor"]').trigger('keyup');
     await vi.dynamicImportSettled();
 
-    expect(preview.scrollTop).toBeGreaterThan(0);
+    expect(preview.scrollTop).toBe(0);
     const betaLink = wrapper.findAll('.toc-link').find((link) => link.text() === 'Beta');
     expect(betaLink?.classes()).toContain('active');
   });
 
-  it('keeps the cursor viewport offset when syncing preview from a cursor change', async () => {
+  it('keeps the preview stationary when the cursor moves in a scrolled editor', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();
     await wrapper.find('[data-testid="toggle-editor"]').trigger('click');
@@ -1517,7 +1517,6 @@ describe('App', () => {
       11: 260,
     });
 
-    const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 22.4;
     editor.scrollTop = 80;
     const cursorLine = 7;
     const cursorOffset = offsetForLineColumn(openFile.content, cursorLine, 1);
@@ -1525,7 +1524,7 @@ describe('App', () => {
     wrapper.findComponent(MarkdownMonacoEditor).vm.$emit('focus-line-change');
     await nextTick();
 
-    expect(preview.scrollTop).toBeCloseTo(160 - (cursorLine - 1) * lineHeight + 80);
+    expect(preview.scrollTop).toBe(0);
   });
 
   it('builds a clickable table of contents for text chapters without a preview pane', async () => {

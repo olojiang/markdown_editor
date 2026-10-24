@@ -1932,17 +1932,6 @@ function syncEditorToLine(line: number): void {
   setEditorScrollTop(Math.min(editor.value.getMaxScrollTop(), Math.max(0, targetTop)));
 }
 
-function editorViewportOffsetForLine(line: number): number {
-  const lineTop = editor.value?.getLineScrollTop(line);
-  if (lineTop === null || lineTop === undefined || !Number.isFinite(lineTop)) {
-    return 0;
-  }
-
-  const rawOffset = Math.max(0, lineTop - editorScrollTop());
-  const viewportHeight = editorElement()?.clientHeight ?? 0;
-  return viewportHeight > 0 ? Math.min(rawOffset, viewportHeight) : rawOffset;
-}
-
 function previewNodeScrollTop(node: HTMLElement, container: HTMLElement): number {
   const hasLayoutBox = node.getClientRects().length > 0 && container.getClientRects().length > 0;
   const nodeTop = node.getBoundingClientRect().top;
@@ -2221,7 +2210,6 @@ function onEditorFocusLineChange(): void {
     if (isRestoringDocumentScroll) {
       return;
     }
-    syncPreviewToLine(line, true, editorViewportOffsetForLine(line));
     updateActiveHeadingFromSourceLine(line);
     rememberScroll(activeScrollTop());
   });

@@ -65,6 +65,55 @@ test('launches the Electron editor shell', async () => {
   }
 });
 
+test('keeps the editor viewport still while the cursor moves inside it', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-cursor-scroll-'));
+  const markdownPath = path.join(tempDir, 'cursor scroll.md');
+  const content = Array.from({ length: 120 }, (_, index) => `Scroll item ${index + 1}`).join('\n');
+  await fs.writeFile(markdownPath, content, 'utf8');
+  const launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
+
+  try {
+    const page = await launched.app.firstWindow();
+    await page.setViewportSize({ width: 1388, height: 768 });
+    await ensureEditorVisible(page);
+    await page.keyboard.press('Meta+Home');
+    const firstLineBefore = await firstVisibleEditorLine(page);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+
+    expect(await firstVisibleEditorLine(page)).toBe(firstLineBefore);
+  } finally {
+    await closeEditor(launched);
+    await fs.rm(tempDir, { force: true, recursive: true });
+  }
+});
+
+test('keeps the preview still while the cursor moves inside the editor viewport', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-cursor-preview-'));
+  const markdownPath = path.join(tempDir, 'cursor preview.md');
+  const content = Array.from({ length: 120 }, (_, index) => `Scroll item ${index + 1}`).join('\n\n');
+  await fs.writeFile(markdownPath, content, 'utf8');
+  const launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
+
+  try {
+    const page = await launched.app.firstWindow();
+    await page.setViewportSize({ width: 1388, height: 768 });
+    await ensureEditorVisible(page);
+    await page.keyboard.press('Meta+Home');
+    const preview = page.getByTestId('preview');
+    const previewScrollTop = await preview.evaluate((element) => element.scrollTop);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+
+    await expect.poll(() => preview.evaluate((element) => element.scrollTop)).toBe(previewScrollTop);
+  } finally {
+    await closeEditor(launched);
+    await fs.rm(tempDir, { force: true, recursive: true });
+  }
+});
+
 test('opens a markdown file supplied as a launch argument', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-launch-'));
   const markdownPath = path.join(tempDir, 'finder launch.md');
