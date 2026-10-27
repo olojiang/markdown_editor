@@ -2056,6 +2056,7 @@ describe('App', () => {
     setScrollMetrics(editor, 1200, 200);
     setScrollMetrics(preview, 2200, 200);
     preview.scrollTop = 0;
+    const scrollTo = vi.spyOn(preview, 'scrollTo');
     setPreviewSourceLineGeometry(preview, 500, {
       1: 20,
       3: 80,
@@ -2068,6 +2069,7 @@ describe('App', () => {
     const betaLink = wrapper.findAll('.toc-link').find((link) => link.text() === 'Beta');
     await betaLink?.trigger('click');
 
+    expect(scrollTo).toHaveBeenCalledWith({ top: 144, behavior: 'instant' });
     expect(preview.scrollTop).toBe(144);
     const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 22.4;
     expect(editor.scrollTop).toBeCloseTo(6 * lineHeight);

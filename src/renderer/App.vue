@@ -2380,7 +2380,10 @@ function jumpToHeading(id: string): void {
     return;
   }
 
-  container.scrollTop = previewHeadingScrollTarget(previewNodeScrollTop(heading, container));
+  container.scrollTo({
+    top: previewHeadingScrollTarget(previewNodeScrollTop(heading, container)),
+    behavior: 'instant',
+  });
   const sourceLine = Number(heading.dataset.sourceLine);
   if (Number.isFinite(sourceLine)) {
     editor.value?.setCursorPosition({ lineNumber: sourceLine, column: 1 });
