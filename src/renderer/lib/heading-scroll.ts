@@ -69,8 +69,15 @@ export function tocScrollTarget(
   itemTop: number,
   itemHeight: number,
   viewportHeight: number,
+  currentScrollTop: number,
   maxScrollTop: number,
 ): number {
-  const centeredTop = itemTop - Math.max(0, (viewportHeight - itemHeight) / 2);
-  return Math.min(Math.max(0, maxScrollTop), Math.max(0, centeredTop));
+  const itemBottom = itemTop + itemHeight;
+  const viewportBottom = currentScrollTop + viewportHeight;
+  const target = itemTop < currentScrollTop
+    ? itemTop
+    : itemBottom > viewportBottom
+      ? itemBottom - viewportHeight
+      : currentScrollTop;
+  return Math.min(Math.max(0, maxScrollTop), Math.max(0, target));
 }

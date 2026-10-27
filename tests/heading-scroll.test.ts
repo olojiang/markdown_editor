@@ -68,11 +68,19 @@ describe('heading-scroll', () => {
     ], 104)).toBe('beta');
   });
 
-  it('centers an active table-of-contents item when there is room to scroll', () => {
-    expect(tocScrollTarget(600, 28, 400, 1000)).toBe(414);
+  it('keeps an active table-of-contents item in place when it is already visible', () => {
+    expect(tocScrollTarget(600, 28, 400, 500, 1000)).toBe(500);
   });
 
-  it('clamps an active table-of-contents item to the scroll end', () => {
-    expect(tocScrollTarget(1000, 28, 400, 700)).toBe(700);
+  it('scrolls only enough to reveal an active item below the viewport', () => {
+    expect(tocScrollTarget(920, 28, 400, 500, 1000)).toBe(548);
+  });
+
+  it('scrolls only enough to reveal an active item above the viewport', () => {
+    expect(tocScrollTarget(400, 28, 400, 500, 1000)).toBe(400);
+  });
+
+  it('clamps a minimally revealed item to the scroll end', () => {
+    expect(tocScrollTarget(1000, 28, 400, 700, 700)).toBe(700);
   });
 });

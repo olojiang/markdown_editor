@@ -5747,7 +5747,13 @@ function scrollActiveTocItemIntoView(id: string): void {
   const rowRect = row.getBoundingClientRect();
   const rowHeight = rowRect.height || row.offsetHeight || 28;
   const rowTop = scroller.scrollTop + rowRect.top - scrollerRect.top;
-  scroller.scrollTop = tocScrollTarget(rowTop, rowHeight, scroller.clientHeight, maxScrollTop(scroller));
+  scroller.scrollTop = tocScrollTarget(
+    rowTop,
+    rowHeight,
+    scroller.clientHeight,
+    scroller.scrollTop,
+    maxScrollTop(scroller),
+  );
 }
 
 watch(activeHeadingId, async (id) => {

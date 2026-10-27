@@ -165,77 +165,23 @@ source "$APPLE_KEY_METADATA_ENV"
 # shellcheck disable=SC1090
 source "$APPLE_KEY_SECRETS_ENV"
 
-KEYCHAIN_NAME="${KEYCHAIN_NAME:-apple-build-signing.keychain-db}"
-KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-${APPLE_CERTIFICATE_PASSWORD:-}}"
+KEYCHAIN_NAME="${KEYCHAIN_NAME:-markdown-editor-build-signing.keychain-db}"
 KEYCHAIN_PATH="${MAC_CODESIGN_KEYCHAIN:-$HOME/Library/Keychains/$KEYCHAIN_NAME}"
 
 require_value "${APPLE_CERTIFICATE_ID:-}" "APPLE_CERTIFICATE_ID"
-require_value "${APPLE_CERTIFICATE_PASSWORD:-}" "APPLE_CERTIFICATE_PASSWORD"
-require_value "${KEYCHAIN_PASSWORD:-}" "KEYCHAIN_PASSWORD or APPLE_CERTIFICATE_PASSWORD"
-require_value "${MODERN_P12:-}" "MODERN_P12"
-require_file "$MODERN_P12" "modern Apple signing PKCS#12"
+require_file "$KEYCHAIN_PATH" "preconfigured signing keychain"
+if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$APPLE_CERTIFICATE_ID" >/dev/null; then
+  echo "Expected signing identity is unavailable in $KEYCHAIN_PATH: $APPLE_CERTIFICATE_ID" >&2
+  echo "Prepare the keychain once with /Users/hunter/Workspace/apple_keys/import_into_keychain.sh." >&2
+  exit 1
+fi
+echo "Using preconfigured signing keychain: $KEYCHAIN_PATH"
 
 if [[ "$NOTARIZE" == true ]]; then
   require_value "${APPLE_API_KEY:-}" "APPLE_API_KEY"
   require_value "${APPLE_API_ISSUER:-}" "APPLE_API_ISSUER"
   require_value "${APPLE_API_KEY_PATH:-}" "APPLE_API_KEY_PATH"
   require_file "$APPLE_API_KEY_PATH" "Apple notarization API key"
-fi
-
-identity_available() {
-  security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$APPLE_CERTIFICATE_ID" >/dev/null
-}
-
-prepare_signing_keychain() {
-  if [[ -f "$KEYCHAIN_PATH" ]]; then
-    echo "Using existing signing keychain: $KEYCHAIN_PATH"
-  else
-    echo "Creating signing keychain: $KEYCHAIN_PATH"
-    mkdir -p "$(dirname "$KEYCHAIN_PATH")"
-    security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-  fi
-
-  security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-  security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-
-  local existing_keychains=()
-  while IFS= read -r keychain; do
-    existing_keychains+=("$keychain")
-  done < <(security list-keychains -d user | sed 's/^[[:space:]]*"\(.*\)"[[:space:]]*$/\1/')
-
-  if ! printf '%s\n' "${existing_keychains[@]}" | grep -Fx "$KEYCHAIN_PATH" >/dev/null; then
-    security list-keychains -d user -s "$KEYCHAIN_PATH" "${existing_keychains[@]}"
-  fi
-
-  if identity_available; then
-    echo "Signing identity already present in keychain."
-  else
-    echo "Importing signing identity into keychain."
-    security import "$MODERN_P12" \
-      -f pkcs12 \
-      -k "$KEYCHAIN_PATH" \
-      -P "$APPLE_CERTIFICATE_PASSWORD" \
-      -T /usr/bin/codesign >/dev/null
-  fi
-
-  security set-key-partition-list \
-    -S apple-tool:,apple:,codesign: \
-    -s \
-    -k "$KEYCHAIN_PASSWORD" \
-    "$KEYCHAIN_PATH" >/dev/null
-
-  if ! identity_available; then
-    echo "Expected signing identity not found after keychain setup: $APPLE_CERTIFICATE_ID" >&2
-    security find-identity -v -p codesigning "$KEYCHAIN_PATH" >&2 || true
-    exit 1
-  fi
-
-  echo "Signing keychain is ready for non-interactive codesign."
-}
-
-prepare_signing_keychain
-
-if [[ "$NOTARIZE" == true ]]; then
   export APPLE_API_KEY
   export APPLE_API_ISSUER
   export APPLE_API_KEY_PATH

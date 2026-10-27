@@ -4,7 +4,7 @@ const path = require('node:path');
 
 const rootDir = path.resolve(__dirname, '..');
 const defaultIdentity = 'Developer ID Application: Pine Field Inc (Y8JR7FG9SR)';
-const defaultKeychain = path.join(process.env.HOME || '', 'Library/Keychains/apple-build-signing.keychain-db');
+const defaultKeychain = path.join(process.env.HOME || '', 'Library/Keychains/markdown-editor-build-signing.keychain-db');
 const defaultEntitlements = path.join(rootDir, 'build/entitlements.mac.plist');
 
 function requireValue(value, label) {
