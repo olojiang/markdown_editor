@@ -1435,11 +1435,13 @@ describe('App', () => {
     const preview = wrapper.find<HTMLElement>('[data-testid="preview"]').element;
     setScrollMetrics(editor, 1200, 200);
     setScrollMetrics(preview, 2200, 200);
+    const scrollTo = vi.spyOn(preview, 'scrollTo');
 
     editor.scrollTop = 500;
     await wrapper.find('[data-testid="editor"]').trigger('scroll');
 
     expect(preview.scrollTop).toBe(1000);
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: 'instant' });
   });
 
   it('syncs editor scrolling to preview source anchors relative to the preview pane', async () => {

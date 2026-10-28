@@ -2,6 +2,14 @@ import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 describe('preview styles', () => {
+  it('keeps automatic table-of-contents scrolling instant', () => {
+    const stylesSource = fs.readFileSync('src/renderer/styles.less', 'utf8');
+    const tocStart = stylesSource.indexOf('.toc-content {');
+    const tocEnd = stylesSource.indexOf('\n}', tocStart);
+
+    expect(stylesSource.slice(tocStart, tocEnd)).toMatch(/scroll-behavior:\s*auto;/);
+  });
+
   it('keeps Markdown heading sizes descending inside the article preview', () => {
     const stylesSource = fs.readFileSync('src/renderer/styles.less', 'utf8');
     const previewStart = stylesSource.indexOf('.preview {');

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { createThrottle } from '@/renderer/lib/throttle';
 import MarkdownMonacoEditor from '@/renderer/components/MarkdownMonacoEditor.vue';
 import FileTree from '@/renderer/components/FileTree.vue';
 import SearchPanel from '@/renderer/components/SearchPanel.vue';
@@ -396,6 +397,7 @@ const untitledDraftNamePattern = /^未命名-\d+\.md$/;
 let cursorHistoryIndex = -1;
 let isNavigatingCursorHistory = false;
 const scrollSyncIdleDelayMs = 120;
+const editorScrollSyncThrottleMs = 48;
 let scrollSyncSource: 'editor' | 'preview' | null = null;
 let scrollSyncFrame: number | undefined;
 let scrollSyncInteractionSource: 'editor' | 'preview' | null = null;
@@ -1843,6 +1845,13 @@ function applyScrollRatio(element: HTMLElement, ratio: number): void {
   element.scrollTop = maxScroll <= 0 ? 0 : maxScroll * ratio;
 }
 
+function scrollToInstant(element: HTMLElement, top: number): void {
+  element.scrollTo({
+    top: Math.min(maxScrollTop(element), Math.max(0, top)),
+    behavior: 'instant',
+  });
+}
+
 function maxScrollTop(element: HTMLElement): number {
   return Math.max(0, element.scrollHeight - element.clientHeight);
 }
@@ -2053,16 +2062,12 @@ function syncPreviewToLine(line: number, lock = true, viewportOffset = 0): void 
 
   const targetTop = interpolatePreviewScrollFromLine(line);
   if (targetTop === null) {
-    applyScrollRatio(targetElement, scrollRatio(sourceElement));
-    targetElement.scrollTop = Math.min(
-      maxScrollTop(targetElement),
-      Math.max(0, targetElement.scrollTop - viewportOffset),
+    scrollToInstant(
+      targetElement,
+      maxScrollTop(targetElement) * scrollRatio(sourceElement) - viewportOffset,
     );
   } else {
-    targetElement.scrollTop = Math.min(
-      maxScrollTop(targetElement),
-      Math.max(0, targetTop - viewportOffset),
-    );
+    scrollToInstant(targetElement, targetTop - viewportOffset);
   }
 }
 
@@ -2179,12 +2184,19 @@ function syncScroll(from: 'editor' | 'preview', lock = true): void {
   }
 }
 
+const editorScrollSync = createThrottle(() => {
+  if (isScrollSyncBlocked('editor')) {
+    return;
+  }
+  syncScroll('editor', false);
+}, editorScrollSyncThrottleMs);
+
 function onEditorScroll(): void {
   if (isRestoringDocumentScroll) {
     return;
   }
   refreshScrollSyncFromScroll('editor');
-  syncScroll('editor');
+  editorScrollSync();
   updateActiveHeadingFromPreview();
   rememberScroll(activeScrollTop());
 }
@@ -5922,6 +5934,7 @@ onBeforeUnmount(() => {
     window.clearTimeout(mermaidNavigationTimer);
   }
   resetScrollSyncLock();
+  editorScrollSync.cancel();
   if (sessionSaveTimer !== undefined) {
     saveSessionNow();
   }
