@@ -6430,7 +6430,7 @@ onBeforeUnmount(() => {
                   class="icon-button toc-panel-toggle"
                   type="button"
                   :aria-label="isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'"
-                  :title="isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'"
+                  :title="`${isTocPanelCollapsed ? '展开目录侧栏' : '收起目录侧栏'} (${shortcutModifier}+${altModifier}+Shift+B)`"
                   @click="toggleTocPanel"
                 >
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="isTocPanelCollapsed ? icons.sidebarShow : icons.sidebarHide" /></svg>
@@ -6569,10 +6569,10 @@ onBeforeUnmount(() => {
             <button v-if="isMarkdownDocument" data-testid="format-unordered-list" class="icon-button" type="button" :aria-label="`无序列表 (${shortcutModifier}+${altModifier}+U)`" :title="`无序列表 (${shortcutModifier}+${altModifier}+U)`" @click="formatUnorderedList">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.listUnordered" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="insert-table" class="icon-button" type="button" aria-label="插入表格" title="插入表格" @click="insertTable">
+            <button v-if="isMarkdownDocument" data-testid="insert-table" class="icon-button" type="button" aria-label="插入表格" :title="`插入表格 (${shortcutModifier}+K)`" @click="insertTable">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.columns" /></svg>
             </button>
-            <button v-if="isMarkdownDocument" data-testid="insert-link" class="icon-button" type="button" aria-label="插入链接" title="插入链接" @click="insertLink">
+            <button v-if="isMarkdownDocument" data-testid="insert-link" class="icon-button" type="button" aria-label="插入链接" :title="`插入链接 (${shortcutModifier}+K)`" @click="insertLink">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.link" /></svg>
             </button>
             <button v-if="isMarkdownDocument" data-testid="insert-code" class="icon-button" type="button" :aria-label="`插入代码块 (${shortcutModifier}+${altModifier}+C)`" :title="`插入代码块 (${shortcutModifier}+${altModifier}+C)`" @click="insertCodeBlock">
