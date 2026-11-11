@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type * as Monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
+import { findAllMatches } from '@/renderer/lib/editor-search';
 import {
   defaultEditorConfigText,
   parseEditorConfig,
@@ -44,6 +45,8 @@ const props = defineProps<{
   configText: string;
   language: string;
   modelValue: string;
+  searchQuery?: string;
+  searchMatchStart?: number | null;
   theme: 'light' | 'dark' | 'eye';
   vimEnabled: boolean;
 }>();
@@ -82,6 +85,7 @@ let vimMode: { dispose(): void } | null = null;
 let ignoreModelChange = false;
 let disposables: Array<{ dispose(): void }> = [];
 let bookmarkDecorationIds: string[] = [];
+let searchDecorationIds: string[] = [];
 
 function editorTheme(): string {
   return props.theme === 'dark' ? 'markdown-dark' : props.theme === 'eye' ? 'markdown-eye' : 'markdown-light';
@@ -150,6 +154,26 @@ function syncBookmarkDecorations(): void {
   }));
 
   bookmarkDecorationIds = monacoEditor.deltaDecorations(bookmarkDecorationIds, decorations);
+}
+
+function syncSearchDecorations(): void {
+  const monaco = monacoModule;
+  const model = getModel();
+  if (!monacoEditor || !monaco || !model) return;
+
+  const matches = findAllMatches(model.getValue(), props.searchQuery ?? '');
+  const decorations: Monaco.editor.IModelDeltaDecoration[] = matches.map(({ start, end }) => {
+    const startPosition = model.getPositionAt(start);
+    const endPosition = model.getPositionAt(end);
+    const isActiveMatch = start === props.searchMatchStart;
+    return {
+      range: new monaco.Range(startPosition.lineNumber, startPosition.column, endPosition.lineNumber, endPosition.column),
+      options: {
+        inlineClassName: isActiveMatch ? 'editor-search-match editor-search-match-active' : 'editor-search-match',
+      },
+    };
+  });
+  searchDecorationIds = monacoEditor.deltaDecorations(searchDecorationIds, decorations);
 }
 
 function defineMonacoThemes(monaco: typeof Monaco): void {
@@ -430,6 +454,7 @@ async function createMonacoEditor(): Promise<void> {
   monacoEditor = monacoModule.editor.create(container.value, monacoOptions(parsedConfig.value));
   registerSearchShortcutOverride(monacoModule, monacoEditor);
   syncBookmarkDecorations();
+  syncSearchDecorations();
   disposables = [
     monacoEditor.onDidChangeModelContent(() => {
       if (ignoreModelChange) {
@@ -438,6 +463,7 @@ async function createMonacoEditor(): Promise<void> {
       emit('update:modelValue', monacoEditor?.getValue() ?? '');
       emitFocusLineChange();
       syncBookmarkDecorations();
+      syncSearchDecorations();
     }),
     monacoEditor.onDidScrollChange(emitScroll),
     monacoEditor.onDidChangeCursorPosition(emitFocusLineChange),
@@ -799,7 +825,10 @@ watch(() => props.modelValue, (value) => {
   monacoEditor.setValue(value);
   ignoreModelChange = false;
   syncBookmarkDecorations();
+  syncSearchDecorations();
 });
+
+watch(() => [props.searchQuery, props.searchMatchStart], syncSearchDecorations);
 
 watch(() => props.theme, () => {
   monacoModule?.editor.setTheme(editorTheme());

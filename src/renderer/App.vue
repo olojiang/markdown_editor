@@ -343,6 +343,7 @@ const editorSearch = ref('');
 const editorReplace = ref('');
 const editorSearchInput = ref<HTMLInputElement | null>(null);
 const previewSearchRange = ref<SearchMatchRange | null>(null);
+const editorSearchMatchStart = ref<number | null>(null);
 const editorSearchStatus = computed(() => {
   const query = editorSearch.value;
   if (!query) return '';
@@ -643,6 +644,7 @@ watch(visibleBookmarks, (bookmarks) => {
   revealSelectedBookmark();
 });
 watch(editorSearch, () => {
+  editorSearchMatchStart.value = null;
   previewSearchRange.value = null;
   clearPreviewSearchHighlight();
 });
@@ -4348,6 +4350,7 @@ function findNext(focusEditor = true): void {
   if (focusEditor) {
     editor.value.focus();
   }
+  editorSearchMatchStart.value = match.start;
   editor.value.setSelectionRange(match.start, match.end);
 }
 
@@ -4372,6 +4375,7 @@ function findPrevious(focusEditor = true): void {
   if (focusEditor) {
     editor.value.focus();
   }
+  editorSearchMatchStart.value = match.start;
   editor.value.setSelectionRange(match.start, match.end);
 }
 
@@ -4515,6 +4519,7 @@ function showEditorSearch(searchText = selectedEditorText()): void {
 function hideEditorSearch(): void {
   const wasPreviewSearchMode = isPreviewSearchMode.value;
   editorSearchVisible.value = false;
+  editorSearchMatchStart.value = null;
   previewSearchRange.value = null;
   clearPreviewSearchHighlight();
   if (!wasPreviewSearchMode) {
@@ -6764,6 +6769,8 @@ onBeforeUnmount(() => {
             :auto-suggestions-enabled="session.editorPreferences.autoSuggestionsEnabled"
             :config-text="session.editorPreferences.configText"
             :language="currentEditorLanguage"
+            :search-query="editorSearchVisible && !isPreviewSearchMode ? editorSearch : ''"
+            :search-match-start="editorSearchMatchStart"
             :theme="session.theme"
             :vim-enabled="session.editorPreferences.vimEnabled"
             @focus-line-change="onEditorFocusLineChange"

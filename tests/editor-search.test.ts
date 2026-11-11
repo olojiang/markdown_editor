@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findNextMatch, findPreviousMatch, replaceAllMatches } from '@/renderer/lib/editor-search';
+import { findAllMatches, findNextMatch, findPreviousMatch, replaceAllMatches } from '@/renderer/lib/editor-search';
 
 describe('editor search', () => {
   const source = 'Git Pull origin master\ngit status';
@@ -12,6 +12,13 @@ describe('editor search', () => {
   it('finds the previous match and wraps to the end', () => {
     expect(findPreviousMatch(source, 'git', source.length)).toEqual({ start: 23, end: 26 });
     expect(findPreviousMatch(source, 'pull', 0)).toEqual({ start: 4, end: 8 });
+  });
+
+  it('returns every match range for editor highlighting', () => {
+    expect(findAllMatches('Git pull\ngit PULL\nno match', 'git pull')).toEqual([
+      { start: 0, end: 8 },
+      { start: 9, end: 17 },
+    ]);
   });
 
   it('replaces all literal matches regardless of case', () => {

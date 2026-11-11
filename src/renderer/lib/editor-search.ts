@@ -17,6 +17,10 @@ export function countTextMatches(text: string, query: string): number {
   return matchesInText(text, query).length;
 }
 
+export function findAllMatches(text: string, query: string): TextMatchRange[] {
+  return matchesInText(text, query);
+}
+
 export function findNextMatch(text: string, query: string, start: number): TextMatchRange | null {
   const matches = matchesInText(text, query);
   return matches.find((match) => match.start >= start) ?? matches[0] ?? null;
