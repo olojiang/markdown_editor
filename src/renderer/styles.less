@@ -1525,6 +1525,13 @@ select:disabled {
   }
 }
 
+.editor-search-status {
+  color: var(--text-muted);
+  font-size: 12px;
+  grid-column: 1 / -1;
+  min-height: 16px;
+}
+
 .toc-tree {
   list-style: none;
   margin: 0;
@@ -1804,7 +1811,7 @@ select:disabled {
   display: grid;
   flex: 1 1 auto;
   gap: 8px;
-  grid-template-columns: minmax(140px, 360px) 36px;
+  grid-template-columns: minmax(140px, 360px) 36px auto;
   justify-content: start;
   min-width: 0;
 
@@ -1817,6 +1824,10 @@ select:disabled {
     min-height: 32px;
     min-width: 0;
     padding: 0 9px;
+  }
+
+  .editor-search-status {
+    grid-column: auto;
   }
 }
 

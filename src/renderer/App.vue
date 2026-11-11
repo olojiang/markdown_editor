@@ -29,6 +29,7 @@ import {
   type FormatResult,
   type HeadingLevel,
 } from '@/renderer/lib/editor-format';
+import { countTextMatches, findNextMatch, findPreviousMatch, replaceAllMatches } from '@/renderer/lib/editor-search';
 import { resolveFormatShortcut, type FormatShortcutAction } from '@/renderer/lib/editor-shortcut';
 import { parseEditorConfig } from '@/renderer/lib/editorConfig';
 import { formatFileModifiedTime, formatFileSize } from '@/renderer/lib/format';
@@ -342,6 +343,12 @@ const editorSearch = ref('');
 const editorReplace = ref('');
 const editorSearchInput = ref<HTMLInputElement | null>(null);
 const previewSearchRange = ref<SearchMatchRange | null>(null);
+const editorSearchStatus = computed(() => {
+  const query = editorSearch.value;
+  if (!query) return '';
+  const count = countTextMatches(source.value, query);
+  return count ? `${count} 个匹配` : '无匹配';
+});
 const bookmarkManagerOpen = ref(false);
 const bookmarkSearch = ref('');
 const bookmarkList = ref<HTMLElement | null>(null);
@@ -4291,19 +4298,13 @@ function revealPreviewSearchMatch(match: SearchMatchRange): void {
 }
 
 function nextSourceMatch(term: string, start: number): SearchMatchRange | null {
-  let index = source.value.indexOf(term, start);
-  if (index === -1 && start > 0) {
-    index = source.value.indexOf(term, 0);
-  }
-  return index === -1 ? null : { end: index + term.length, start: index, term };
+  const match = findNextMatch(source.value, term, start);
+  return match ? { ...match, term } : null;
 }
 
 function previousSourceMatch(term: string, start: number): SearchMatchRange | null {
-  let index = source.value.lastIndexOf(term, start - 1);
-  if (index === -1 && start < source.value.length) {
-    index = source.value.lastIndexOf(term);
-  }
-  return index === -1 ? null : { end: index + term.length, start: index, term };
+  const match = findPreviousMatch(source.value, term, start);
+  return match ? { ...match, term } : null;
 }
 
 function findPreviewMatch(direction: 'next' | 'previous'): void {
@@ -4396,7 +4397,7 @@ function replaceCurrent(): void {
   }
 
   const selected = source.value.slice(selection.start, selection.end);
-  if (selected !== term) {
+  if (selected.length !== term.length || countTextMatches(selected, term) !== 1) {
     findNext();
     return;
   }
@@ -4417,9 +4418,9 @@ function replaceAll(): void {
     return;
   }
 
-  const count = source.value.split(term).length - 1;
-  source.value = source.value.split(term).join(editorReplace.value);
-  status.value = `已替换 ${count} 处`;
+  const result = replaceAllMatches(source.value, term, editorReplace.value);
+  source.value = result.value;
+  status.value = `已替换 ${result.count} 处`;
 }
 
 function transformJsonSource(compact: boolean): void {
@@ -6749,6 +6750,7 @@ onBeforeUnmount(() => {
           <button data-testid="replace-all" class="icon-button" type="button" aria-label="全部替换" title="全部替换" @click="replaceAll">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.refresh" /></svg>
           </button>
+          <span class="editor-search-status" data-testid="editor-search-status" aria-live="polite">{{ editorSearchStatus }}</span>
         </div>
         <div
           class="source-editor-shell"
@@ -6801,6 +6803,7 @@ onBeforeUnmount(() => {
             <button class="icon-button" type="button" aria-label="查找" title="查找" @click="findNext()">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.search" /></svg>
             </button>
+            <span class="editor-search-status" data-testid="editor-search-status" aria-live="polite">{{ editorSearchStatus }}</span>
           </div>
           <nav v-if="mermaidDiagramCount > 1" class="mermaid-navigation" data-testid="mermaid-navigation" aria-label="Mermaid 图导航">
             <button

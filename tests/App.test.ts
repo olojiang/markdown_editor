@@ -3174,7 +3174,7 @@ describe('App', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }));
     await nextTick();
 
-    await wrapper.find('[data-testid="editor-search"]').setValue('hello');
+    await wrapper.find('[data-testid="editor-search"]').setValue('HELLO');
     await wrapper.find('[data-testid="editor-replace"]').setValue('hi');
     await wrapper.find('[data-testid="replace-all"]').trigger('click');
 
@@ -3266,7 +3266,8 @@ describe('App', () => {
 
     const searchInput = wrapper.find<HTMLInputElement>('[data-testid="editor-search"]');
     const editor = wrapper.find<HTMLTextAreaElement>('[data-testid="editor"]').element;
-    await searchInput.setValue('hello');
+    await searchInput.setValue('HELLO');
+    expect(wrapper.get('[data-testid="editor-search-status"]').text()).toBe('2 个匹配');
     searchInput.element.focus();
 
     await searchInput.trigger('keydown', { key: 'Enter' });
