@@ -29,7 +29,8 @@ import {
   type FormatResult,
   type HeadingLevel,
 } from '@/renderer/lib/editor-format';
-import { countTextMatches, findNextMatch, findPreviousMatch, replaceAllMatches } from '@/renderer/lib/editor-search';
+import { countTextMatches, findAllMatches, findNextMatch, findPreviousMatch, replaceAllMatches } from '@/renderer/lib/editor-search';
+import { highlightPreviewSearch } from '@/renderer/lib/preview-search';
 import { resolveFormatShortcut, type FormatShortcutAction } from '@/renderer/lib/editor-shortcut';
 import { parseEditorConfig } from '@/renderer/lib/editorConfig';
 import { formatFileModifiedTime, formatFileSize } from '@/renderer/lib/format';
@@ -647,7 +648,7 @@ watch(visibleBookmarks, (bookmarks) => {
 watch(editorSearch, () => {
   editorSearchMatchStart.value = null;
   previewSearchRange.value = null;
-  clearPreviewSearchHighlight();
+  updatePreviewSearchHighlights();
 });
 const helpGroups = computed<HelpGroup[]>(() => [
   {
@@ -4256,9 +4257,16 @@ function sourceLineFromOffset(offset: number): number {
 }
 
 function clearPreviewSearchHighlight(): void {
-  preview.value?.querySelectorAll<HTMLElement>('.preview-search-match').forEach((node) => {
-    node.classList.remove('preview-search-match');
-  });
+  if (preview.value) highlightPreviewSearch(preview.value, '');
+}
+
+function updatePreviewSearchHighlights(activeMatchStart: number | null = null): void {
+  if (!preview.value) return;
+  const query = editorSearch.value;
+  const activeMatchIndex = activeMatchStart === null
+    ? null
+    : findAllMatches(source.value, query).findIndex((match) => match.start === activeMatchStart);
+  highlightPreviewSearch(preview.value, query, activeMatchIndex);
 }
 
 function previewNodeForSourceLine(line: number): HTMLElement | null {
@@ -4285,14 +4293,14 @@ function revealPreviewSearchMatch(match: SearchMatchRange): void {
       return;
     }
 
-    clearPreviewSearchHighlight();
+    updatePreviewSearchHighlights(match.start);
     const line = sourceLineFromOffset(match.start);
     const node = previewNodeForSourceLine(line);
-    if (node) {
-      node.classList.add('preview-search-match');
-    }
 
-    const targetTop = interpolatePreviewScrollFromLine(line)
+    const activeHighlight = container.querySelector<HTMLElement>('.preview-search-match-active');
+    const targetTop = activeHighlight
+      ? previewNodeScrollTop(activeHighlight, container)
+      : interpolatePreviewScrollFromLine(line)
       ?? (node ? previewNodeScrollTop(node, container) : null);
     if (targetTop !== null) {
       container.scrollTop = Math.min(maxScrollTop(container), Math.max(0, targetTop - 16));
@@ -4352,6 +4360,7 @@ function findNext(focusEditor = true): void {
     editor.value.focus();
   }
   editorSearchMatchStart.value = match.start;
+  updatePreviewSearchHighlights(match.start);
   editor.value.setSelectionRange(match.start, match.end);
 }
 
@@ -4377,6 +4386,7 @@ function findPrevious(focusEditor = true): void {
     editor.value.focus();
   }
   editorSearchMatchStart.value = match.start;
+  updatePreviewSearchHighlights(match.start);
   editor.value.setSelectionRange(match.start, match.end);
 }
 
@@ -5730,6 +5740,7 @@ function onPreviewPointerMove(event: PointerEvent): void {
 
 watch(source, () => {
   previewSearchRange.value = null;
+  editorSearchMatchStart.value = null;
   clearPreviewSearchHighlight();
   if (activeTab.value) {
     activeTab.value.source = source.value;
@@ -5744,7 +5755,10 @@ watch(source, () => {
 
 watch(previewHtml, async () => {
   await nextTick();
-  if (preview.value) makeMarkdownTablesResizable(preview.value);
+  if (preview.value) {
+    makeMarkdownTablesResizable(preview.value);
+    updatePreviewSearchHighlights();
+  }
 }, { flush: 'post' });
 
 watch(() => [currentDocumentKind.value, currentFile.value?.path ?? null] as const, () => {

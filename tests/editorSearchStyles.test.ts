@@ -14,5 +14,7 @@ describe('editor search highlight styles', () => {
 
     expect(css).toMatch(/\.monaco-editor \.editor-search-match\s*\{[^}]*background-color: #ffe082[^}]*color: #302400/);
     expect(css).toMatch(/\.monaco-editor \.editor-search-match-active\s*\{[^}]*background-color: #ffbd3d[^}]*color: #241600/);
+    expect(css).toMatch(/\.preview-search-match\s*\{[^}]*background: #ffe082[^}]*color: #302400/);
+    expect(css).toMatch(/\.preview-search-match-active\s*\{[^}]*background: #ffbd3d[^}]*color: #241600/);
   });
 });

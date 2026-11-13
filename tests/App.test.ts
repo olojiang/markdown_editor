@@ -3277,6 +3277,8 @@ describe('App', () => {
     const lastMatch = openFile.content.lastIndexOf('hello');
     expect(editor.selectionStart).toBe(firstMatch);
     expect(editor.selectionEnd).toBe(firstMatch + 'hello'.length);
+    expect(wrapper.findAll('.preview-search-match')).toHaveLength(2);
+    expect(wrapper.find('.preview-search-match-active').text()).toBe('hello');
     expect(document.activeElement).toBe(searchInput.element);
 
     await searchInput.trigger('keydown', { key: 'Enter', shiftKey: true });
@@ -3284,6 +3286,8 @@ describe('App', () => {
 
     expect(editor.selectionStart).toBe(lastMatch);
     expect(editor.selectionEnd).toBe(lastMatch + 'hello'.length);
+    expect(wrapper.findAll('.preview-search-match')).toHaveLength(2);
+    expect(wrapper.find('.preview-search-match-active').text()).toBe('hello');
     expect(document.activeElement).toBe(searchInput.element);
     wrapper.unmount();
   });
@@ -3300,21 +3304,26 @@ describe('App', () => {
     const searchInput = wrapper.find<HTMLInputElement>('[data-testid="editor-search"]');
     await searchInput.setValue('hello');
     searchInput.element.focus();
+    await nextTick();
+
+    expect(wrapper.findAll('.preview-search-match')).toHaveLength(2);
+    expect(wrapper.find('.preview-search-match-active').exists()).toBe(false);
 
     await searchInput.trigger('keydown', { key: 'Enter' });
     await nextTick();
 
-    const firstMatch = wrapper.find<HTMLElement>('.preview-search-match');
+    const firstMatch = wrapper.find<HTMLElement>('.preview-search-match-active');
     expect(firstMatch.exists()).toBe(true);
-    expect(firstMatch.text()).toContain('hello alpha');
+    expect(firstMatch.text()).toBe('hello');
+    expect(wrapper.findAll('.preview-search-match')).toHaveLength(2);
     expect(wrapper.find('[data-testid="editor-replace"]').exists()).toBe(false);
     expect(document.activeElement).toBe(searchInput.element);
 
     await searchInput.trigger('keydown', { key: 'Enter', shiftKey: true });
     await nextTick();
 
-    const previousMatch = wrapper.find<HTMLElement>('.preview-search-match');
-    expect(previousMatch.text()).toContain('hello beta');
+    const previousMatch = wrapper.find<HTMLElement>('.preview-search-match-active');
+    expect(previousMatch.text()).toBe('hello');
     expect(document.activeElement).toBe(searchInput.element);
     wrapper.unmount();
   });
