@@ -1,16 +1,39 @@
 const minimumColumnPercent = 8;
 const maximumColumnPercent = 45;
 
+function distributeColumnWidths(weights: number[]): number[] {
+  const minWidth = Math.min(minimumColumnPercent, 100 / weights.length);
+  const maxWidth = Math.max(minWidth, Math.min(maximumColumnPercent, 100 - minWidth * (weights.length - 1)));
+  const widths = Array<number>(weights.length).fill(0);
+  const remaining = new Set(weights.map((_, index) => index));
+  let remainingWidth = 100;
+
+  while (remaining.size) {
+    const totalWeight = [...remaining].reduce((sum, index) => sum + weights[index], 0);
+    const constrained = [...remaining].find((index) => {
+      const proposed = weights[index] / totalWeight * remainingWidth;
+      return proposed < minWidth || proposed > maxWidth;
+    });
+    if (constrained === undefined) {
+      remaining.forEach((index) => { widths[index] = weights[index] / totalWeight * remainingWidth; });
+      break;
+    }
+
+    const proposed = weights[constrained] / totalWeight * remainingWidth;
+    widths[constrained] = Math.max(minWidth, Math.min(maxWidth, proposed));
+    remainingWidth -= widths[constrained];
+    remaining.delete(constrained);
+  }
+  return widths;
+}
+
 export function estimateMarkdownColumnWidths(rows: string[][]): number[] {
   const columnCount = rows.reduce((maxColumns, row) => Math.max(maxColumns, row.length), 0);
   if (!columnCount) return [];
   const weights = Array.from({ length: columnCount }, (_, column) => rows.reduce((maxLength, row) => (
     Math.max(maxLength, row[column]?.trim().length ?? 0)
   ), 6)).map((length) => Math.min(40, length));
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  const widths = weights.map((weight) => Math.min(maximumColumnPercent, Math.max(minimumColumnPercent, weight / total * 100)));
-  const scale = 100 / widths.reduce((sum, width) => sum + width, 0);
-  return widths.map((width) => width * scale);
+  return distributeColumnWidths(weights);
 }
 
 function readTableRows(table: HTMLTableElement): string[][] {

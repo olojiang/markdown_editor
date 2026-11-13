@@ -12,6 +12,12 @@ describe('markdown table layout', () => {
     expect(widths[3]).toBeGreaterThan(widths[0]);
     expect(widths[3]).toBeLessThan(50);
     expect(widths.reduce((sum, width) => sum + width, 0)).toBeCloseTo(100);
+
+    const twoColumnWidths = estimateMarkdownColumnWidths([
+      ['Name', 'Summary'],
+      ['A', 'A'.repeat(400)],
+    ]);
+    expect(twoColumnWidths[1]).toBeLessThanOrEqual(45);
   });
 
   it('adds accessible resize handles to Markdown table headers', () => {
