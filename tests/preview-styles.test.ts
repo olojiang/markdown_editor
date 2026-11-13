@@ -34,13 +34,15 @@ describe('preview styles', () => {
     expect(previewStyles).toContain('padding-left: 1.1em;');
   });
 
-  it('sizes Markdown table columns from their content', () => {
+  it('keeps long Markdown cell values from squeezing neighboring columns', () => {
     const stylesSource = fs.readFileSync('src/renderer/styles.less', 'utf8');
     const previewStart = stylesSource.indexOf('.preview {');
     const previewEnd = stylesSource.indexOf('.html-preview-frame', previewStart);
     const previewStyles = stylesSource.slice(previewStart, previewEnd);
 
-    expect(previewStyles).toMatch(/table-layout:\s*auto;/);
-    expect(previewStyles).not.toMatch(/table-layout:\s*fixed;/);
+    expect(previewStyles).toMatch(/table-layout:\s*fixed;/);
+    expect(previewStyles).toMatch(/\.markdown-table-resizer/);
+    expect(previewStyles).toMatch(/cursor:\s*col-resize;/);
+    expect(previewStyles).toMatch(/td[\s\S]*?overflow-wrap:\s*anywhere;/);
   });
 });

@@ -61,6 +61,7 @@ import {
   filterHeadingTree,
   type HeadingNode,
 } from '@/renderer/lib/markdown';
+import { makeMarkdownTablesResizable } from '@/renderer/lib/markdown-table-layout';
 import {
   addFileScrollPosition,
   addRecentFile,
@@ -5740,6 +5741,11 @@ watch(source, () => {
     void renderMermaid();
   }
 });
+
+watch(previewHtml, async () => {
+  await nextTick();
+  if (preview.value) makeMarkdownTablesResizable(preview.value);
+}, { flush: 'post' });
 
 watch(() => [currentDocumentKind.value, currentFile.value?.path ?? null] as const, () => {
   if (!hasPreviewPane.value) {
