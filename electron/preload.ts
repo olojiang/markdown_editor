@@ -48,8 +48,8 @@ function resolvePath(baseDir: string, relativePath: string): string {
 contextBridge.exposeInMainWorld('markdownBridge', {
   openMarkdownFile: () => ipcRenderer.invoke('markdown:open'),
   chooseDirectory: () => ipcRenderer.invoke('directory:choose'),
-  listDirectory: (rootPath: string, directoryPath: string) =>
-    ipcRenderer.invoke('directory:list', rootPath, directoryPath),
+  listDirectory: (rootPath: string, directoryPath: string, contentQuery?: string) =>
+    ipcRenderer.invoke('directory:list', rootPath, directoryPath, contentQuery),
   takeLaunchMarkdownFile: () => ipcRenderer.invoke('markdown:take-launch-file'),
   notifyReadyForExternalOpen: () => ipcRenderer.invoke('markdown:ready-for-external-open'),
   onExternalMarkdownFile: (callback: (request: {

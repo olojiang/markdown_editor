@@ -1136,6 +1136,21 @@ select:disabled {
   }
 }
 
+.workspace-search-controls {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
+
+.icon-button.workspace-search-mode {
+  height: 44px;
+  width: 44px;
+
+  &.active:hover {
+    border-color: var(--accent);
+  }
+}
+
 .workspace-search-field {
   align-items: center;
   background: var(--input-bg);

@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { listWorkspaceDirectory } from './directory-operations';
+import { listWorkspaceDirectory, searchMaxFileSize } from './directory-operations';
 import {
   decodeTextBuffer,
   defaultTextEncoding,
@@ -1939,8 +1939,8 @@ ipcMain.handle('directory:choose', async () => {
   return result.canceled ? null : result.filePaths[0] ?? null;
 });
 
-ipcMain.handle('directory:list', async (_event, rootPath: string, directoryPath: string) => {
-  return listWorkspaceDirectory(rootPath, directoryPath);
+ipcMain.handle('directory:list', async (_event, rootPath: string, directoryPath: string, contentQuery?: string) => {
+  return listWorkspaceDirectory(rootPath, directoryPath, contentQuery);
 });
 
 ipcMain.handle('markdown:take-launch-file', async () => {
@@ -2160,7 +2160,6 @@ const searchTextExtensions = new Set([
   '.sql', '.graphql', '.env', '.gitignore', '.editorconfig',
   '.dockerfile', '.makefile', '.cmake',
 ]);
-const searchMaxFileSize = 2 * 1024 * 1024;
 
 function isSearchableFile(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();

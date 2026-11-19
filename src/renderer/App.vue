@@ -330,11 +330,14 @@ const savedWorkspacePreferences = loadWorkspacePreferences(window.localStorage);
 const workspaceEntries = ref<DirectoryEntry[]>([]);
 const workspaceSearchResults = ref<DirectoryEntry[]>([]);
 const workspaceSearch = ref('');
+const workspaceSearchContent = ref(false);
+const workspaceContentSearchActive = computed(() => workspaceSearchContent.value && !!workspaceSearch.value.trim());
 const workspaceKind = ref<WorkspaceEntryKind>(savedWorkspacePreferences.kind);
 const workspaceSortBy = ref<WorkspaceSortKey>(savedWorkspacePreferences.sortBy);
 const workspaceSortDirection = ref<SortDirection>(savedWorkspacePreferences.direction);
 const workspaceIsSearching = ref(false);
 const workspaceSearchLimited = ref(false);
+const workspaceSearchSkipped = ref(false);
 const workspaceError = ref('');
 let workspaceSearchTimer: number | undefined;
 let workspaceSearchGeneration = 0;
@@ -455,19 +458,15 @@ const mermaidDiagramCount = computed(() => previewHtml.value.match(/class="merma
 const headingTree = computed(() => applyCollapsedState(buildDocumentHeadingTree(source.value, currentDocumentKind.value)));
 const visibleHeadingTree = computed(() => filterHeadingTree(headingTree.value, tocSearch.value));
 const workspaceTreeFilter = computed<WorkspaceTreeFilter>(() => ({
-  query: workspaceSearch.value,
-  kind: workspaceKind.value,
+  query: '',
+  kind: workspaceContentSearchActive.value ? 'files' : workspaceKind.value,
   sortBy: workspaceSortBy.value,
   direction: workspaceSortDirection.value,
 }));
 const visibleWorkspaceEntries = computed(() => filterWorkspaceEntries(
   workspaceSearch.value.trim() ? workspaceSearchResults.value : workspaceEntries.value,
-  { ...workspaceTreeFilter.value, query: workspaceSearch.value.trim() && workspaceSearchResults.value.length ? '' : workspaceTreeFilter.value.query },
+  workspaceTreeFilter.value,
 ));
-const workspaceChildFilter = computed(() => ({
-  ...workspaceTreeFilter.value,
-  query: workspaceSearch.value.trim() && workspaceSearchResults.value.length ? '' : workspaceSearch.value,
-}));
 watch(
   () => [workspaceKind.value, workspaceSortBy.value, workspaceSortDirection.value] as const,
   ([kind, sortBy, direction]) => saveWorkspacePreferences(window.localStorage, { kind, sortBy, direction }),
@@ -3109,49 +3108,53 @@ function setWorkspaceSort(sortBy: WorkspaceSortKey): void {
   workspaceSortDirection.value = sortBy === 'name' ? 'asc' : 'desc';
 }
 
-async function searchWorkspace(query: string, generation: number): Promise<void> {
-  if (!bridge?.listDirectory || !workspacePath.value) {
+async function searchWorkspace(query: string, contentMode: boolean, rootPath: string, generation: number): Promise<void> {
+  if (!bridge?.listDirectory) {
     workspaceIsSearching.value = false;
     return;
   }
 
-  const pending = [workspacePath.value];
+  const pending = [rootPath];
   const matches: DirectoryEntry[] = [];
   let inspectedEntries = 0;
+  let skipped = false;
   const normalizedQuery = query.trim().toLocaleLowerCase();
   while (pending.length && inspectedEntries < 10_000) {
-    if (generation !== workspaceSearchGeneration) return;
     const directoryPath = pending.shift()!;
     try {
-      const entries = await bridge.listDirectory(workspacePath.value, directoryPath);
+      const entries = contentMode
+        ? await bridge.listDirectory(rootPath, directoryPath, normalizedQuery)
+        : await bridge.listDirectory(rootPath, directoryPath);
+      if (generation !== workspaceSearchGeneration) return;
       inspectedEntries += entries.length;
-      entries.forEach((entry) => {
-        if (entry.name.toLocaleLowerCase().includes(normalizedQuery)) matches.push(entry);
+      for (const entry of entries) {
+        const matched = contentMode ? entry.contentMatch === 'match' : entry.name.toLocaleLowerCase().includes(normalizedQuery);
+        if (matched) matches.push(entry);
         if (entry.isDirectory) pending.push(entry.path);
-      });
+        if (entry.contentMatch === 'skipped') skipped = true;
+      }
     } catch {
-      // Unreadable child folders do not prevent searching the rest of the workspace.
+      skipped = true;
+      if (generation !== workspaceSearchGeneration) return;
     }
   }
 
-  if (generation === workspaceSearchGeneration) {
-    workspaceSearchResults.value = matches;
-    workspaceSearchLimited.value = pending.length > 0;
-    workspaceIsSearching.value = false;
-  }
+  workspaceSearchResults.value = matches;
+  workspaceSearchLimited.value = pending.length > 0;
+  workspaceSearchSkipped.value = contentMode && skipped;
+  workspaceIsSearching.value = false;
 }
 
-watch(workspaceSearch, (query) => {
+watch([workspaceSearch, workspaceSearchContent, workspacePath], ([query, contentMode, rootPath]) => {
   const generation = ++workspaceSearchGeneration;
   window.clearTimeout(workspaceSearchTimer);
   workspaceSearchResults.value = [];
   workspaceSearchLimited.value = false;
-  if (!query.trim()) {
-    workspaceIsSearching.value = false;
-    return;
+  workspaceSearchSkipped.value = false;
+  workspaceIsSearching.value = !!query.trim() && !!rootPath;
+  if (workspaceIsSearching.value) {
+    workspaceSearchTimer = window.setTimeout(() => void searchWorkspace(query, contentMode, rootPath, generation), 250);
   }
-  workspaceIsSearching.value = true;
-  workspaceSearchTimer = window.setTimeout(() => void searchWorkspace(query, generation), 250);
 });
 
 async function openFilePath(filePath: string, encoding?: TextEncoding): Promise<void> {
@@ -5956,6 +5959,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  ++workspaceSearchGeneration;
+  window.clearTimeout(workspaceSearchTimer);
   if (mermaidNavigationTimer !== undefined) {
     window.clearTimeout(mermaidNavigationTimer);
   }
@@ -6488,12 +6493,32 @@ onBeforeUnmount(() => {
                 <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M1.5 4.5h5l1.4 1.6h6.6v6.4H1.5z" /></svg>
                 <span>{{ workspaceName }}</span>
               </div>
-              <label class="workspace-search-field">
-                <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.8" cy="8.8" r="5.5" /><path d="m13 13 4 4" /></svg>
-                <input v-model="workspaceSearch" data-testid="workspace-search" type="search" placeholder="搜索文件和文件夹" />
-              </label>
+              <div class="workspace-search-controls">
+                <label class="workspace-search-field">
+                  <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.8" cy="8.8" r="5.5" /><path d="m13 13 4 4" /></svg>
+                  <input
+                    v-model="workspaceSearch"
+                    data-testid="workspace-search"
+                    type="search"
+                    :aria-label="workspaceSearchContent ? '搜索文件正文' : '搜索文件和文件夹'"
+                    :placeholder="workspaceSearchContent ? '搜索文件正文' : '搜索文件和文件夹'"
+                  />
+                </label>
+                <button
+                  class="icon-button workspace-search-mode"
+                  :class="{ active: workspaceSearchContent }"
+                  data-testid="workspace-search-content"
+                  type="button"
+                  aria-label="正文搜索"
+                  :title="workspaceSearchContent ? '切换到名称搜索' : '切换到正文搜索'"
+                  :aria-pressed="workspaceSearchContent"
+                  @click="workspaceSearchContent = !workspaceSearchContent"
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3.5h8l4 4v13H6zM14 3.5v4h4M9 12h6M9 16h6" /></svg>
+                </button>
+              </div>
               <div class="workspace-controls">
-                <div class="workspace-kind-switch" role="group" aria-label="显示内容类型">
+                <div v-if="!workspaceContentSearchActive" class="workspace-kind-switch" role="group" aria-label="显示内容类型">
                   <button class="icon-button" :class="{ active: workspaceKind === 'folders' }" data-testid="workspace-filter-folders" type="button" aria-label="仅显示文件夹" title="仅显示文件夹" :aria-pressed="workspaceKind === 'folders'" @click="workspaceKind = workspaceKind === 'folders' ? 'all' : 'folders'">
                     <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20v10H3.5z" /></svg>
                   </button>
@@ -6535,7 +6560,7 @@ onBeforeUnmount(() => {
             <p v-if="workspaceError" class="empty" role="alert">{{ workspaceError }}</p>
             <p v-else-if="!workspacePath" class="workspace-tree-empty">尚未打开文件夹</p>
             <p v-else-if="workspaceIsSearching" class="workspace-tree-empty" role="status">正在搜索工作目录…</p>
-            <p v-else-if="workspaceSearch.trim() && visibleWorkspaceEntries.length === 0" class="workspace-tree-empty">没有匹配的文件或文件夹</p>
+            <p v-else-if="workspaceSearch.trim() && visibleWorkspaceEntries.length === 0" class="workspace-tree-empty">{{ workspaceSearchContent ? '没有找到包含此关键词的文件' : '没有匹配的文件或文件夹' }}</p>
             <p v-else-if="visibleWorkspaceEntries.length === 0" class="workspace-tree-empty">此文件夹中没有符合条件的内容</p>
             <ul v-else class="file-tree-list">
               <FileTree
@@ -6544,10 +6569,11 @@ onBeforeUnmount(() => {
                 :root-path="workspacePath"
                 :entry="entry"
                 :active-path="currentFilePath() ?? undefined"
-                :filter="workspaceChildFilter"
+                :filter="workspaceTreeFilter"
                 @open="openFilePath"
               />
             </ul>
+            <p v-if="workspaceSearchSkipped" class="workspace-search-limit">已跳过无法读取或超过 2 MB 的文件</p>
             <p v-if="workspaceSearchLimited" class="workspace-search-limit">已达到 10,000 项扫描上限</p>
           </div>
         </div>

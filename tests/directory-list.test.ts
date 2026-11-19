@@ -30,6 +30,26 @@ describe('workspace directory listing', () => {
     expect(entries.every(({ modifiedAt }) => Number.isFinite(modifiedAt))).toBe(true);
   });
 
+  it('matches literal document content with encoding detection and skips links', async () => {
+    const root = await createWorkspace();
+    await fs.mkdir(path.join(root, 'nested'));
+    await fs.writeFile(path.join(root, 'a.md'), '\ufeff正文 KEY.[1]', 'utf16le');
+    await fs.writeFile(path.join(root, 'key.[1].md'), 'KEYx1');
+    const largeFile = path.join(root, 'large.md');
+    await fs.writeFile(largeFile, 'KEY.[1]');
+    await fs.truncate(largeFile, 2 * 1024 * 1024 + 1);
+    await fs.writeFile(path.join(root, 'hidden.png'), 'KEY.[1]');
+    await fs.symlink(path.join(root, 'a.md'), path.join(root, 'link.md'));
+
+    const entries = await listWorkspaceDirectory(root, root, ' key.[1] ');
+    expect(entries.map(({ name, contentMatch }) => [name, contentMatch])).toEqual([
+      ['nested', undefined],
+      ['a.md', 'match'],
+      ['key.[1].md', undefined],
+      ['large.md', 'skipped'],
+    ]);
+  });
+
   it('rejects directory paths outside the selected workspace', async () => {
     const root = await createWorkspace();
     await expect(listWorkspaceDirectory(root, os.tmpdir())).rejects.toThrow('outside the selected workspace');

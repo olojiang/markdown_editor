@@ -191,7 +191,7 @@ interface CloudImageUploadResult {
 interface MarkdownBridge {
   openMarkdownFile(): Promise<MarkdownFile | null>;
   chooseDirectory?(): Promise<string | null>;
-  listDirectory?(rootPath: string, directoryPath: string): Promise<DirectoryEntry[]>;
+  listDirectory?(rootPath: string, directoryPath: string, contentQuery?: string): Promise<DirectoryEntry[]>;
   takeLaunchMarkdownFile(): Promise<MarkdownOpenRequest | null>;
   notifyReadyForExternalOpen(): Promise<void>;
   onExternalMarkdownFile(callback: (request: MarkdownOpenRequest) => void): () => void;
@@ -236,6 +236,7 @@ interface DirectoryEntry {
   isDirectory: boolean;
   size: number | null;
   modifiedAt: number;
+  contentMatch?: 'match' | 'skipped';
 }
 
 interface Window {

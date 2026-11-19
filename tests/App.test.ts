@@ -3139,6 +3139,41 @@ describe('App', () => {
     expect(restarted.get('[data-testid="workspace-sort-direction"]').attributes('aria-label')).toBe('升序排列');
   });
 
+  it('switches the directory search between names and nested document content', async () => {
+    const listDirectory = vi.mocked(window.markdownBridge!.listDirectory!);
+    const guide = { name: 'guide.md', path: '/workspace/docs/guide.md', isDirectory: false, size: 100, modifiedAt: 20 };
+    const listEntries = listDirectory.getMockImplementation()!;
+    listDirectory.mockImplementation((root, directory, query) =>
+      directory === '/workspace/docs' && query === 'readme'
+        ? Promise.resolve([{ ...guide, contentMatch: 'match' }])
+        : listEntries(root, directory),
+    );
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await wrapper.get('[data-testid="sidebar-files-tab"]').trigger('click');
+    await wrapper.get('[data-testid="choose-workspace-folder"]').trigger('click');
+    await wrapper.get('[data-testid="workspace-filter-folders"]').trigger('click');
+
+    const search = wrapper.get('[data-testid="workspace-search"]');
+    const contentToggle = wrapper.get('[data-testid="workspace-search-content"]');
+    await search.setValue('readme');
+    await contentToggle.trigger('click');
+    expect(contentToggle.attributes('aria-pressed')).toBe('true');
+    await vi.waitFor(() => expect(wrapper.text()).toContain('guide.md'));
+    expect(wrapper.find('[data-testid="workspace-file-/workspace/readme.md"]').exists()).toBe(false);
+    expect(listDirectory).toHaveBeenCalledWith('/workspace', '/workspace/docs', 'readme');
+
+    await wrapper.get('[data-testid="workspace-file-/workspace/docs/guide.md"]').trigger('click');
+    expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(guide.path);
+
+    await contentToggle.trigger('click');
+    await wrapper.get('[data-testid="workspace-filter-all"]').trigger('click');
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="workspace-file-/workspace/readme.md"]').exists()).toBe(true));
+    expect(wrapper.find('[data-testid="workspace-file-/workspace/docs/guide.md"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('searches nested files and filters or sorts the workspace tree', async () => {
     const wrapper = mount(App);
     await vi.dynamicImportSettled();

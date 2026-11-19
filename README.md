@@ -65,6 +65,8 @@ A format toolbar (heading dropdown, bold, italic, quote, code, lists, insert lin
 
 ### Sidebar File Search
 
+- In the workspace directory, use the document icon next to the search field to switch from names to document content. Content search matches literal text without regard to case in supported files up to 2 MB, including nested folders.
+
 - Full-text search across opened tabs or a folder on disk.
 - Regular expression mode.
 - Exclude folders filter.

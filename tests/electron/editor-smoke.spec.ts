@@ -65,6 +65,43 @@ test('launches the Electron editor shell', async () => {
   }
 });
 
+test('searches workspace document content and opens a nested match', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-workspace-search-'));
+  try {
+    const nested = path.join(workspace, 'nested');
+    await fs.mkdir(nested);
+    await fs.writeFile(path.join(nested, 'guide.md'), '# Example\n\nUnique [Keyword]');
+    await fs.writeFile(path.join(workspace, '[keyword].md'), '# Unrelated');
+    const launched = await launchEditor();
+
+    try {
+      await launched.app.evaluate(({ dialog }, folder) => {
+        dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+      }, workspace);
+      const page = await launched.app.firstWindow();
+      await page.getByTestId('sidebar-files-tab').click();
+      await page.getByTestId('choose-workspace-folder').click();
+      await expect(page.getByTestId('workspace-file-tree')).toContainText('[keyword].md');
+
+      const mode = page.getByTestId('workspace-search-content');
+      await mode.hover();
+      await expect(mode).toHaveAttribute('title', '切换到正文搜索');
+      await mode.press('Space');
+      await expect(mode).toHaveAttribute('aria-pressed', 'true');
+      await page.getByTestId('workspace-search').fill('[keyword]');
+      const tree = page.getByTestId('workspace-file-tree');
+      await expect(tree.getByRole('button', { name: 'guide.md' })).toBeVisible();
+      await expect(tree.getByRole('button', { name: '[keyword].md' })).toHaveCount(0);
+      await tree.getByRole('button', { name: 'guide.md' }).click();
+      await expect(page.getByTestId('preview')).toContainText('Unique [Keyword]');
+    } finally {
+      await closeEditor(launched);
+    }
+  } finally {
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('keeps the editor viewport still while the cursor moves inside it', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-cursor-scroll-'));
   const markdownPath = path.join(tempDir, 'cursor scroll.md');
