@@ -1,6 +1,39 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 export const sessionBackupCount = 3;
+
+export function recoverableSessionBackupIndex(
+  primarySessionIsValid: boolean,
+  backupIsValid: boolean[],
+): number | null {
+  if (primarySessionIsValid) {
+    return null;
+  }
+  const index = backupIsValid.indexOf(true);
+  return index === -1 ? null : index;
+}
+
+export function sessionShutdownWasCleanSync(markerPath: string): boolean | null {
+  try {
+    const status = fs.readFileSync(markerPath, 'utf8');
+    return status === 'clean' ? true : status === 'unclean' ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeSessionShutdownStatusSync(markerPath: string, clean: boolean): void {
+  fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+  const temporaryPath = `${markerPath}.tmp`;
+  fs.writeFileSync(temporaryPath, clean ? 'clean' : 'unclean', 'utf8');
+  try {
+    fs.renameSync(temporaryPath, markerPath);
+  } catch (error) {
+    fs.rmSync(temporaryPath, { force: true });
+    throw error;
+  }
+}
 
 export function sessionBackupPath(sessionPath: string, index: number): string {
   return `${sessionPath}.bak.${index}`;

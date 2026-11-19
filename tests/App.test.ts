@@ -2487,6 +2487,84 @@ describe('App', () => {
     );
   });
 
+  it('retries one failed tab read before dropping it during session restore', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: secondFile.path,
+      tabs: [
+        { id: `file:${openFile.path}`, filePath: openFile.path, name: openFile.name, scrollTop: 10 },
+        { id: `file:${secondFile.path}`, filePath: secondFile.path, name: secondFile.name, scrollTop: 24 },
+      ],
+      activeTabId: `file:${secondFile.path}`,
+      recentFiles: [secondFile.path, openFile.path],
+      scrollTop: 24,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+    vi.mocked(window.markdownBridge!.readMarkdownFile).mockImplementation(async (filePath: string) => {
+      if (filePath === secondFile.path && vi.mocked(window.markdownBridge!.readMarkdownFile).mock.calls
+        .filter(([calledPath]) => calledPath === secondFile.path).length === 1) {
+        throw new Error('Temporary file read failure');
+      }
+      return { ...(filePath === secondFile.path ? secondFile : openFile), path: filePath };
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledTimes(3));
+
+    expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tab-second.md"]').exists()).toBe(true);
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabs: expect.arrayContaining([
+        expect.objectContaining({ filePath: openFile.path }),
+        expect.objectContaining({ filePath: secondFile.path }),
+      ]) }),
+    );
+  });
+
+  it('keeps an unreadable saved tab in the session so a later launch can retry it', async () => {
+    vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
+      filePath: openFile.path,
+      tabs: [
+        { id: `file:${openFile.path}`, filePath: openFile.path, name: openFile.name, scrollTop: 10 },
+        { id: `file:${secondFile.path}`, filePath: secondFile.path, name: secondFile.name, scrollTop: 24 },
+      ],
+      activeTabId: `file:${openFile.path}`,
+      recentFiles: [openFile.path, secondFile.path],
+      scrollTop: 10,
+      tocWidth: 300,
+      editorWidth: 640,
+      previewHidden: false,
+      editorVisible: false,
+      theme: 'light',
+    });
+    vi.mocked(window.markdownBridge!.readMarkdownFile).mockImplementation(async (filePath: string) => {
+      if (filePath === secondFile.path) throw new Error('File temporarily unavailable');
+      return { ...openFile, path: filePath };
+    });
+
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(window.markdownBridge?.saveSession).toHaveBeenCalled());
+
+    await wrapper.find('[data-testid="tab-readme.md"]').trigger('click');
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabs: expect.arrayContaining([
+        expect.objectContaining({ filePath: openFile.path }),
+        expect.objectContaining({ filePath: secondFile.path }),
+      ]) }),
+    );
+
+    await wrapper.find('[data-testid="close-tab-readme.md"]').trigger('click');
+    await vi.dynamicImportSettled();
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabs: [] }),
+    );
+  });
+
   it('adds restored open tabs back to recent files when they are missing', async () => {
     vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
       filePath: secondFile.path,
@@ -3014,6 +3092,59 @@ describe('App', () => {
     await vi.dynamicImportSettled();
 
     expect(window.markdownBridge?.saveMarkdownFile).not.toHaveBeenCalled();
+    expect(window.markdownBridge?.confirmCloseSync).toHaveBeenCalled();
+  });
+
+  it('keeps every open file tab when discarding edits before closing the app', async () => {
+    const closeCallbacks: Array<() => void> = [];
+    vi.mocked(window.markdownBridge!.onCloseRequest).mockImplementation((callback) => {
+      closeCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await openRecentFileFromMenu(wrapper, recentFile.name);
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+
+    closeCallbacks[0]?.();
+    await nextTick();
+    await wrapper.find('[data-testid="close-discard-all"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ filePath: openFile.path }),
+          expect.objectContaining({ filePath: recentFile.path }),
+        ]),
+      }),
+    );
+    expect(window.markdownBridge?.confirmCloseSync).toHaveBeenCalled();
+  });
+
+  it('saves all dirty documents and keeps all open file tabs when closing the app', async () => {
+    const closeCallbacks: Array<() => void> = [];
+    vi.mocked(window.markdownBridge!.onCloseRequest).mockImplementation((callback) => {
+      closeCallbacks.push(callback);
+      return () => {};
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+    await openRecentFileFromMenu(wrapper, recentFile.name);
+    await wrapper.find('[data-testid="editor"]').setValue('# Changed');
+
+    closeCallbacks[0]?.();
+    await nextTick();
+    await wrapper.find('[data-testid="close-save-all"]').trigger('click');
+    await vi.dynamicImportSettled();
+
+    expect(window.markdownBridge?.saveMarkdownFile).toHaveBeenCalledWith(recentFile.path, '# Changed');
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabs: expect.arrayContaining([
+        expect.objectContaining({ filePath: openFile.path }),
+        expect.objectContaining({ filePath: recentFile.path }),
+      ]) }),
+    );
     expect(window.markdownBridge?.confirmCloseSync).toHaveBeenCalled();
   });
 
@@ -3600,6 +3731,17 @@ describe('App', () => {
     await wrapper.find('[data-testid="tab-save-as"]').trigger('click');
     await vi.dynamicImportSettled();
     expect(window.markdownBridge?.saveMarkdownFileAs).toHaveBeenCalledWith(openFile.content, 'readme 副本.md');
+    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabs: expect.arrayContaining([
+        expect.objectContaining({ filePath: openFile.path }),
+        expect.objectContaining({ filePath: '/docs/readme 副本.md' }),
+      ]) }),
+    );
+    expect(window.markdownBridge?.saveSession).not.toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabs: expect.arrayContaining([
+        expect.objectContaining({ filePath: '/docs/readme 副本.md', id: 'file:/docs/readme.md' }),
+      ]) }),
+    );
   });
 
   it('creates persistent tab groups from the context menu and collapses their tabs', async () => {

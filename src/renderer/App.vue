@@ -405,6 +405,7 @@ const activeResize = ref<'toc' | 'editor' | null>(null);
 const cursorHistory = ref<CursorHistoryEntry[]>([]);
 const scrollBackToTopVisible = ref(false);
 let sessionSaveTimer: number | undefined;
+let sessionRestorePendingTabs: MarkdownSession['tabs'] = [];
 let untitledCounter = 1;
 const untitledDraftNamePattern = /^未命名-\d+\.md$/;
 let cursorHistoryIndex = -1;
@@ -1288,7 +1289,13 @@ function serializedOpenTabs(): MarkdownSession['tabs'] {
 }
 
 function tabSessionPatch(patch: Partial<MarkdownSession> = {}): Partial<MarkdownSession> {
-  const tabs = patch.tabs ?? serializedOpenTabs();
+  const visibleTabs = patch.tabs ?? serializedOpenTabs();
+  const retainedUnavailableTabs = patch.tabs?.length === 0
+    ? []
+    : sessionRestorePendingTabs.filter((savedTab) => savedTab.filePath
+      && !visibleTabs.some((visibleTab) => visibleTab.id === savedTab.id || visibleTab.filePath === savedTab.filePath));
+  sessionRestorePendingTabs = retainedUnavailableTabs;
+  const tabs = [...visibleTabs, ...retainedUnavailableTabs];
   return {
     filePath: currentFilePath(),
     tabs,
@@ -1442,6 +1449,19 @@ function saveSessionNow(snapshot?: MarkdownSession): void {
   void bridge?.saveSession(cloneableSession(snapshot));
 }
 
+function saveSessionSynchronouslyNow(snapshot?: MarkdownSession): void {
+  try {
+    if (bridge?.saveSessionSync?.(cloneableSession(snapshot))) {
+      return;
+    }
+  } catch (error) {
+    debugLog('session.save-sync.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  saveSessionNow(snapshot);
+}
+
 function scheduleSessionSave(): void {
   if (sessionSaveTimer !== undefined) {
     window.clearTimeout(sessionSaveTimer);
@@ -1459,14 +1479,7 @@ function saveSessionBeforeUnload(): void {
     sessionSaveTimer = undefined;
   }
 
-  try {
-    bridge?.saveSessionSync?.(cloneableSession());
-  } catch (error) {
-    debugLog('session.save-sync.failed', {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    saveSessionNow();
-  }
+  saveSessionSynchronouslyNow();
 }
 
 async function updateHtmlPreview(): Promise<void> {
@@ -1806,6 +1819,28 @@ function persistOpenedFile(file: MarkdownFile, scrollTop: number, tabId = file.p
     fileScrollPositions: addFileScrollPosition(session.value.fileScrollPositions, file.path, scrollTop),
     scrollTop,
   }, { syncActive: false });
+}
+
+async function readSessionTabFile(tab: MarkdownSession['tabs'][number]): Promise<MarkdownFile | null> {
+  const filePath = tab.filePath;
+  if (!filePath) {
+    return null;
+  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await readMarkdownFileWithEncoding(filePath, tab.encoding);
+    } catch (error) {
+      if (attempt === 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+      } else {
+        debugLog('session.restore-tab.failed', {
+          filePath,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+  return null;
 }
 
 function rememberScroll(scrollTop: number): void {
@@ -2684,7 +2719,7 @@ async function closeTabNow(tabId: string): Promise<void> {
     source.value = '';
     lastSavedContent.value = '';
     status.value = '请选择或打开一个支持的文档';
-    persistTabSession({ filePath: null, activeTabId: null, scrollTop: 0 });
+    persistTabSession({ filePath: null, tabs: [], activeTabId: null, scrollTop: 0 }, { syncActive: false });
     await closeApplication();
     return;
   }
@@ -5846,8 +5881,8 @@ async function restoreSessionTabs(): Promise<boolean> {
         editorWidth: tab.editorWidth ?? session.value.editorWidth,
       } satisfies OpenTab;
     }
-    try {
-      const file = await readMarkdownFileWithEncoding(tab.filePath, tab.encoding);
+    const file = await readSessionTabFile(tab);
+    if (file) {
       return {
         id: file.path ? tabIdForPath(file.path) : tab.id,
         file,
@@ -5865,9 +5900,8 @@ async function restoreSessionTabs(): Promise<boolean> {
         previewFullscreen: tab.previewFullscreen,
         editorWidth: tab.editorWidth ?? session.value.editorWidth,
       } satisfies OpenTab;
-    } catch {
-      return null;
     }
+    return null;
   }))).filter((tab): tab is OpenTab => tab !== null);
 
   if (restoredTabs.length === 0) {
@@ -5887,26 +5921,38 @@ async function restoreSessionTabs(): Promise<boolean> {
   source.value = active.source;
   lastSavedContent.value = active.lastSavedContent;
   isPreviewFullscreen.value = hasPreviewPane.value && active.previewFullscreen;
-  status.value = active.file.path ?? '未保存的新文档';
-  const restoredSessionTabs = restoredTabs.map((tab) => ({
-    id: tab.id,
-    filePath: tab.file.path,
-    name: tab.file.name,
-    scrollTop: tab.scrollTop,
-    editorScrollTop: tab.editorScrollTop,
-    previewScrollTop: tab.previewScrollTop,
-    tocScrollTop: tab.tocScrollTop,
-    cursorPosition: { ...tab.cursorPosition },
-    activeHeadingId: tab.activeHeadingId,
-    collapsedHeadingIds: [...tab.collapsedHeadingIds],
-    editorVisible: tab.editorVisible,
-    previewHidden: tab.previewHidden,
-    previewFullscreen: tab.previewFullscreen,
-    editorWidth: tab.editorWidth,
-    content: tab.file.path ? undefined : tab.source,
-    lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
-    encoding: normalizeTextEncoding(tab.file.encoding),
-  }));
+  const unavailableTabs = session.value.tabs.filter((savedTab) => savedTab.filePath
+    && !restoredTabs.some((tab) => tab.id === savedTab.id || tab.file.path === savedTab.filePath));
+  sessionRestorePendingTabs = unavailableTabs;
+  status.value = unavailableTabs.length
+    ? `${active.file.path ?? active.file.name}（${unavailableTabs.length} 个标签暂不可读取，已保留恢复记录）`
+    : active.file.path ?? '未保存的新文档';
+  const restoredSessionTabs = session.value.tabs.map((savedTab) => {
+    const tab = restoredTabs.find((restored) => restored.id === savedTab.id
+      || (savedTab.filePath && restored.file.path === savedTab.filePath));
+    if (!tab) {
+      return savedTab;
+    }
+    return {
+      id: tab.id,
+      filePath: tab.file.path,
+      name: tab.file.name,
+      scrollTop: tab.scrollTop,
+      editorScrollTop: tab.editorScrollTop,
+      previewScrollTop: tab.previewScrollTop,
+      tocScrollTop: tab.tocScrollTop,
+      cursorPosition: { ...tab.cursorPosition },
+      activeHeadingId: tab.activeHeadingId,
+      collapsedHeadingIds: [...tab.collapsedHeadingIds],
+      editorVisible: tab.editorVisible,
+      previewHidden: tab.previewHidden,
+      previewFullscreen: tab.previewFullscreen,
+      editorWidth: tab.editorWidth,
+      content: tab.file.path ? undefined : tab.source,
+      lastSavedContent: tab.file.path ? undefined : tab.lastSavedContent,
+      encoding: normalizeTextEncoding(tab.file.encoding),
+    };
+  });
   session.value = mergeSession(session.value, {
     filePath: active.file.path,
     tabs: restoredSessionTabs,

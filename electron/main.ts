@@ -14,8 +14,11 @@ import {
   type TextEncoding,
 } from './text-encoding';
 import {
+  recoverableSessionBackupIndex,
   rotateSessionBackupsSync,
   sessionBackupCount,
+  sessionShutdownWasCleanSync,
+  writeSessionShutdownStatusSync,
 } from './session-storage';
 import {
   isSupportedDocumentPath,
@@ -241,6 +244,7 @@ const legacySessionUserDataNames = ['markdown-editor'];
 let sessionWriteQueue: Promise<void> = Promise.resolve();
 let sessionWriteGeneration = 0;
 let sessionSaveSequence = 0;
+let previousShutdownWasClean = true;
 
 function mainLog(event: string, payload: Record<string, unknown> = {}): void {
   const record = {
@@ -695,6 +699,10 @@ function sessionFilePath(): string {
   return path.join(app.getPath('userData'), 'markdown-session.json');
 }
 
+function sessionShutdownMarkerPath(): string {
+  return path.join(app.getPath('userData'), 'markdown-session-shutdown');
+}
+
 function normalizeParsedSession(parsed: Partial<MarkdownSession>): MarkdownSession {
   const filePath = typeof parsed.filePath === 'string' ? normalizeRecentFilePath(parsed.filePath) : null;
   const tabs = normalizeSessionTabs(parsed.tabs);
@@ -766,13 +774,41 @@ async function readLegacySessionFallback(currentSession: MarkdownSession): Promi
 }
 
 async function readSession(): Promise<MarkdownSession> {
+  let session: MarkdownSession;
+  let primarySessionIsValid = true;
   try {
     const raw = await fs.readFile(sessionFilePath(), 'utf8');
     const parsed = JSON.parse(raw) as Partial<MarkdownSession>;
-    return readLegacySessionFallback(normalizeParsedSession(parsed));
+    session = normalizeParsedSession(parsed);
   } catch {
-    return readLegacySessionFallback(createDefaultSession());
+    primarySessionIsValid = false;
+    session = createDefaultSession();
   }
+
+  if (!primarySessionIsValid) {
+    const backups = await Promise.all(Array.from({ length: sessionBackupCount }, async (_, index) => {
+      const backupPath = `${sessionFilePath()}.bak.${index + 1}`;
+      try {
+        const parsed = JSON.parse(await fs.readFile(backupPath, 'utf8')) as Partial<MarkdownSession>;
+        return normalizeParsedSession(parsed);
+      } catch {
+        return null;
+      }
+    }));
+    const backupIndex = recoverableSessionBackupIndex(
+      false,
+      backups.map((backup) => backup !== null),
+    );
+    if (backupIndex !== null && backups[backupIndex]) {
+      session = backups[backupIndex]!;
+      mainLog('session.crash-recovery.restored', {
+        backupIndex: backupIndex + 1,
+        tabCount: session.tabs.length,
+      });
+    }
+  }
+
+  return readLegacySessionFallback(session);
 }
 
 async function saveSession(session: MarkdownSession): Promise<void> {
@@ -816,11 +852,12 @@ function sessionForPersistence(session: MarkdownSession): { normalized: Markdown
   };
 }
 
-function sessionSnapshotText(session: MarkdownSession): { recentFiles: string[]; text: string } {
+function sessionSnapshotText(session: MarkdownSession): { recentFiles: string[]; tabCount: number; text: string } {
   const { normalized, recentFiles } = sessionForPersistence(session);
   logRecentFilesDiagnostics('save-session', session.recentFiles, recentFiles);
   return {
     recentFiles,
+    tabCount: normalized.tabs.length,
     text: JSON.stringify(normalized, null, 2),
   };
 }
@@ -828,12 +865,14 @@ function sessionSnapshotText(session: MarkdownSession): { recentFiles: string[];
 function sessionSaveLogPayload(
   source: string,
   requestId: number,
+  tabCount: number,
   recentFiles: string[],
   backupPaths: string[],
 ): Record<string, unknown> {
   return {
     source,
     requestId,
+    tabCount,
     recentFileCount: recentFiles.length,
     recentFiles,
     sessionPath: sessionFilePath(),
@@ -848,9 +887,9 @@ async function writeSessionSnapshot(
 ): Promise<void> {
   const targetPath = sessionFilePath();
   const tempPath = `${targetPath}.tmp.${process.pid}.${requestId}`;
-  const { recentFiles, text } = sessionSnapshotText(session);
+  const { recentFiles, tabCount, text } = sessionSnapshotText(session);
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  mainLog('session.save.started', sessionSaveLogPayload('save-session', requestId, recentFiles, []));
+  mainLog('session.save.started', sessionSaveLogPayload('save-session', requestId, tabCount, recentFiles, []));
   await fs.writeFile(tempPath, text, 'utf8');
 
   if (generation !== sessionWriteGeneration) {
@@ -866,7 +905,7 @@ async function writeSessionSnapshot(
   try {
     const backupPaths = rotateSessionBackupsSync(targetPath, sessionBackupCount);
     fsSync.renameSync(tempPath, targetPath);
-    mainLog('session.save.committed', sessionSaveLogPayload('save-session', requestId, recentFiles, backupPaths));
+    mainLog('session.save.committed', sessionSaveLogPayload('save-session', requestId, tabCount, recentFiles, backupPaths));
   } catch (error) {
     await fs.rm(tempPath, { force: true });
     mainLog('session.save.failed', {
@@ -880,14 +919,14 @@ async function writeSessionSnapshot(
 function writeSessionSnapshotSync(session: MarkdownSession, requestId: number, source: string): void {
   const targetPath = sessionFilePath();
   const tempPath = `${targetPath}.tmp.${process.pid}.${requestId}`;
-  const { recentFiles, text } = sessionSnapshotText(session);
+  const { recentFiles, tabCount, text } = sessionSnapshotText(session);
   fsSync.mkdirSync(path.dirname(targetPath), { recursive: true });
-  mainLog('session.save.started', sessionSaveLogPayload(source, requestId, recentFiles, []));
+  mainLog('session.save.started', sessionSaveLogPayload(source, requestId, tabCount, recentFiles, []));
   fsSync.writeFileSync(tempPath, text, 'utf8');
   try {
     const backupPaths = rotateSessionBackupsSync(targetPath, sessionBackupCount);
     fsSync.renameSync(tempPath, targetPath);
-    mainLog('session.save.committed', sessionSaveLogPayload(source, requestId, recentFiles, backupPaths));
+    mainLog('session.save.committed', sessionSaveLogPayload(source, requestId, tabCount, recentFiles, backupPaths));
   } catch (error) {
     try {
       fsSync.unlinkSync(tempPath);
@@ -2413,6 +2452,9 @@ if (!singleInstanceLock) {
 }
 
 app.whenReady().then(async () => {
+  previousShutdownWasClean = sessionShutdownWasCleanSync(sessionShutdownMarkerPath()) ?? true;
+  writeSessionShutdownStatusSync(sessionShutdownMarkerPath(), false);
+  mainLog('session.shutdown-state.loaded', { previousShutdownWasClean });
   buildApplicationMenu();
   registerMarkdownAssetProtocol();
   pendingExternalMarkdownPath = pendingExternalMarkdownPath ?? markdownPathFromArgv(process.argv);
@@ -2429,6 +2471,10 @@ app.on('before-quit', () => {
   htmlPreviewServer = null;
   htmlPreviewServerPort = null;
   htmlPreviewEntries.clear();
+});
+
+app.on('will-quit', () => {
+  writeSessionShutdownStatusSync(sessionShutdownMarkerPath(), true);
 });
 
 app.on('activate', () => {
