@@ -241,7 +241,7 @@ describe('App', () => {
     expect(wrapper.classes()).toContain('reader-mode');
     expect(wrapper.classes()).not.toContain('preview-hidden');
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
-    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenCalledWith(
       expect.objectContaining({
         filePath: recentFile.path,
         recentFiles: [recentFile.path],
@@ -2242,7 +2242,7 @@ describe('App', () => {
 
     expect(window.markdownBridge?.readMarkdownFile).toHaveBeenCalledWith(recentFile.path);
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', recentFile.content);
-    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenCalledWith(
       expect.objectContaining({ recentFiles: [recentFile.path, openFile.path] }),
     );
   });
@@ -2866,7 +2866,7 @@ describe('App', () => {
     await openRecentFileFromMenu(wrapper, recentFile.name);
 
     expect(wrapper.find<HTMLElement>('[data-testid="preview"]').element.scrollTop).toBe(77);
-    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
       expect.objectContaining({
         fileScrollPositions: expect.arrayContaining([
           expect.objectContaining({ filePath: recentFile.path, scrollTop: 77 }),
@@ -2902,7 +2902,7 @@ describe('App', () => {
     expect(wrapper.find('[data-testid="tab-readme.md"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="tab-second.md"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="tab-recent.md"]').exists()).toBe(true);
-    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
       expect.objectContaining({
         activeTabId: `file:${recentFile.path}`,
         tabs: expect.arrayContaining([
@@ -2932,7 +2932,7 @@ describe('App', () => {
     await wrapper.find('[data-testid="tab-readme.md"]').trigger('dragstart', { dataTransfer });
     await wrapper.find('[data-testid="tab-recent.md"]').trigger('drop', { dataTransfer });
 
-    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
       expect.objectContaining({
         tabs: [
           expect.objectContaining({ filePath: recentFile.path }),
@@ -2949,7 +2949,7 @@ describe('App', () => {
     await wrapper.find('[data-testid="close-tab-readme.md"]').trigger('click');
     await vi.dynamicImportSettled();
 
-    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenCalledWith(
       expect.objectContaining({ tabs: [], activeTabId: null, filePath: null }),
     );
     expect(window.markdownBridge?.confirmCloseSync).toHaveBeenCalled();
@@ -2963,13 +2963,27 @@ describe('App', () => {
     await wrapper.find('[data-testid="close-tab-recent.md"]').trigger('click');
     await vi.dynamicImportSettled();
 
-    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
       expect.objectContaining({
         activeTabId: `file:${openFile.path}`,
         tabs: [
           expect.objectContaining({ filePath: openFile.path }),
         ],
       }),
+    );
+  });
+
+  it('writes the full tab list synchronously when opening another file', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await openRecentFileFromMenu(wrapper, recentFile.name);
+
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabs: expect.arrayContaining([
+        expect.objectContaining({ filePath: openFile.path }),
+        expect.objectContaining({ filePath: recentFile.path }),
+      ]) }),
     );
   });
 
@@ -3631,12 +3645,15 @@ describe('App', () => {
     expect(wrapper.find('[data-testid^="tab-未命名"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="editor"]').element).toHaveProperty('value', '');
     expect(wrapper.classes()).toContain('preview-hidden');
-    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenCalledWith(
       expect.objectContaining({
         tabs: expect.arrayContaining([
           expect.objectContaining({ filePath: null, content: '', editorVisible: true, previewHidden: true }),
         ]),
       }),
+    );
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabs: expect.arrayContaining([expect.objectContaining({ filePath: null, content: '' })]) }),
     );
   });
 
@@ -3649,7 +3666,7 @@ describe('App', () => {
 
     expect(wrapper.find('[data-testid^="tab-未命名"]').exists()).toBe(true);
     expect(wrapper.classes()).toContain('preview-hidden');
-    expect(window.markdownBridge?.saveSession).toHaveBeenCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenCalledWith(
       expect.objectContaining({
         tabs: expect.arrayContaining([
           expect.objectContaining({ filePath: null, editorVisible: true, previewHidden: true }),
@@ -3731,13 +3748,13 @@ describe('App', () => {
     await wrapper.find('[data-testid="tab-save-as"]').trigger('click');
     await vi.dynamicImportSettled();
     expect(window.markdownBridge?.saveMarkdownFileAs).toHaveBeenCalledWith(openFile.content, 'readme 副本.md');
-    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
       expect.objectContaining({ tabs: expect.arrayContaining([
         expect.objectContaining({ filePath: openFile.path }),
         expect.objectContaining({ filePath: '/docs/readme 副本.md' }),
       ]) }),
     );
-    expect(window.markdownBridge?.saveSession).not.toHaveBeenLastCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).not.toHaveBeenLastCalledWith(
       expect.objectContaining({ tabs: expect.arrayContaining([
         expect.objectContaining({ filePath: '/docs/readme 副本.md', id: 'file:/docs/readme.md' }),
       ]) }),
@@ -3823,7 +3840,7 @@ describe('App', () => {
     expect(wrapper.get('[data-testid="tab-renamed.md"]').classes()).toContain('dirty');
     expect(wrapper.get('[data-testid="editor"]').element).toHaveProperty('value', '# Unsaved edit');
 
-    const renamedSession = vi.mocked(window.markdownBridge!.saveSession).mock.calls
+    const renamedSession = vi.mocked(window.markdownBridge!.saveSessionSync).mock.calls
       .map(([savedSession]) => savedSession)
       .find((savedSession) => savedSession.filePath === renamedFile.path);
     expect(renamedSession).toEqual(expect.objectContaining({
@@ -4078,7 +4095,7 @@ describe('App', () => {
     expect(wrapper.find('[data-testid="preview-panel"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="toggle-preview"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="format-json"]').exists()).toBe(true);
-    expect(window.markdownBridge?.saveSession).toHaveBeenLastCalledWith(
+    expect(window.markdownBridge?.saveSessionSync).toHaveBeenLastCalledWith(
       expect.objectContaining({ editorVisible: true }),
     );
 

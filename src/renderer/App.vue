@@ -1427,7 +1427,7 @@ function cloneableSession(snapshot?: MarkdownSession): MarkdownSession {
 
 function persistTabSession(
   patch: Partial<MarkdownSession> = {},
-  options: { deferred?: boolean; syncActive?: boolean } = {},
+  options: { deferred?: boolean; syncActive?: boolean; syncPersist?: boolean } = {},
 ): void {
   if (options.syncActive !== false) {
     syncActiveTabState();
@@ -1436,6 +1436,8 @@ function persistTabSession(
   session.value = nextSession;
   if (options.deferred) {
     scheduleSessionSave();
+  } else if (options.syncPersist) {
+    saveSessionSynchronouslyNow(nextSession);
   } else {
     saveSessionNow(nextSession);
   }
@@ -1818,7 +1820,7 @@ function persistOpenedFile(file: MarkdownFile, scrollTop: number, tabId = file.p
     ),
     fileScrollPositions: addFileScrollPosition(session.value.fileScrollPositions, file.path, scrollTop),
     scrollTop,
-  }, { syncActive: false });
+  }, { syncActive: false, syncPersist: true });
 }
 
 async function readSessionTabFile(tab: MarkdownSession['tabs'][number]): Promise<MarkdownFile | null> {
@@ -2602,7 +2604,7 @@ function tabTitle(tab: OpenTab, index: number): string {
   return shortcut ? `${path}\n${shortcut} 切换到此标签页` : path;
 }
 
-function activateTab(tabId: string): void {
+function activateTab(tabId: string, options: { syncPersist?: boolean } = {}): void {
   syncActiveTabState();
   const tab = openTabs.value.find((item) => item.id === tabId);
   if (!tab) {
@@ -2629,7 +2631,7 @@ function activateTab(tabId: string): void {
     editorVisible: tab.editorVisible,
     previewHidden: tab.previewHidden,
     ...forcedEditorPatchForFile(tab.file),
-  }, { syncActive: false });
+  }, { syncActive: false, syncPersist: options.syncPersist });
   void refreshImageAssets(tab.file.path ?? undefined);
   scheduleActiveTabRestore(tab.id, { focus: true });
   void renderMermaid();
@@ -2719,13 +2721,16 @@ async function closeTabNow(tabId: string): Promise<void> {
     source.value = '';
     lastSavedContent.value = '';
     status.value = '请选择或打开一个支持的文档';
-    persistTabSession({ filePath: null, tabs: [], activeTabId: null, scrollTop: 0 }, { syncActive: false });
+    persistTabSession(
+      { filePath: null, tabs: [], activeTabId: null, scrollTop: 0 },
+      { syncActive: false, syncPersist: true },
+    );
     await closeApplication();
     return;
   }
 
   const nextTab = openTabs.value[Math.min(index, openTabs.value.length - 1)];
-  activateTab(nextTab.id);
+  activateTab(nextTab.id, { syncPersist: true });
 }
 
 async function closeTab(tabId: string, event?: MouseEvent): Promise<void> {
@@ -2769,7 +2774,7 @@ function dropTabOn(tabId: string, event: DragEvent): void {
 
   const [movedTab] = openTabs.value.splice(sourceIndex, 1);
   openTabs.value.splice(targetIndex, 0, movedTab);
-  persistTabSession();
+  persistTabSession({}, { syncPersist: true });
 }
 
 function dropTabIntoGroup(groupId: string, event: DragEvent): void {
@@ -2907,7 +2912,7 @@ async function submitRenameFile(): Promise<void> {
       ...sessionReferences,
       filePath: renamedFile.path,
       activeTabId: nextTabId,
-    }, { syncActive: false });
+    }, { syncActive: false, syncPersist: true });
     status.value = `已将 ${oldName} 重命名为 ${renamedFile.name}`;
     dialog.isRenaming = false;
     closeRenameFileDialog();
@@ -3100,7 +3105,7 @@ function createNewMarkdownTab(content = '', name?: string): void {
   imageAssets.value = [];
   isPreviewFullscreen.value = false;
   status.value = '未保存的新 Markdown 文件';
-  persistTabSession({ editorVisible: true, previewHidden: true }, { syncActive: false });
+  persistTabSession({ editorVisible: true, previewHidden: true }, { syncActive: false, syncPersist: true });
   scheduleActiveTabRestore(tab.id);
   void renderMermaid();
 }
@@ -3440,7 +3445,7 @@ async function saveTabAs(tabId: string | null): Promise<void> {
     recentFiles: addRecentFile(session.value.recentFiles, saved.path),
   });
   await refreshImageAssets(saved.path);
-  saveSessionNow();
+  saveSessionSynchronouslyNow();
 }
 
 function currentExportPayload(options: { relativeImages: boolean }): ExportDocumentPayload | null {
