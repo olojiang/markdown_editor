@@ -2978,8 +2978,20 @@ button.markdown-code-copy.is-copied:hover {
     grid-template-columns: 44px 0 minmax(0, 1fr) 0 0 !important;
   }
 
+  .reader-mode .workspace {
+    grid-template-columns: 220px 6px 0 0 minmax(0, 1fr) !important;
+  }
+
+  .toc-collapsed.reader-mode .workspace {
+    grid-template-columns: 44px 0 0 0 minmax(0, 1fr) !important;
+  }
+
   .preview-panel {
     display: none;
+  }
+
+  .reader-mode .preview-panel {
+    display: grid;
   }
 
   .preview-fullscreen {

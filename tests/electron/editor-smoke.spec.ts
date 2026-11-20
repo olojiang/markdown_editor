@@ -257,6 +257,33 @@ test('keeps the preview pane aligned after collapsing the table of contents', as
   }
 });
 
+test('keeps reader preview visible in a Retina-sized window', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-compact-reader-'));
+  const markdownPath = path.join(tempDir, 'compact reader.md');
+  await fs.writeFile(markdownPath, '# Compact Reader\n\nPreview remains available.', 'utf8');
+  const launched = await launchEditor(['.', pathToFileURL(markdownPath).href]);
+
+  try {
+    const page = await launched.app.firstWindow();
+    await page.setViewportSize({ width: 900, height: 768 });
+    if (await page.getByTestId('toggle-editor').getAttribute('aria-label') === '阅读') {
+      await page.getByTestId('toggle-editor').click();
+    }
+    const preview = page.getByTestId('preview');
+    await expect(preview).toBeVisible();
+    await expect(preview).toContainText('Compact Reader');
+    const metrics = await preview.evaluate((element) => ({
+      left: element.getBoundingClientRect().left,
+      width: element.getBoundingClientRect().width,
+    }));
+    expect(metrics.width).toBeGreaterThan(600);
+    expect(metrics.left).toBeLessThan(240);
+  } finally {
+    await closeEditor(launched);
+    await fs.rm(tempDir, { force: true, recursive: true });
+  }
+});
+
 test('loads remote images in markdown preview', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'markdown-editor-remote-image-'));
   const markdownPath = path.join(tempDir, 'remote image.md');
