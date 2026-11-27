@@ -114,6 +114,13 @@ describe('Electron build configuration', () => {
     expect(mainSource).toContain("app.getPath('appData')");
   });
 
+  it('keeps 200 recent files when normalizing persisted sessions', () => {
+    const mainSource = fs.readFileSync('electron/main.ts', 'utf8');
+
+    expect(mainSource).toContain('const maxRecentFiles = 200;');
+    expect(mainSource).toContain('.slice(0, maxRecentFiles)');
+  });
+
   it('keeps three rolling session backups and logs save snapshots', () => {
     const mainSource = fs.readFileSync('electron/main.ts', 'utf8');
     const storageSource = fs.readFileSync('electron/session-storage.ts', 'utf8');

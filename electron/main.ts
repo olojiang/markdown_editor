@@ -26,6 +26,8 @@ import {
   supportedDocumentExtensions,
 } from './file-operations';
 
+const maxRecentFiles = 200;
+
 interface MarkdownSession {
   filePath: string | null;
   tabs: {
@@ -477,7 +479,7 @@ function normalizeRecentFiles(recentFiles: unknown): string[] {
     }
     seen.add(key);
     return [normalized];
-  }).slice(0, 50);
+  }).slice(0, maxRecentFiles);
 }
 
 function normalizeFileScrollPositions(positions: unknown): FileScrollPosition[] {

@@ -1504,6 +1504,26 @@ async function updateHtmlPreview(): Promise<void> {
   }
 }
 
+async function openHtmlPreviewInBrowser(): Promise<void> {
+  const filePath = currentFile.value?.path;
+  if (!isHtmlDocument.value || !bridge?.htmlPreviewUrl || !bridge.openExternalLink) {
+    return;
+  }
+
+  try {
+    const url = await bridge.htmlPreviewUrl({ filePath: filePath ?? null, content: source.value });
+    const opened = await bridge.openExternalLink(url, filePath);
+    if (!opened) {
+      status.value = '无法在默认浏览器中打开 HTML 预览';
+    }
+  } catch (error) {
+    status.value = '无法在默认浏览器中打开 HTML 预览';
+    debugLog('html-preview.open-browser.failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 function scheduleHtmlPreviewReload(): void {
   if (htmlPreviewTimer !== undefined) {
     window.clearTimeout(htmlPreviewTimer);
@@ -6122,7 +6142,7 @@ onBeforeUnmount(() => {
             class="recent-files-trigger"
             type="button"
             :disabled="recentFileOptions.length === 0"
-            :title="`最近打开文件（最多 50 个）`"
+            :title="`最近打开文件（最多 200 个）`"
             :aria-expanded="recentFilesOpen"
             aria-haspopup="menu"
             @click.stop="toggleRecentFiles"
@@ -6784,6 +6804,17 @@ onBeforeUnmount(() => {
             </div>
             <button data-testid="cloud-image-upload" class="icon-button" type="button" aria-label="云端上传图片" title="云端上传入口，下一步实现服务配置" @click="showCloudUploadPlaceholder">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.cloudUpload" /></svg>
+            </button>
+            <button
+              v-if="isHtmlDocument"
+              data-testid="open-html-in-browser"
+              class="icon-button"
+              type="button"
+              aria-label="在默认浏览器中打开 HTML 预览"
+              title="在默认浏览器中打开 HTML 预览"
+              @click="openHtmlPreviewInBrowser"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path :d="icons.externalLink" /></svg>
             </button>
           </div>
           <div class="encoding-tools" role="group" aria-label="文档编码">

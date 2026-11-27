@@ -2319,8 +2319,8 @@ describe('App', () => {
     expect(optionLabels).toContain('finder launch.md (beta)');
   });
 
-  it('shows up to 50 recent files and filters them by name or path', async () => {
-    const recentFiles = Array.from({ length: 55 }, (_, index) => `/docs/folder-${index}/note-${index}.md`);
+  it('shows up to 200 recent files and filters them by name or path', async () => {
+    const recentFiles = Array.from({ length: 205 }, (_, index) => `/docs/folder-${index}/note-${index}.md`);
     vi.mocked(window.markdownBridge!.getSession).mockResolvedValue({
       filePath: null, tabs: [], activeTabId: null, recentFiles,
       scrollTop: 0, tocWidth: 260, editorWidth: 560,
@@ -2330,10 +2330,10 @@ describe('App', () => {
     await wrapper.find('[data-testid="recent-files"]').trigger('click');
     await nextTick();
 
-    expect(wrapper.findAll('.recent-file-row')).toHaveLength(50);
+    expect(wrapper.findAll('.recent-file-row')).toHaveLength(200);
     const search = wrapper.find('[data-testid="recent-files-search"]');
-    await search.setValue('folder-4');
-    expect(wrapper.findAll('.recent-file-row')).toHaveLength(10);
+    await search.setValue('folder-');
+    expect(wrapper.findAll('.recent-file-row')).toHaveLength(199);
     expect(wrapper.findAll('.recent-file-row').map((row) => row.attributes('title')))
       .toContain('/docs/folder-48/note-48.md');
   });
@@ -4161,6 +4161,37 @@ describe('App', () => {
 
     expect(wrapper.classes()).not.toContain('reader-mode');
     expect(wrapper.text()).toContain('HTML 文件始终使用编辑器模式');
+  });
+
+  it('opens the current HTML document in the system default browser', async () => {
+    vi.mocked(window.markdownBridge!.openMarkdownFile).mockResolvedValueOnce({
+      path: '/docs/page.html',
+      name: 'page.html',
+      content: '<h1>Hello</h1>',
+    });
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    await wrapper.get('[data-testid="open-file"]').trigger('click');
+    await vi.dynamicImportSettled();
+    await wrapper.get('[data-testid="editor"]').setValue('<h1>Latest content</h1>');
+    await wrapper.get('[data-testid="open-html-in-browser"]').trigger('click');
+
+    expect(window.markdownBridge?.htmlPreviewUrl).toHaveBeenLastCalledWith({
+      filePath: '/docs/page.html',
+      content: '<h1>Latest content</h1>',
+    });
+    expect(window.markdownBridge?.openExternalLink).toHaveBeenCalledWith(
+      'http://127.0.0.1:41000/?markdown-preview-id=%2Fdocs%2Fpage.html',
+      '/docs/page.html',
+    );
+  });
+
+  it('does not show the browser action for non-HTML documents', async () => {
+    const wrapper = mount(App);
+    await vi.dynamicImportSettled();
+
+    expect(wrapper.find('[data-testid="open-html-in-browser"]').exists()).toBe(false);
   });
 
   it('uses keyboard shortcut for toggling preview', async () => {
